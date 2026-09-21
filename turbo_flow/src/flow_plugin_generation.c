@@ -734,6 +734,7 @@ int turbo_flow_plugin_generation_create(
   if (!generation)
     return flow_plugin_generation_error(error, SALTS_ENOMEM, "$.generation", "allocation failed");
   generation->cleanup_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  atomic_init(&generation->materialization_leases, UINT64_C(0));
   rc = turbo_flow_stl_error(
       vec_init_bytes(&generation->owners, sizeof(flow_plugin_generation_owner_t),
                      _Alignof(turbo_flow_max_align_t), config->owner_capacity));
@@ -814,6 +815,85 @@ size_t turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generati
   return generation ? vec_size(&generation->owners) : 0u;
 }
 
+size_t turbo_flow_plugin_generation_materializer_count(
+    const turbo_flow_plugin_generation_t *generation) {
+  return generation ? vec_size(&generation->materializers) : 0u;
+}
+
+int turbo_flow_plugin_generation_materialize_at(
+    turbo_flow_plugin_generation_t *generation, size_t binding_index,
+    turbo_flow_msg_t *message, turbo_flow_config_error_t *error) {
+  flow_plugin_generation_materializer_binding_t *binding;
+  turbo_flow_plugin_materializer_input_v1_t input =
+      TURBO_FLOW_PLUGIN_MATERIALIZER_INPUT_V1_INIT;
+  void *value = NULL;
+  int rc;
+  if (!generation || !message || !error || error->size < sizeof(*error))
+    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.generation.materialize",
+                                        "invalid materialization arguments");
+  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  if (generation->failed || !generation->flow)
+    return flow_plugin_generation_error(error, SALTS_EBUSY, "$.generation.materialize",
+                                        "Graph generation is not accepting materialization");
+  if (binding_index >= vec_size(&generation->materializers))
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_ENOENT, binding_index, NULL, "materializer binding does not exist");
+  binding = (flow_plugin_generation_materializer_binding_t *)
+      vec_at(&generation->materializers, binding_index);
+  if (!binding)
+    return flow_plugin_generation_materializer_error(
+        error, SALTS_EPROTO, binding_index, NULL, "materializer binding storage is unavailable");
+  rc = flow_plugin_materializer_message_validate(binding, message);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index,
+        rc == SALTS_ENOSPC ? "payload" : "schema",
+        rc == SALTS_EALREADY ? "message already has a typed projection or result"
+        : rc == SALTS_ENOSPC ? "canonical payload exceeds the materializer encoded-byte bound"
+        : rc == SALTS_EPROTO ? "message content does not match the compiled materializer schema"
+                             : "message content is invalid for materialization");
+  rc = flow_plugin_generation_materialization_acquire(generation);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index, "lease",
+        rc == SALTS_EBUSY ? "generation materialization admission is closed"
+                          : "generation materialization lease capacity is exhausted");
+  rc = flow_plugin_materializer_binding_reserve(binding);
+  if (rc != SALTS_OK) {
+    flow_plugin_generation_materialization_release(generation);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index, "capacity",
+        "materializer concurrent projection capacity is exhausted");
+  }
+  rc = flow_plugin_materialized_allocate(generation, binding, &value);
+  if (rc != SALTS_OK) {
+    flow_plugin_materializer_binding_release(binding);
+    flow_plugin_generation_materialization_release(generation);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index, "allocation", "materialized native value allocation failed");
+  }
+
+  input.data = message->payload.data;
+  input.data_size = message->payload.len;
+  rc = binding->materializer.materialize(binding->materializer.ctx, &input, value,
+                                         binding->materializer.native_bytes);
+  if (rc != SALTS_OK) {
+    flow_plugin_materialized_destroy(value, NULL);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index, "materialize", "materializer callback failed");
+  }
+  rc = turbo_flow_msg_bind_typed_projection(
+      message, &binding->materializer.schema, binding->materializer.data, value,
+      flow_plugin_materialized_clone, flow_plugin_materialized_destroy, NULL);
+  if (rc != SALTS_OK) {
+    flow_plugin_materialized_destroy(value, NULL);
+    return flow_plugin_generation_materializer_error(
+        error, rc, binding_index, "projection",
+        "materialized native value could not be bound to the message");
+  }
+  return SALTS_OK;
+}
+
 int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation,
                                       uint32_t timeout_ms, turbo_flow_config_error_t *error) {
   size_t owner_count;
@@ -878,6 +958,15 @@ static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generat
         error, SALTS_EINVAL, generation->unretirable_resource ? "channels" : "adapters",
         generation->unretirable_owner,
         "Product owner has no verifiable cleanup contract; resources remain pinned");
+  {
+    const uint_fast64_t previous = atomic_fetch_or_explicit(
+        &generation->materialization_leases, FLOW_PLUGIN_MATERIALIZATION_CLOSED,
+        memory_order_acq_rel);
+    if ((previous & FLOW_PLUGIN_MATERIALIZATION_COUNT_MASK) != 0u)
+      return flow_plugin_generation_error(
+          error, SALTS_EBUSY, "$.generation.materializers",
+          "materialized message projections still retain the generation");
+  }
   rc = flow_durable_buffers_prepare_retire(generation->flow, timeout_ms);
   if (rc != SALTS_OK)
     return flow_plugin_generation_error(error, rc, "$.generation.buffers",
