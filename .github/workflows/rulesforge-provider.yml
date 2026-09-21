@@ -213,7 +213,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          graph="$(find build/rulesforge-provider -type f \( -name 'libturbo_flow_graph.so' -o -name 'turbo_flow_graph.dll' \) | head -n1)"
+          graph="$(find build/rulesforge-provider -type f \( -name 'libturbo_flow_graph.so.*' -o -name 'turbo_flow_graph.dll' \) | head -n1)"
           provider="$(find build/rulesforge-provider -type f \( -name 'libtf_rulesforge_provider.so' -o -name 'tf_rulesforge_provider.dll' \) | head -n1)"
           test -n "$graph"
           test -n "$provider"
