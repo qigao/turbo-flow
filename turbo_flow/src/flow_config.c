@@ -471,7 +471,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
                                    turbo_flow_config_error_t *error) {
   static const char *const root_keys[] = {"version",  "plugins",  "runtime",  "profiles",
                                           "fragments", "channels", "adapters",
-                                          "operation_bindings"};
+                                          "operation_bindings", "materializer_bindings"};
   static const char *const fragment_keys[] = {"connection", "timer", "thread", "coro"};
   cyaml_doc_t *yaml_doc = NULL;
   json_value_t *input = NULL;
@@ -486,6 +486,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   json_value_t *channels;
   json_value_t *adapters;
   json_value_t *operation_bindings;
+  json_value_t *materializer_bindings;
   flow_config_ingress_t async_ingress = {TURBO_FLOW_CONFIG_INGRESS_DEFAULT_WORKERS,
                                          TURBO_FLOW_CONFIG_INGRESS_DEFAULT_CAPACITY,
                                          TURBO_FLOW_CONFIG_INGRESS_DEFAULT_MAX_MESSAGE_BYTES,
@@ -512,6 +513,7 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   channels = json_object_get(input, "channels");
   adapters = json_object_get(input, "adapters");
   operation_bindings = json_object_get(input, "operation_bindings");
+  materializer_bindings = json_object_get(input, "materializer_bindings");
   if (rc == SALTS_OK &&
       (!version || json_type(version) != JSON_NUMBER || json_number(version) != 1.0))
     rc = flow_config_error(error, SALTS_EINVAL, "$.version", "version must be integer 1");
@@ -524,6 +526,9 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   if (rc == SALTS_OK) rc = flow_config_validate_channels(channels, error);
   if (rc == SALTS_OK)
     rc = flow_config_validate_operation_bindings(operation_bindings, channels, error);
+  if (rc == SALTS_OK)
+    rc = flow_config_validate_materializer_bindings(materializer_bindings, operation_bindings,
+                                                    error);
   if (rc != SALTS_OK) goto done;
   resolved = json_create_object();
   resolved_adapters = json_create_object();
@@ -549,6 +554,11 @@ int turbo_flow_config_resolve_yaml(const char *yaml, size_t yaml_len,
   }
   if (operation_bindings &&
       flow_config_add_clone(resolved, "operation_bindings", operation_bindings) != SALTS_OK) {
+    rc = SALTS_ENOMEM;
+    goto done;
+  }
+  if (materializer_bindings &&
+      flow_config_add_clone(resolved, "materializer_bindings", materializer_bindings) != SALTS_OK) {
     rc = SALTS_ENOMEM;
     goto done;
   }
