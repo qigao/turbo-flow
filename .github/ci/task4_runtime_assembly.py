@@ -19,6 +19,7 @@ if args.rulesforge:
     children = (
         "add_subdirectory(ingress/protocol/common)\n"
         "add_subdirectory(turbo_flow)\n"
+        "add_subdirectory(io/cnet)\n"
         "add_subdirectory(plugins/rulesforge)\n"
         "\n"
         "cmake_add_test(\n"
@@ -30,6 +31,17 @@ if args.rulesforge:
         "target_compile_definitions(test_flow_rulesforge_plugin PRIVATE\n"
         '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
         "add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)\n"
+        "\n"
+        "cmake_add_test(\n"
+        "  test_flow_rulesforge_network_composition\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_network_composition.c\n"
+        "  LIBS TurboFlow::PluginHost Salts::TinyTest Salts::CNet\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/plugins/rulesforge/include\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_rulesforge_network_composition PRIVATE\n"
+        '  TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"\n'
+        '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
+        "add_dependencies(test_flow_rulesforge_network_composition tf_cnet_plugin tf_rulesforge_provider)\n"
     )
 else:
     children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
