@@ -23,7 +23,7 @@ concurrency:
 env:
   VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
+  SALTS_UTILS_COMMIT: 3d3b1c3c245279825d5db38dfaec4fb8e510ff34
   RULESFORGE_COMMIT: 183c8fb33d86b4dec14ad599e1ed026888413d39
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -134,6 +134,14 @@ jobs:
           sudo mkdir -p /opt/salts-utils /opt/databind
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
           sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
+
+      - name: Verify pinned DataBind native materializer API
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f /opt/databind/debug/include/data_bind_native.h
+          grep -F 'data_bind_native_decode(' /opt/databind/debug/include/data_bind_native.h
+          test -f /opt/databind/debug/include/data_bind_json_provider.h
 
       - name: Build and install pinned RulesForge SDK
         shell: bash
