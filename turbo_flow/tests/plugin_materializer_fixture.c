@@ -13,6 +13,12 @@
 #ifndef FLOW_MATERIALIZER_SCHEMA_VERSION
 #define FLOW_MATERIALIZER_SCHEMA_VERSION 1u
 #endif
+#ifndef FLOW_MATERIALIZER_TYPE_NAME
+#define FLOW_MATERIALIZER_TYPE_NAME "FixtureInt"
+#endif
+#ifndef FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID
+#define FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID 15901u
+#endif
 #ifndef FLOW_MATERIALIZER_MODE
 #define FLOW_MATERIALIZER_MODE 0
 #endif
@@ -96,9 +102,9 @@ static int fixture_register(
   materializer.schema.domain = TURBO_FLOW_DOMAIN_DATA;
   materializer.schema.encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
   materializer.schema.schema_name = FLOW_MATERIALIZER_SCHEMA_ID;
-  materializer.schema.type_name = "FixtureInt";
+  materializer.schema.type_name = FLOW_MATERIALIZER_TYPE_NAME;
   materializer.schema.projection_type = fixture_int_type.name;
-  materializer.schema.schema_id = 15901u;
+  materializer.schema.schema_id = FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID;
   materializer.schema.schema_version =
       FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_BAD_SCHEMA_VERSION
           ? 0u
