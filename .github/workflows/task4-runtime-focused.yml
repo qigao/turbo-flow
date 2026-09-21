@@ -2,7 +2,7 @@ name: Durable buffer focused validation
 
 on:
   push:
-    branches: [feat/127-graph-durable-buffer, feat/131-sink-completion-observability]
+    branches: [feat/127-graph-durable-buffer]
     paths:
       - 'turbo_flow/**'
       - 'io/durable/**'
