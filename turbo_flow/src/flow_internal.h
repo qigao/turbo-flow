@@ -4,6 +4,7 @@
 #include "turbo_flow.h"
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_expr.h"
+#include "turbo_flow_projection.h"
 
 #include "disruptor.h"
 #include "salts_coro.h"
