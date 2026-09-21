@@ -28,9 +28,8 @@ TurboFlow keeps those capabilities provider-neutral: Graph/Core does not statica
 
 ```text
 Salts
-  ├── salts-utils
-  ├── salts-net
-  └── DataBind
+  ├── salts-utils (including DataBind)
+  └── salts-net
         ↓
  CHTTP / TurboDB / RulesForge / Flowie
         ↓
