@@ -85,8 +85,8 @@ elif args.materializer:
         "target_link_libraries(test_flow_operation_fixture_OK PRIVATE TurboFlow::PluginHost)\n"
         "target_compile_definitions(test_flow_operation_fixture_OK PRIVATE TURBO_FLOW_PLUGIN_BUILD FLOW_OPERATION_MODE=OP_FIXTURE_OK)\n"
         "set_target_properties(test_flow_operation_fixture_OK PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
-        "cmake_add_test(test_materializer_binding_config SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_materializer_binding_config.c LIBS TurboFlow::Config Salts::TinyTest FOLDER \\"turbo_flow/tests\\")\n"
-        "cmake_add_test(test_flow_plugin_materializer_generation SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer_generation.c LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER \\"turbo_flow/tests\\")\n"
+        'cmake_add_test(test_materializer_binding_config SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_materializer_binding_config.c LIBS TurboFlow::Config Salts::TinyTest FOLDER "turbo_flow/tests")\n'
+        'cmake_add_test(test_flow_plugin_materializer_generation SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer_generation.c LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")\n'
         "target_compile_definitions(test_flow_plugin_materializer_generation PRIVATE\n"
         "  FLOW_OPERATION_OK=\\\"$<TARGET_FILE:test_flow_operation_fixture_OK>\\\"\n"
         "  FLOW_MATERIALIZER_OPERATION=\\\"$<TARGET_FILE:test_flow_plugin_materializer_operation>\\\"\n"
