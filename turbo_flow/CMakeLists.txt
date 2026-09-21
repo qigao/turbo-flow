@@ -1,6 +1,4 @@
 set(TARGET_NAME turbo_flow_graph)
-find_package(RulesForge 0.9 CONFIG REQUIRED
-             PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
 cmake_add_grammar(TURBO_FLOW
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_lexer.re
   GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/flow_grammar.y
@@ -35,7 +33,8 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_rulesforge.c)
 set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_export.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow.h
@@ -45,8 +44,7 @@ set(TURBO_FLOW_HEADERS
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_projection.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_domain.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_control.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_rulesforge.h)
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_expr.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_policy.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
@@ -115,8 +113,8 @@ target_include_directories(
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
-target_link_libraries(${TARGET_NAME} PUBLIC 
-  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta RulesForge::RulesForge
+target_link_libraries(${TARGET_NAME} PUBLIC
+  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta
   PRIVATE Salts::DataBind Salts::JsonParser mir_static)
 
 if(BUILD_TESTING)
