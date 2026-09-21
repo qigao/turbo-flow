@@ -15,6 +15,7 @@ static int crash_record(turbo_flow_inbox_record_t *record, const char *admission
   if (!record || !admission_id || !payload) return SALTS_EINVAL;
   turbo_flow_inbox_record_init(record);
   record->source_id = vstr_from_buf("crash.orders", sizeof("crash.orders") - 1u);
+  record->partition_key = record->source_id;
   record->admission_id = vstr_from_buf(admission_id, strlen(admission_id));
   record->source_sequence = sequence;
   record->timestamp_ns = UINT64_C(9000000000) + sequence;
