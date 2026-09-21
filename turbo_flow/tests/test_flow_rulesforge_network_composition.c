@@ -276,6 +276,23 @@ static void normalize_path(char *path) {
     if (path[i] == '\\') path[i] = '/';
 }
 
+static turbo_flow_operation_descriptor_t rulesforge_operation_metadata(void) {
+  turbo_flow_operation_descriptor_t descriptor = {0};
+  descriptor.size = sizeof(descriptor);
+  descriptor.name = TURBO_FLOW_RULESFORGE_OPERATION;
+  descriptor.version = 1u;
+  descriptor.domain = TURBO_FLOW_DOMAIN_DATA;
+  descriptor.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  descriptor.input_type = "Message";
+  descriptor.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  descriptor.output_type = "Message";
+  descriptor.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  descriptor.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  descriptor.flags = TURBO_FLOW_OPERATION_STAGE;
+  descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  return descriptor;
+}
+
 spec("RulesForge real network composition") {
   it("shares one ABI3 business operation and one explicit sink across TCP and UDP sources") {
     static const char schema_text[] =
@@ -470,6 +487,8 @@ spec("RulesForge real network composition") {
                 SALTS_OK);
     check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &error), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph_text, sizeof(graph_text) - 1u), SALTS_OK);
+    turbo_flow_operation_descriptor_t rulesforge_metadata = rulesforge_operation_metadata();
+    check_equal(turbo_flow_register_operation(flow, &rulesforge_metadata), SALTS_OK);
     flow_test_operation_t normalize =
         flow_test_operation_init("test.normalize_applicant", normalize_applicant, NULL);
     normalize.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
