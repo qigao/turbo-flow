@@ -2,6 +2,7 @@
 #define TURBO_FLOW_PLUGIN_OPERATION_H
 
 #include "turbo_flow_export.h"
+#include "turbo_flow_plugin_abi.h"
 #include "turbo_flow_projection.h"
 #include "turbo_flow_resolved_config.h"
 
@@ -12,10 +13,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Shared plugin ABI includes every descriptor passed across the DLL boundary. */
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR 3u
-#define TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR 0u
 
 typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_snapshot_t;
 
