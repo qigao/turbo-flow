@@ -298,6 +298,16 @@ static int flow_inbox_driver_request_internal(
     source->message_live = false;
     return flow_inbox_source_fail_claim(source, status);
   }
+  if (source->config.graph_complete || source->config.sink_complete) {
+    status = flow_run_set_completion_observers(
+        source->run, source->config.graph_complete, source->config.sink_complete,
+        source->config.completion_observer_ctx);
+    if (status != SALTS_OK) {
+      turbo_flow_run_close(source->run);
+      source->run = NULL;
+      return flow_inbox_source_fail_claim(source, status);
+    }
+  }
   source->phase = FLOW_INBOX_SOURCE_GRAPH_RUNNING;
   status = turbo_flow_run_request(source->run, 1u);
   if (status == SALTS_OK) return SALTS_OK;

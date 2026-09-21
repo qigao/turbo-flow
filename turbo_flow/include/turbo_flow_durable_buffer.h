@@ -230,6 +230,33 @@ typedef struct turbo_flow_durable_buffer_runtime_snapshot_s {
    0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
 
 /**
+ * Binding-lifetime Graph-vs-Sink completion observation.
+ *
+ * Graph counters advance when one durable-buffer run finishes synchronous graph
+ * traversal / async publication sealing. Sink counters advance only after terminal
+ * Sink work completes; synchronous paths naturally report both in the same call.
+ * Provider settlement remains separately observable through the ordinary runtime
+ * and provider snapshots.
+ */
+typedef struct turbo_flow_durable_buffer_completion_snapshot_s {
+  size_t size;
+  uint32_t version;
+  uint64_t elapsed_ns;
+  uint64_t graph_completed;
+  uint64_t graph_failed;
+  uint64_t sink_completed;
+  uint64_t sink_failed;
+  uint64_t graph_completed_per_second_milli;
+  uint64_t graph_failed_per_second_milli;
+  uint64_t sink_completed_per_second_milli;
+  uint64_t sink_failed_per_second_milli;
+} turbo_flow_durable_buffer_completion_snapshot_t;
+
+#define TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT                                        \
+  {sizeof(turbo_flow_durable_buffer_completion_snapshot_t),                                      \
+   TURBO_FLOW_DURABLE_BUFFER_API_VERSION, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+
+/**
  * Lazy binding-local queue/claim latency observation.
  *
  * The first latency snapshot starts one in-process observation epoch. TurboFlow
@@ -324,6 +351,11 @@ TURBO_FLOW_C_API int turbo_flow_durable_buffer_pressure_snapshot(
 TURBO_FLOW_C_API int turbo_flow_durable_buffer_runtime_snapshot(
     turbo_flow_t *flow, const char *resource_name,
     turbo_flow_durable_buffer_runtime_snapshot_t *snapshot);
+
+/** Read binding-lifetime Graph and terminal-Sink completion/failure counts and rates. */
+TURBO_FLOW_C_API int turbo_flow_durable_buffer_completion_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_completion_snapshot_t *snapshot);
 
 /**
  * Read queue/claim latency for the current binding-local observation epoch.

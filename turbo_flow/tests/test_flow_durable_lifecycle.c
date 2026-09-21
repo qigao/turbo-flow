@@ -255,6 +255,71 @@ static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   check_equal(snapshot(f).completed, completed);
 }
 spec("durable buffer lifecycle") {
+  it("distinguishes Graph completion from async Sink completion and settlement") {
+    lifecycle_fixture_t f;
+    turbo_flow_durable_buffer_completion_snapshot_t completion =
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    turbo_flow_inbox_snapshot_t provider;
+    open_fixture(&f, 1);
+
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+
+    publish(&f);
+    check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.graph_completed == UINT64_C(1) &&
+          atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)1u)
+        break;
+      salts_sleep_ms(1u);
+    }
+
+    provider = snapshot(&f);
+    completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.graph_failed, UINT64_C(0));
+    check_equal(completion.sink_completed, UINT64_C(0));
+    check_equal(completion.sink_failed, UINT64_C(0));
+    check_equal(provider.completed, UINT64_C(0));
+    check_equal(provider.in_flight_claims, (size_t)1u);
+
+    check(complete_ready_terminal(&f, 0u));
+    for (size_t i = 0u; i < 1000u; ++i) {
+      completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+          TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+      check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                      f.flow, "intake.store", &completion), SALTS_OK);
+      if (completion.sink_completed == UINT64_C(1)) break;
+      salts_sleep_ms(1u);
+    }
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check_equal(snapshot(&f).completed, UINT64_C(0));
+
+    progress_until_settled(&f, 1u);
+    provider = snapshot(&f);
+    check_equal(provider.completed, UINT64_C(1));
+    check_equal(provider.in_flight_claims, (size_t)0u);
+    completion = (turbo_flow_durable_buffer_completion_snapshot_t)
+        TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+    check_equal(turbo_flow_durable_buffer_completion_snapshot(
+                    f.flow, "intake.store", &completion), SALTS_OK);
+    check_equal(completion.graph_completed, UINT64_C(1));
+    check_equal(completion.sink_completed, UINT64_C(1));
+    check(completion.graph_completed_per_second_milli > UINT64_C(0));
+    check(completion.sink_completed_per_second_milli > UINT64_C(0));
+    close_fixture(&f);
+  }
+
   it("rejects partition-key policy changes while live backlog uses the previous key") {
     lifecycle_fixture_t f;
     turbo_flow_durable_buffer_drain_config_t source_config =

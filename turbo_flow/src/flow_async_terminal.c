@@ -9,6 +9,7 @@ typedef struct flow_async_terminal_claim_impl_s {
   uint32_t stage_index;
   turbo_flow_msg_t message;
   flow_stage_completion_t completion;
+  flow_sink_completion_observer_t sink_observer;
 } flow_async_terminal_claim_impl_t;
 
 typedef struct flow_async_emit_claim_impl_s {
@@ -185,7 +186,15 @@ static void flow_async_terminal_observe(flow_async_terminal_claim_impl_t *impl, 
   flow_observer_emit(impl->flow, &event);
   event.kind = TURBO_FLOW_OBSERVE_SINK_COMPLETE;
   event.duration_ns = 0u;
-  flow_observer_emit(impl->flow, &event);
+  if (impl->sink_observer.fn) {
+    const flow_sink_completion_observer_t previous =
+        flow_sink_completion_scope_enter(
+            impl->sink_observer.fn, impl->sink_observer.ctx);
+    flow_observer_emit(impl->flow, &event);
+    flow_sink_completion_scope_leave(previous);
+  } else {
+    flow_observer_emit(impl->flow, &event);
+  }
 }
 
 int turbo_flow_async_terminal_complete(turbo_flow_async_terminal_claim_t *claim, int status,
@@ -331,6 +340,7 @@ int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_i
   impl->publication = flow_current_async_publication;
   impl->stage_index = completion->entry.stage_index;
   impl->completion = *completion;
+  impl->sink_observer = flow_sink_completion_scope_current();
   salts_mutex_lock(&impl->publication->mutex);
   ++impl->publication->pending;
   salts_mutex_unlock(&impl->publication->mutex);

@@ -492,6 +492,10 @@ struct turbo_flow_durable_buffer_binding_s {
   uint64_t baseline_failed;
   uint64_t baseline_retried;
   uint64_t baseline_discarded;
+  atomic_uint_fast64_t graph_completed;
+  atomic_uint_fast64_t graph_failed;
+  atomic_uint_fast64_t sink_completed;
+  atomic_uint_fast64_t sink_failed;
   salts_mutex_t latency_mutex;
   vec_t latency_pending;
   atomic_int latency_enabled;
@@ -850,6 +854,22 @@ int flow_run_open_buffer_drain(turbo_flow_t *flow, uint32_t origin_stage,
                                 cflow_publisher *publisher,
                                 const turbo_flow_run_config_t *config,
                                 turbo_flow_run_t **run_out);
+typedef void (*flow_run_completion_observer_fn)(void *ctx, int status);
+
+typedef struct flow_sink_completion_observer_s {
+  flow_run_completion_observer_fn fn;
+  void *ctx;
+} flow_sink_completion_observer_t;
+
+flow_sink_completion_observer_t flow_sink_completion_scope_enter(
+    flow_run_completion_observer_fn fn, void *ctx);
+void flow_sink_completion_scope_leave(flow_sink_completion_observer_t previous);
+flow_sink_completion_observer_t flow_sink_completion_scope_current(void);
+
+int flow_run_set_completion_observers(turbo_flow_run_t *run,
+                                      flow_run_completion_observer_fn graph_complete,
+                                      flow_run_completion_observer_fn sink_complete,
+                                      void *ctx);
 int flow_run_has_pending_values(const turbo_flow_run_t *run);
 int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms);
 int flow_publish_enter(turbo_flow_t *flow);

@@ -100,6 +100,24 @@ static int flow_durable_buffer_destroy_drivers(
   return SALTS_OK;
 }
 
+static void flow_durable_graph_complete(void *ctx, int status) {
+  turbo_flow_durable_buffer_binding_t *binding =
+      (turbo_flow_durable_buffer_binding_t *)ctx;
+  atomic_uint_fast64_t *counter;
+  if (!binding) return;
+  counter = status == SALTS_OK ? &binding->graph_completed : &binding->graph_failed;
+  (void)atomic_fetch_add_explicit(counter, UINT64_C(1), memory_order_relaxed);
+}
+
+static void flow_durable_sink_complete(void *ctx, int status) {
+  turbo_flow_durable_buffer_binding_t *binding =
+      (turbo_flow_durable_buffer_binding_t *)ctx;
+  atomic_uint_fast64_t *counter;
+  if (!binding) return;
+  counter = status == SALTS_OK ? &binding->sink_completed : &binding->sink_failed;
+  (void)atomic_fetch_add_explicit(counter, UINT64_C(1), memory_order_relaxed);
+}
+
 static int flow_durable_buffer_ensure_driver(
     turbo_flow_durable_buffer_binding_t *binding, size_t index) {
   flow_inbox_driver_t **slot;
@@ -112,9 +130,18 @@ static int flow_durable_buffer_ensure_driver(
   if (!slot) return SALTS_EINVAL;
   if (*slot) return SALTS_OK;
   config = (flow_inbox_driver_config_t){
-      binding->inbox, binding->flow, FLOW_INBOX_DRIVER_BUFFER,
-      (uint32_t)binding->stage_index, NULL, binding->max_message_bytes,
-      flow_durable_latency_claim_begin, flow_durable_latency_claim_end, binding};
+      .inbox = binding->inbox,
+      .flow = binding->flow,
+      .origin_kind = FLOW_INBOX_DRIVER_BUFFER,
+      .origin_stage = (uint32_t)binding->stage_index,
+      .scheduler = NULL,
+      .max_message_bytes = binding->max_message_bytes,
+      .claim_begin = flow_durable_latency_claim_begin,
+      .claim_end = flow_durable_latency_claim_end,
+      .claim_observer_ctx = binding,
+      .graph_complete = flow_durable_graph_complete,
+      .sink_complete = flow_durable_sink_complete,
+      .completion_observer_ctx = binding};
   return flow_inbox_driver_create(&config, slot);
 }
 
@@ -552,6 +579,10 @@ int turbo_flow_durable_buffer_bind(
   binding->baseline_failed = snapshot.failed;
   binding->baseline_retried = snapshot.retried;
   binding->baseline_discarded = snapshot.discarded;
+  atomic_init(&binding->graph_completed, 0u);
+  atomic_init(&binding->graph_failed, 0u);
+  atomic_init(&binding->sink_completed, 0u);
+  atomic_init(&binding->sink_failed, 0u);
   salts_mutex_init(&binding->latency_mutex);
   rc = turbo_flow_stl_error(vec_init_bytes(
       &binding->latency_pending, sizeof(flow_durable_latency_pending_t),
@@ -1228,6 +1259,46 @@ int turbo_flow_durable_buffer_runtime_snapshot(
       flow_durable_rate_milli(observed.completed, observed.elapsed_ns);
   observed.failed_per_second_milli =
       flow_durable_rate_milli(observed.failed, observed.elapsed_ns);
+  *snapshot = observed;
+  return SALTS_OK;
+}
+
+int turbo_flow_durable_buffer_completion_snapshot(
+    turbo_flow_t *flow, const char *resource_name,
+    turbo_flow_durable_buffer_completion_snapshot_t *snapshot) {
+  turbo_flow_durable_buffer_binding_t *binding;
+  turbo_flow_durable_buffer_completion_snapshot_t observed =
+      TURBO_FLOW_DURABLE_BUFFER_COMPLETION_SNAPSHOT_INIT;
+  uint64_t now;
+  int rc;
+
+  if (!snapshot || snapshot->size != sizeof(*snapshot) ||
+      snapshot->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+    return SALTS_EINVAL;
+  binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
+  if (!binding) return SALTS_ENOENT;
+  rc = flow_durable_buffer_validate_provider(binding);
+  if (rc != SALTS_OK) return rc;
+
+  now = salts_hrtime();
+  observed.elapsed_ns =
+      now >= binding->runtime_started_ns ? now - binding->runtime_started_ns : 0u;
+  observed.graph_completed =
+      atomic_load_explicit(&binding->graph_completed, memory_order_relaxed);
+  observed.graph_failed =
+      atomic_load_explicit(&binding->graph_failed, memory_order_relaxed);
+  observed.sink_completed =
+      atomic_load_explicit(&binding->sink_completed, memory_order_relaxed);
+  observed.sink_failed =
+      atomic_load_explicit(&binding->sink_failed, memory_order_relaxed);
+  observed.graph_completed_per_second_milli =
+      flow_durable_rate_milli(observed.graph_completed, observed.elapsed_ns);
+  observed.graph_failed_per_second_milli =
+      flow_durable_rate_milli(observed.graph_failed, observed.elapsed_ns);
+  observed.sink_completed_per_second_milli =
+      flow_durable_rate_milli(observed.sink_completed, observed.elapsed_ns);
+  observed.sink_failed_per_second_milli =
+      flow_durable_rate_milli(observed.sink_failed, observed.elapsed_ns);
   *snapshot = observed;
   return SALTS_OK;
 }
