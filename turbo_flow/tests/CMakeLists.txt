@@ -714,6 +714,7 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_STOPPED_ON_DRAIN=1)
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_resource_order
+  test_flow_plugin_generation_operation_resource
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-resource-order"
   FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=2
   FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=2
@@ -721,6 +722,15 @@ turbo_flow_add_generation_fixture(
   FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=2
   FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY="prpamrma"
   FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q2q1d2d1s2s1x2x1")
+turbo_flow_add_generation_fixture(
+  test_flow_plugin_generation_operation_resource
+  FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-operation-resource"
+  FLOW_PLUGIN_GENERATION_SKIP_ADAPTER_REGISTRATION_CALL=1
+  FLOW_PLUGIN_GENERATION_EXPECT_PREFLIGHT_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_MATERIALIZE_CALLS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_OWNER_DESTROYS=1
+  FLOW_PLUGIN_GENERATION_EXPECT_ASSEMBLY="pama"
+  FLOW_PLUGIN_GENERATION_EXPECT_LIFECYCLE="q1d1s1x1")
 turbo_flow_add_generation_fixture(
   test_flow_plugin_generation_external_poll
   FLOW_PLUGIN_GENERATION_FIXTURE_ID="fixture.generation-external-poll"
@@ -880,6 +890,7 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_QUIESCE_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_quiesce_timeout>"
           FLOW_PLUGIN_GENERATION_FIXTURE_DRAIN_TIMEOUT="$<TARGET_FILE:test_flow_plugin_generation_drain_timeout>"
           FLOW_PLUGIN_GENERATION_FIXTURE_RESOURCE_ORDER="$<TARGET_FILE:test_flow_plugin_generation_resource_order>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_OPERATION_RESOURCE="$<TARGET_FILE:test_flow_plugin_generation_operation_resource>"
           FLOW_PLUGIN_GENERATION_FIXTURE_EXTERNAL_POLL="$<TARGET_FILE:test_flow_plugin_generation_external_poll>"
           FLOW_PLUGIN_GENERATION_FIXTURE_MIXED_POLL="$<TARGET_FILE:test_flow_plugin_generation_mixed_poll>"
           FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY_OWNER_PREFIX="$<TARGET_FILE:test_flow_plugin_generation_legacy_owner_prefix>"
