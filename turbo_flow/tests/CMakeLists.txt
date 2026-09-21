@@ -40,11 +40,13 @@ target_link_libraries(test_flow_plugin_materializer_generation
   PRIVATE TurboFlow::PluginHost Salts::TinyTest)
 target_compile_definitions(test_flow_plugin_materializer_generation PRIVATE
   FLOW_OPERATION_OK="$<TARGET_FILE:test_flow_operation_fixture_OK>"
+  FLOW_OPERATION_TWO_NAMES="$<TARGET_FILE:test_flow_operation_fixture_TWO_NAMES>"
   FLOW_MATERIALIZER_OPERATION="$<TARGET_FILE:test_flow_plugin_materializer_operation>"
   FLOW_MATERIALIZER_MISMATCH="$<TARGET_FILE:test_flow_plugin_materializer_mismatch>"
   FLOW_MATERIALIZER_UNUSED="$<TARGET_FILE:test_flow_plugin_materializer_unused>")
 add_dependencies(test_flow_plugin_materializer_generation
   test_flow_operation_fixture_OK
+  test_flow_operation_fixture_TWO_NAMES
   test_flow_plugin_materializer_operation
   test_flow_plugin_materializer_mismatch
   test_flow_plugin_materializer_unused)
