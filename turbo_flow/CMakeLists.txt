@@ -49,7 +49,9 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_po
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_materializer.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_operation.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
@@ -152,7 +154,9 @@ add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${PROJECT_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol_registry.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_materializer.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_operation.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_generation.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_protocol.h)
