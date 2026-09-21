@@ -81,6 +81,7 @@ elif args.materializer:
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_operation FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=7)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_mismatch FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=99)\n"
         "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_unused FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.unused\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"fixture.unused.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=15999)\n"
+        "turbo_flow_ci_add_materializer_fixture(test_flow_plugin_materializer_callback_fail FLOW_MATERIALIZER_FIXTURE_ID=\\\"fixture.materializer.operation\\\" FLOW_MATERIALIZER_SCHEMA_ID=\\\"cmeta.int.data\\\" FLOW_MATERIALIZER_TYPE_NAME=\\\"Integer\\\" FLOW_MATERIALIZER_SCHEMA_NUMERIC_ID=7 FLOW_MATERIALIZER_MODE=7)\n"
         "add_library(test_flow_operation_fixture_OK SHARED ${CMAKE_SOURCE_DIR}/turbo_flow/tests/plugin_operation_fixture.c)\n"
         "target_link_libraries(test_flow_operation_fixture_OK PRIVATE TurboFlow::PluginHost)\n"
         "target_compile_definitions(test_flow_operation_fixture_OK PRIVATE TURBO_FLOW_PLUGIN_BUILD FLOW_OPERATION_MODE=OP_FIXTURE_OK)\n"
@@ -98,6 +99,12 @@ elif args.materializer:
         "  FLOW_MATERIALIZER_MISMATCH=\\\"$<TARGET_FILE:test_flow_plugin_materializer_mismatch>\\\"\n"
         "  FLOW_MATERIALIZER_UNUSED=\\\"$<TARGET_FILE:test_flow_plugin_materializer_unused>\\\")\n"
         "add_dependencies(test_flow_plugin_materializer_generation test_flow_operation_fixture_OK test_flow_operation_fixture_TWO_NAMES test_flow_plugin_materializer_operation test_flow_plugin_materializer_mismatch test_flow_plugin_materializer_unused)\n"
+        'cmake_add_test(test_flow_plugin_materializer_runtime SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer_runtime.c LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_plugin_materializer_runtime PRIVATE\n"
+        "  FLOW_OPERATION_OK=\\\"$<TARGET_FILE:test_flow_operation_fixture_OK>\\\"\n"
+        "  FLOW_MATERIALIZER_OPERATION=\\\"$<TARGET_FILE:test_flow_plugin_materializer_operation>\\\"\n"
+        "  FLOW_MATERIALIZER_CALLBACK_FAIL=\\\"$<TARGET_FILE:test_flow_plugin_materializer_callback_fail>\\\")\n"
+        "add_dependencies(test_flow_plugin_materializer_runtime test_flow_operation_fixture_OK test_flow_plugin_materializer_operation test_flow_plugin_materializer_callback_fail)\n"
     )
 else:
     children = "add_subdirectory(ingress/protocol/common)\nadd_subdirectory(turbo_flow)\nadd_subdirectory(io/durable)\n"
