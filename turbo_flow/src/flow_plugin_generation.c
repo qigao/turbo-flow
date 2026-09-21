@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { FLOW_PLUGIN_MATERIALIZER_MAX_RETAINED_BYTES = 67108864u };
+
 typedef enum flow_plugin_generation_owner_state_e {
   FLOW_PLUGIN_GENERATION_OWNER_ACTIVE = 1,
   FLOW_PLUGIN_GENERATION_OWNER_QUIESCED,
@@ -515,6 +517,10 @@ static int flow_plugin_generation_prepare_materializers(
           error, SALTS_EINVAL, i, "schema",
           "materializer retained-byte capacity overflow");
     max_retained_bytes = projection_capacity * selected->materializer.native_bytes;
+    if (max_retained_bytes > FLOW_PLUGIN_MATERIALIZER_MAX_RETAINED_BYTES)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_ENOSPC, i, "schema",
+          "materializer retained native-byte budget exceeds 64 MiB");
     projection_ctx =
         (flow_plugin_materializer_projection_context_t *)calloc(1u, sizeof(*projection_ctx));
     if (!projection_ctx)
