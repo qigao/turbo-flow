@@ -27,6 +27,7 @@ spec("materializer binding config") {
     turbo_flow_resolved_materializer_binding_view_t view =
         TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
     size_t count = 99u;
+    size_t capacity = 0u;
     check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
                 SALTS_OK);
     check_equal(turbo_flow_resolved_config_materializer_binding_count(config, &count), SALTS_OK);
@@ -36,6 +37,9 @@ spec("materializer binding config") {
     check_equal(strcmp(view.schema, "cmeta.int.data"), 0);
     check_equal(view.schema_version, 1u);
     check_equal(view.encoding, TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE);
+    check_equal(turbo_flow_resolved_config_materializer_binding_capacity(config, 0u, &capacity),
+                SALTS_OK);
+    check_equal(capacity, (size_t)TURBO_FLOW_CONFIG_MATERIALIZER_DEFAULT_CAPACITY);
     turbo_flow_resolved_config_destroy(config);
   }
 
@@ -76,6 +80,39 @@ spec("materializer binding config") {
     rejected("version: 1\nmaterializer_bindings:\n  - plugin: fixture\n    schema: sample\n"
              "    schema_version: 1\n    encoding: binary\nadapters: {}\n",
              SALTS_EINVAL, "$.materializer_bindings[0].encoding");
+  }
+
+  it("accepts explicit bounded capacity and rejects invalid capacity values") {
+    static const char yaml[] =
+        "version: 1\nmaterializer_bindings:\n"
+        "  - plugin: fixture\n    schema: sample\n"
+        "    schema_version: 1\n    encoding: opaque\n"
+        "    capacity: 2\nadapters: {}\n";
+    turbo_flow_resolved_config_t *config = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    size_t capacity = 0u;
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &config, &error),
+                SALTS_OK);
+    check_equal(turbo_flow_resolved_config_materializer_binding_capacity(config, 0u, &capacity),
+                SALTS_OK);
+    check_equal(capacity, (size_t)2);
+    check_equal(turbo_flow_resolved_config_materializer_binding_capacity(NULL, 0u, &capacity),
+                SALTS_EINVAL);
+    check_equal(turbo_flow_resolved_config_materializer_binding_capacity(config, 0u, NULL),
+                SALTS_EINVAL);
+    check_equal(turbo_flow_resolved_config_materializer_binding_capacity(config, 1u, &capacity),
+                SALTS_ENOENT);
+    turbo_flow_resolved_config_destroy(config);
+
+    rejected("version: 1\nmaterializer_bindings:\n  - plugin: fixture\n    schema: sample\n"
+             "    schema_version: 1\n    encoding: opaque\n    capacity: 0\nadapters: {}\n",
+             SALTS_EINVAL, "$.materializer_bindings[0].capacity");
+    rejected("version: 1\nmaterializer_bindings:\n  - plugin: fixture\n    schema: sample\n"
+             "    schema_version: 1\n    encoding: opaque\n    capacity: 1.5\nadapters: {}\n",
+             SALTS_EINVAL, "$.materializer_bindings[0].capacity");
+    rejected("version: 1\nmaterializer_bindings:\n  - plugin: fixture\n    schema: sample\n"
+             "    schema_version: 1\n    encoding: opaque\n    capacity: 1048577\nadapters: {}\n",
+             SALTS_EINVAL, "$.materializer_bindings[0].capacity");
   }
 
   it("accepts every canonical encoding") {
