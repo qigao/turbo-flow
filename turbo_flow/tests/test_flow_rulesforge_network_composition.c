@@ -253,14 +253,16 @@ static uint16_t endpoint_port(const char *endpoint, const char *scheme) {
 }
 
 static void pump_until(turbo_flow_plugin_generation_t *generation, cnet_client *tcp,
-                       cnet_datagram *datagram, const decision_probe_t *decision,
-                       const datagram_probe_t *output, size_t expected) {
+                       cnet_packet_endpoint *udp_peer, cnet_datagram *datagram,
+                       const decision_probe_t *decision, const datagram_probe_t *output,
+                       size_t expected) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
   while ((decision->count < expected || output->count < expected) &&
          salts_monotonic_ms() < deadline) {
     size_t events = 0u;
     check_equal(cnet_client_poll(tcp, 1u, &events), SALTS_OK);
+    check_equal(cnet_packet_poll(udp_peer, 1u, &events), SALTS_OK);
     check_equal(cnet_datagram_poll(datagram, 1u, &events), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
   }
@@ -317,6 +319,10 @@ spec("RulesForge real network composition") {
     tcp_probe_t tcp_probe = {0};
     cnet_datagram datagram = {0};
     cnet_datagram_config datagram_config = CNET_DATAGRAM_CONFIG_INIT;
+    cnet_packet_endpoint udp_peer = {0};
+    cnet_packet_endpoint_config udp_config = CNET_PACKET_ENDPOINT_CONFIG_INIT;
+    cnet_packet_session udp_session = {0};
+    cnet_datagram_peer udp_destination;
     cnet_client tcp = {0};
     cnet_client_config tcp_config = {0};
     cnet_connect_options connect = {0};
@@ -500,6 +506,21 @@ spec("RulesForge real network composition") {
     check_true(tcp_port != 0u);
     check_true(udp_port != 0u);
 
+    udp_config.protocol = CNET_PACKET_UDP;
+    udp_config.session_capacity = 2u;
+    udp_config.datagram.backend = composition_backend();
+    udp_config.datagram.host = "127.0.0.1";
+    udp_config.datagram.port = 0u;
+    udp_config.datagram.send_capacity = 4u;
+    udp_config.datagram.request_capacity = 8u;
+    udp_config.datagram.completion_batch_capacity = 8u;
+    udp_config.datagram.max_datagram_bytes = 1024u;
+    udp_config.datagram.receive_buffer_bytes = 1024u;
+    udp_config.datagram.reuse_port = false;
+    check_equal(cnet_packet_endpoint_init(&udp_peer, &udp_config), SALTS_OK);
+    udp_destination = ipv4_peer(udp_port);
+    check_equal(cnet_packet_session_open(&udp_peer, &udp_destination, 0u, &udp_session), SALTS_OK);
+
     tcp_config.backend = composition_backend();
     tcp_config.connection_capacity = 2u;
     tcp_config.command_capacity = 8u;
@@ -528,15 +549,15 @@ spec("RulesForge real network composition") {
     check_equal(tcp_probe.failed, 0);
 
     check_equal(cnet_send(&tcp, tcp_connection, "21", 2u), SALTS_OK);
-    pump_until(generation, &tcp, &datagram, &decisions, &outputs, 1u);
+    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 1u);
     check_equal(decisions.ages[0], 21);
     check_equal(decisions.matched[0], 1);
     check_equal(decisions.fired[0], 1);
     check_equal(outputs.sizes[0], (size_t)2u);
     check_equal(memcmp(outputs.payloads[0], "21", 2u), 0);
 
-    check_equal(cnet_datagram_send(&datagram, &ipv4_peer(udp_port), "21", 2u, 1u), SALTS_OK);
-    pump_until(generation, &tcp, &datagram, &decisions, &outputs, 2u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, "21", 2u), SALTS_OK);
+    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 2u);
     check_equal(decisions.ages[1], 21);
     check_equal(decisions.matched[1], decisions.matched[0]);
     check_equal(decisions.fired[1], decisions.fired[0]);
@@ -544,13 +565,13 @@ spec("RulesForge real network composition") {
     check_equal(memcmp(outputs.payloads[1], "21", 2u), 0);
 
     check_equal(cnet_send(&tcp, tcp_connection, "17", 2u), SALTS_OK);
-    pump_until(generation, &tcp, &datagram, &decisions, &outputs, 3u);
+    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 3u);
     check_equal(decisions.ages[2], 17);
     check_equal(decisions.matched[2], 0);
     check_equal(decisions.fired[2], 0);
 
-    check_equal(cnet_datagram_send(&datagram, &ipv4_peer(udp_port), "17", 2u, 2u), SALTS_OK);
-    pump_until(generation, &tcp, &datagram, &decisions, &outputs, 4u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, "17", 2u), SALTS_OK);
+    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 4u);
     check_equal(decisions.ages[3], 17);
     check_equal(decisions.matched[3], decisions.matched[2]);
     check_equal(decisions.fired[3], decisions.fired[2]);
@@ -558,6 +579,8 @@ spec("RulesForge real network composition") {
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &plugin_error), SALTS_EBUSY);
     check_equal(cnet_client_stop(&tcp, COMPOSITION_TIMEOUT_MS), SALTS_OK);
     check_equal(cnet_client_destroy(&tcp), SALTS_OK);
+    check_equal(cnet_packet_endpoint_stop(&udp_peer, COMPOSITION_TIMEOUT_MS), SALTS_OK);
+    check_equal(cnet_packet_endpoint_destroy(&udp_peer), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_destroy(generation, COMPOSITION_TIMEOUT_MS, &error),
                 SALTS_OK);
     generation = NULL;
