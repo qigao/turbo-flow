@@ -200,12 +200,17 @@ cmake_add_test(
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 
-cmake_add_test(
-  test_flow_rulesforge
-  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_rulesforge.c
-  LIBS TurboFlow::Graph Salts::TinyTest
-  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
-  FOLDER "turbo_flow/tests")
+if(TARGET tf_rulesforge_provider)
+  cmake_add_test(
+    test_flow_rulesforge_plugin
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_rulesforge_plugin.c
+    LIBS TurboFlow::PluginHost Salts::TinyTest
+    INCLUDES ${PROJECT_SOURCE_DIR}/plugins/rulesforge/include
+    FOLDER "turbo_flow/tests")
+  target_compile_definitions(test_flow_rulesforge_plugin PRIVATE
+    FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")
+  add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)
+endif()
 
 cmake_add_test(
   test_flow_security
