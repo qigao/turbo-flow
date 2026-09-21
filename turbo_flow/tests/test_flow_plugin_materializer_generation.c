@@ -164,8 +164,15 @@ spec("generation materializer preflight") {
   it("rejects a configured materializer with no typed-operation consumer") {
     materializer_generation_test_t t;
     char yaml[4096];
-    replace_once(yaml, sizeof(yaml), yaml_good, "    schema: cmeta.int.data\n",
-                 "    schema: fixture.unused.data\n");
+    {
+      char intermediate[4096];
+      replace_once(intermediate, sizeof(intermediate), yaml_good,
+                   "plugin: fixture.materializer.operation",
+                   "plugin: fixture.materializer.unused");
+      replace_once(yaml, sizeof(yaml), intermediate,
+                   "    schema: cmeta.int.data\n",
+                   "    schema: fixture.unused.data\n");
+    }
     check_equal(open_test(&t, FLOW_MATERIALIZER_UNUSED, yaml), SALTS_OK);
     check_equal(create_generation(&t), SALTS_EPROTO);
     check_equal(strcmp(t.error.path, "$.materializer_bindings[0].schema"), 0);
