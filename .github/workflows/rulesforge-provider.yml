@@ -190,6 +190,18 @@ jobs:
           cmake --build build/rulesforge-provider --target test_flow_rulesforge_plugin -j2
           ctest --test-dir build/rulesforge-provider -R '^test_flow_rulesforge_plugin$' --output-on-failure
 
+      - name: Install and load RulesForge provider from install tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          prefix="$RUNNER_TEMP/turboflow-rulesforge-install"
+          cmake --install build/rulesforge-provider --prefix "$prefix"
+          provider="$(find "$prefix" -type f \( -name 'libtf_rulesforge_provider.so' -o -name 'tf_rulesforge_provider.dll' \) | head -n1)"
+          test_bin="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_plugin*' -perm -111 | head -n1)"
+          test -n "$provider"
+          test -n "$test_bin"
+          FLOW_RULESFORGE_PLUGIN_PATH="$provider" "$test_bin"
+
       - name: Verify core unlink and canonical provider export
         shell: bash
         run: |
