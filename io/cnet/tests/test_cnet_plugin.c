@@ -111,6 +111,13 @@ typedef socklen_t cnet_plugin_test_socket_length_t;
   "      initial_demand: 8\n"                                                                      \
   "      stop_timeout_ms: 1000\n"
 
+#define CNET_CANONICAL_CONTENT_YAML                                                                \
+  "      content_encoding: json\n"                                                                \
+  "      content_media_type: \"application/json\"\n"                                           \
+  "      content_schema: \"rulesforge.Applicant.data\"\n"                                      \
+  "      content_type: \"Applicant\"\n"                                                        \
+  "      content_schema_version: 1\n"
+
 #define CNET_SINK_TAIL_YAML                                                                        \
   "      max_message_bytes: 1024\n"                                                                \
   "      actor_command_capacity: 8\n"                                                              \
@@ -128,7 +135,8 @@ static const char cnet_six_yaml[] =
         CNET_TLS_CLIENT_YAML CNET_SOURCE_TAIL_YAML "  listener.source:\n"
     "    kind: cnet.listener_source\n"
     "    config:\n"
-    "      schema_version: 1\n" CNET_CLIENT_YAML "      bind_host: \"127.0.0.1\"\n"
+    "      schema_version: 1\n" CNET_CANONICAL_CONTENT_YAML CNET_CLIENT_YAML
+    "      bind_host: \"127.0.0.1\"\n"
     "      bind_port: 0\n"
     "      backlog: 4\n"
     "      reuse_port: false\n" CNET_SOCKET_YAML "      tls_enabled: false\n"
@@ -445,6 +453,8 @@ spec("cnet_plugin") {
     size_t source_boundary_count = 0u;
     size_t sink_boundary_count = 0u;
     bool packet_sink_found = false;
+    bool canonical_listener_found = false;
+    size_t transport_source_count = 0u;
     for (size_t i = 0u;
          i < turbo_flow_managed_boundary_count(turbo_flow_plugin_generation_flow(generation));
          ++i) {
@@ -471,6 +481,21 @@ spec("cnet_plugin") {
         }
       }
       if ((descriptor.role_flags & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) == 0u) continue;
+      if (strcmp(descriptor.owner_name, "listener.source") == 0) {
+        canonical_listener_found = true;
+        check_equal(descriptor.output.domain, TURBO_FLOW_DOMAIN_DATA);
+        check_equal(descriptor.output.encoding, TURBO_FLOW_DATA_ENCODING_JSON);
+        check_equal(strcmp(descriptor.output.media_type, "application/json"), 0);
+        check_equal(strcmp(descriptor.output.schema_name, "rulesforge.Applicant.data"), 0);
+        check_equal(strcmp(descriptor.output.type_name, "Applicant"), 0);
+        check_equal(descriptor.output.schema_version, 1u);
+      } else {
+        ++transport_source_count;
+        check_equal(descriptor.output.domain, TURBO_FLOW_DOMAIN_IO_TRANSPORT);
+        check_equal(descriptor.output.encoding, TURBO_FLOW_DATA_ENCODING_OPAQUE);
+        check_equal(strcmp(descriptor.output.schema_name, "CNetPayload"), 0);
+        check_equal(strcmp(descriptor.output.type_name, "Bytes"), 0);
+      }
       check_equal(turbo_flow_managed_boundary_snapshot_at(
                       turbo_flow_plugin_generation_flow(generation), i, &boundary),
                   SALTS_OK);
@@ -480,6 +505,8 @@ spec("cnet_plugin") {
       ++source_boundary_count;
     }
     check_equal(source_boundary_count, 3u);
+    check_equal(transport_source_count, 2u);
+    check_true(canonical_listener_found);
     check_equal(sink_boundary_count, 3u);
     check_true(packet_sink_found);
     plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -496,6 +523,33 @@ spec("cnet_plugin") {
     }
     turbo_flow_resolved_config_destroy(resolved);
     plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
+  }
+
+  it("rejects partial canonical business content configuration") {
+    turbo_flow_plugin_host_t *host = cnet_plugin_test_host();
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
+        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    char invalid_yaml[32768];
+
+    check_equal(cnet_plugin_test_replace_once(
+                    cnet_six_yaml, "      content_type: \"Applicant\"\n", "",
+                    invalid_yaml, sizeof(invalid_yaml)),
+                SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error),
+                SALTS_OK);
+    check_equal(
+        turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
+        SALTS_OK);
+    check_equal(cnet_plugin_test_preflight(
+                    &catalog, 1u, invalid_yaml, "listener.source", &error),
+                SALTS_EINVAL);
+    check_contains(error.path, "listener.source");
+
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
   }
 

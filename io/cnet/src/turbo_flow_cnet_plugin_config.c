@@ -203,6 +203,10 @@ static const char *const packet_source_tail[] = {
     "queue_capacity",   "max_message_bytes", "scheduler_capacity", "scheduler_max_steps_per_poll",
     "first_message_id", "initial_demand",    "stop_timeout_ms"};
 
+static const char *const source_content_fields[] = {
+    "content_encoding", "content_media_type", "content_schema",
+    "content_type", "content_schema_version"};
+
 static const char *const packet_sink_tail[] = {"peer_host",
                                                "peer_port",
                                                "peer_scope_id",
@@ -238,18 +242,57 @@ static int field_in(const char *field, const char *const *fields, size_t count) 
   return 0;
 }
 
+static int field_present(const turbo_flow_resolved_adapter_view_t *view,
+                         const char *field) {
+  const size_t actual = turbo_flow_resolved_adapter_field_count(view);
+  for (size_t i = 0u; i < actual; ++i) {
+    const char *candidate = turbo_flow_resolved_adapter_field_name(view, i);
+    if (candidate && strcmp(candidate, field) == 0) return 1;
+  }
+  return 0;
+}
+
+static int exact_fields_optional(
+    const turbo_flow_resolved_adapter_view_t *view, const char *name,
+    const char *const *head, size_t head_count, const char *const *tail,
+    size_t tail_count, const char *const *optional, size_t optional_count,
+    turbo_flow_config_error_t *error) {
+  const size_t actual = turbo_flow_resolved_adapter_field_count(view);
+  size_t optional_seen = 0u;
+  for (size_t i = 0u; i < actual; ++i) {
+    const char *field = turbo_flow_resolved_adapter_field_name(view, i);
+    if (!field)
+      return config_error(error, SALTS_EINVAL, name, NULL,
+                          "CNet adapter config contains an invalid field");
+    if (field_in(field, optional, optional_count)) {
+      ++optional_seen;
+      continue;
+    }
+    if (!field_in(field, head, head_count) && !field_in(field, tail, tail_count))
+      return config_error(error, SALTS_EINVAL, name, field, "unknown CNet adapter config field");
+  }
+  for (size_t i = 0u; i < head_count; ++i)
+    if (!field_present(view, head[i]))
+      return config_error(error, SALTS_EINVAL, name, head[i],
+                          "CNet adapter config has a missing field");
+  for (size_t i = 0u; i < tail_count; ++i)
+    if (!field_present(view, tail[i]))
+      return config_error(error, SALTS_EINVAL, name, tail[i],
+                          "CNet adapter config has a missing field");
+  if (optional_seen != 0u && optional_seen != optional_count)
+    return config_error(error, SALTS_EINVAL, name, NULL,
+                        "CNet canonical content fields must be supplied as one complete group");
+  if (actual != head_count + tail_count + optional_seen)
+    return config_error(error, SALTS_EINVAL, name, NULL,
+                        "CNet adapter config has duplicate or missing fields");
+  return SALTS_OK;
+}
+
 static int exact_fields(const turbo_flow_resolved_adapter_view_t *view, const char *name,
                         const char *const *head, size_t head_count, const char *const *tail,
                         size_t tail_count, turbo_flow_config_error_t *error) {
-  const size_t actual = turbo_flow_resolved_adapter_field_count(view);
-  for (size_t i = 0u; i < actual; ++i) {
-    const char *field = turbo_flow_resolved_adapter_field_name(view, i);
-    if (!field || (!field_in(field, head, head_count) && !field_in(field, tail, tail_count)))
-      return config_error(error, SALTS_EINVAL, name, field, "unknown CNet adapter config field");
-  }
-  if (actual != head_count + tail_count)
-    return config_error(error, SALTS_EINVAL, name, NULL, "CNet adapter config has missing fields");
-  return SALTS_OK;
+  return exact_fields_optional(view, name, head, head_count, tail, tail_count,
+                               NULL, 0u, error);
 }
 
 static int get_u64(const turbo_flow_resolved_adapter_view_t *view, const char *name,
@@ -308,6 +351,74 @@ static int get_text(const turbo_flow_resolved_adapter_view_t *view, const char *
 }
 
 static const char *optional_text(char *text) { return text && text[0] ? text : NULL; }
+
+static int source_content_encoding(const char *value,
+                                   turbo_flow_data_encoding_t *encoding) {
+  if (!value || !encoding) return SALTS_EINVAL;
+  if (strcmp(value, "tbe") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_TBE;
+  else if (strcmp(value, "json") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_JSON;
+  else if (strcmp(value, "csv") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_CSV;
+  else if (strcmp(value, "xml") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_XML;
+  else if (strcmp(value, "utf8") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_UTF8;
+  else if (strcmp(value, "opaque") == 0) *encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+  else return SALTS_EINVAL;
+  return SALTS_OK;
+}
+
+static int build_content_descriptor(
+    const turbo_flow_resolved_adapter_view_t *view, const char *name, int source,
+    turbo_flow_cnet_plugin_config_t *config, turbo_flow_config_error_t *error) {
+  char encoding_name[16];
+  char media_type[TURBO_FLOW_CONTENT_MEDIA_TYPE_MAX + 1u];
+  char schema_name[TURBO_FLOW_CONTENT_SCHEMA_NAME_MAX + 1u];
+  char type_name[TURBO_FLOW_CONTENT_TYPE_NAME_MAX + 1u];
+  turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+  uint32_t schema_version = 0u;
+  int rc;
+
+  if (!source || !field_present(view, "content_encoding")) {
+    rc = turbo_flow_content_descriptor_init(
+        &config->content, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+        TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+        "application/octet-stream", "cnet.payload");
+    if (rc == SALTS_OK)
+      rc = turbo_flow_content_descriptor_declare_schema(
+          &config->content, "CNetPayload", "Bytes", 1u);
+    return rc == SALTS_OK
+               ? SALTS_OK
+               : config_error(error, rc, name, NULL,
+                              "failed to build CNet transport content descriptor");
+  }
+
+  rc = get_text(view, name, "content_encoding", encoding_name,
+                sizeof(encoding_name), 0, error);
+  if (rc == SALTS_OK) rc = source_content_encoding(encoding_name, &encoding);
+  if (rc != SALTS_OK)
+    return config_error(error, rc, name, "content_encoding",
+                        "content encoding must be tbe, json, csv, xml, utf8, or opaque");
+  rc = get_text(view, name, "content_media_type", media_type,
+                sizeof(media_type), 0, error);
+  if (rc == SALTS_OK)
+    rc = get_text(view, name, "content_schema", schema_name,
+                  sizeof(schema_name), 0, error);
+  if (rc == SALTS_OK)
+    rc = get_text(view, name, "content_type", type_name,
+                  sizeof(type_name), 0, error);
+  if (rc == SALTS_OK)
+    rc = get_u32(view, name, "content_schema_version", 0, &schema_version, error);
+  if (rc != SALTS_OK) return rc;
+
+  rc = turbo_flow_content_descriptor_init(
+      &config->content, TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
+      encoding, media_type, "cnet.business");
+  if (rc == SALTS_OK)
+    rc = turbo_flow_content_descriptor_declare_schema(
+        &config->content, schema_name, type_name, schema_version);
+  return rc == SALTS_OK
+             ? SALTS_OK
+             : config_error(error, rc, name, NULL,
+                            "failed to build canonical CNet business content descriptor");
+}
 
 static int get_backend(const turbo_flow_resolved_adapter_view_t *view, const char *name,
                        native_io_backend_kind *backend, turbo_flow_config_error_t *error) {
@@ -670,7 +781,11 @@ static int read_stream(const turbo_flow_resolved_adapter_view_t *view, const cha
                        turbo_flow_config_error_t *error) {
   const char *const *fields = source ? stream_source_fields : stream_sink_fields;
   const size_t count = source ? ARRAY_COUNT(stream_source_fields) : ARRAY_COUNT(stream_sink_fields);
-  int rc = exact_fields(view, name, fields, count, NULL, 0u, error);
+  int rc = source
+               ? exact_fields_optional(view, name, fields, count, NULL, 0u,
+                                       source_content_fields,
+                                       ARRAY_COUNT(source_content_fields), error)
+               : exact_fields(view, name, fields, count, NULL, 0u, error);
   if (rc == SALTS_OK) rc = read_client(view, name, config, error);
   if (rc == SALTS_OK) rc = get_text(view, name, "uri", config->uri, sizeof(config->uri), 0, error);
   if (rc == SALTS_OK) {
@@ -697,8 +812,9 @@ static int read_listener(const turbo_flow_resolved_adapter_view_t *view, const c
                          turbo_flow_config_error_t *error) {
   size_t alpn_count = 0u;
   char auth[32];
-  int rc = exact_fields(view, name, listener_source_fields, ARRAY_COUNT(listener_source_fields),
-                        NULL, 0u, error);
+  int rc = exact_fields_optional(
+      view, name, listener_source_fields, ARRAY_COUNT(listener_source_fields),
+      NULL, 0u, source_content_fields, ARRAY_COUNT(source_content_fields), error);
   if (rc == SALTS_OK) rc = read_client(view, name, config, error);
   if (rc == SALTS_OK)
     rc = get_text(view, name, "bind_host", config->bind_host, sizeof(config->bind_host), 0, error);
@@ -847,8 +963,13 @@ static int read_packet(const turbo_flow_resolved_adapter_view_t *view, const cha
   char psk[CNET_KCP_PSK_BYTES * 2u + 1u];
   uint64_t raw = 0u;
   int boolean_value = 0;
-  int rc = exact_fields(view, name, packet_common_fields, ARRAY_COUNT(packet_common_fields), tail,
-                        tail_count, error);
+  int rc = source
+               ? exact_fields_optional(
+                     view, name, packet_common_fields, ARRAY_COUNT(packet_common_fields),
+                     tail, tail_count, source_content_fields,
+                     ARRAY_COUNT(source_content_fields), error)
+               : exact_fields(view, name, packet_common_fields,
+                              ARRAY_COUNT(packet_common_fields), tail, tail_count, error);
   if (rc == SALTS_OK) rc = read_datagram(view, name, config, error);
   config->endpoint = (cnet_packet_endpoint_config)CNET_PACKET_ENDPOINT_CONFIG_INIT;
   config->endpoint.datagram = config->datagram;
@@ -1051,15 +1172,8 @@ int turbo_flow_cnet_plugin_config_read(const turbo_flow_resolved_config_t *resol
     rc = SALTS_EINVAL;
     break;
   }
-  if (rc == SALTS_OK) {
-    rc = turbo_flow_content_descriptor_init(
-        &config->content, TURBO_FLOW_DOMAIN_IO_TRANSPORT, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
-        TURBO_FLOW_DATA_ENCODING_OPAQUE, "application/octet-stream", "cnet.payload");
-    if (rc == SALTS_OK)
-      rc = turbo_flow_content_descriptor_declare_schema(&config->content, "CNetPayload", "Bytes",
-                                                        1u);
-    if (rc != SALTS_OK)
-      rc = config_error(error, rc, name, NULL, "failed to build CNet content descriptor");
-  }
+  if (rc == SALTS_OK)
+    rc = build_content_descriptor(
+        &view, name, kind <= TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE, config, error);
   return rc;
 }
