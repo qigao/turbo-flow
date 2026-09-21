@@ -226,7 +226,9 @@ static int context_release(void *ctx) {
 static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   if (!out) return SALTS_EINVAL;
   *out = NULL;
-  if (!host || host->size != sizeof(*host) || host->abi_major != 3u || host->abi_minor != 0u)
+  if (!host || host->size != sizeof(*host) ||
+      host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
     return SALTS_EINVAL;
   operation_fixture_t *f = calloc(1, sizeof(*f));
   if (!f) return SALTS_ENOMEM;
