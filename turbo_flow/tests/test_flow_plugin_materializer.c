@@ -40,9 +40,9 @@ spec("plugin materializer catalog") {
     check_equal(turbo_flow_plugin_catalog_snapshot_materializer_catalog(snapshot, &catalog),
                 SALTS_OK);
     check_equal(catalog.count, (size_t)1);
-    check_equal(catalog.entries[0].plugin_id, "fixture.materializer.good");
-    check_equal(catalog.entries[0].materializer.schema.schema_name,
-                "fixture.materializer.int");
+    check_equal(strcmp(catalog.entries[0].plugin_id, "fixture.materializer.good"), 0);
+    check_equal(strcmp(catalog.entries[0].materializer.schema.schema_name,
+                       "fixture.materializer.int"), 0);
     check_equal(catalog.entries[0].materializer.schema.schema_version, 1u);
     check_equal(catalog.entries[0].materializer.schema.encoding,
                 TURBO_FLOW_DATA_ENCODING_OPAQUE);
