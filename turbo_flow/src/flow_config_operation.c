@@ -210,6 +210,171 @@ int flow_config_validate_operation_bindings(const json_value_t *bindings,
   return SALTS_OK;
 }
 
+
+static const char *const flow_materializer_keys[] = {
+    "operation", "resource", "plugin", "schema", "schema_version", "encoding", "max_encoded_bytes"};
+
+static void flow_materializer_path(char *path, size_t capacity, size_t index, const char *field) {
+  (void)snprintf(path, capacity, "$.materializer_bindings[%zu]%s%s", index,
+                 field ? "." : "", field ? field : "");
+}
+
+static int flow_materializer_identifier(const json_value_t *value, size_t index,
+                                        const char *field, const char **result,
+                                        turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  const char *text;
+  size_t length;
+  flow_materializer_path(path, sizeof(path), index, field);
+  if (!value || json_type(value) != JSON_STRING)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected identifier string");
+  text = json_string(value);
+  length = json_string_len(value);
+  if (!text || length == 0u || length > TURBO_FLOW_CONFIG_OPERATION_ID_MAX ||
+      strlen(text) != length)
+    return flow_config_error(error, SALTS_EINVAL, path, "invalid identifier length");
+  for (size_t i = 0u; i < length; ++i) {
+    const unsigned char ch = (unsigned char)text[i];
+    if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+          (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-'))
+      return flow_config_error(error, SALTS_EINVAL, path, "invalid identifier byte");
+  }
+  if (result) *result = text;
+  return SALTS_OK;
+}
+
+static int flow_materializer_integer(const json_value_t *value, size_t index,
+                                     const char *field, uint64_t minimum, uint64_t maximum,
+                                     uint64_t *result, turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  double number;
+  uint64_t converted;
+  flow_materializer_path(path, sizeof(path), index, field);
+  if (!value || json_type(value) != JSON_NUMBER)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  number = json_number(value);
+  if (!isfinite(number) || number < (double)minimum || number > (double)maximum)
+    return flow_config_error(error, SALTS_EINVAL, path, "integer is outside the supported range");
+  converted = (uint64_t)number;
+  if ((double)converted != number)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  if (result) *result = converted;
+  return SALTS_OK;
+}
+
+static int flow_materializer_encoding(const json_value_t *value, size_t index,
+                                      turbo_flow_config_error_t *error) {
+  static const char *const encodings[] = {"tbe", "json", "csv", "xml", "utf8", "opaque"};
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  const char *text;
+  flow_materializer_path(path, sizeof(path), index, "encoding");
+  if (!value || json_type(value) != JSON_STRING)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected encoding string");
+  text = json_string(value);
+  for (size_t i = 0u; i < sizeof(encodings) / sizeof(encodings[0]); ++i)
+    if (json_string_len(value) == strlen(encodings[i]) &&
+        memcmp(text, encodings[i], json_string_len(value)) == 0)
+      return SALTS_OK;
+  return flow_config_error(error, SALTS_EINVAL, path, "unsupported materializer encoding");
+}
+
+static int flow_materializer_target(const json_value_t *operations, const char *operation,
+                                    const char *resource, const char *schema,
+                                    uint32_t schema_version, size_t index,
+                                    turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  if (!operations || json_type(operations) != JSON_ARRAY) {
+    flow_materializer_path(path, sizeof(path), index, "operation");
+    return flow_config_error(error, SALTS_ENOENT, path,
+                             "materializer target operation binding does not exist");
+  }
+  for (size_t i = 0u; i < json_array_size(operations); ++i) {
+    json_value_t *binding = json_array_get(operations, i);
+    json_value_t *resource_value = binding ? json_object_get(binding, "resource") : NULL;
+    const char *candidate = binding ? json_string(json_object_get(binding, "operation")) : NULL;
+    const char *candidate_resource = resource_value ? json_string(resource_value) : NULL;
+    if (!candidate || strcmp(candidate, operation) != 0) continue;
+    if ((resource == NULL) != (candidate_resource == NULL)) continue;
+    if (resource && strcmp(resource, candidate_resource) != 0) continue;
+    if (strcmp(json_string(json_object_get(binding, "input_schema")), schema) != 0 ||
+        (uint32_t)json_number(json_object_get(binding, "input_schema_version")) != schema_version) {
+      flow_materializer_path(path, sizeof(path), index, "schema");
+      return flow_config_error(error, SALTS_EPROTO, path,
+                               "materializer schema does not match operation input");
+    }
+    return SALTS_OK;
+  }
+  flow_materializer_path(path, sizeof(path), index, "operation");
+  return flow_config_error(error, SALTS_ENOENT, path,
+                           "materializer target operation binding does not exist");
+}
+
+int flow_config_validate_materializer_bindings(const json_value_t *bindings,
+                                                const json_value_t *operation_bindings,
+                                                turbo_flow_config_error_t *error) {
+  if (!bindings) return SALTS_OK;
+  if (json_type(bindings) != JSON_ARRAY)
+    return flow_config_error(error, SALTS_EINVAL, "$.materializer_bindings", "expected array");
+  if (json_array_size(bindings) > TURBO_FLOW_CONFIG_MATERIALIZER_MAX_BINDINGS)
+    return flow_config_error(error, SALTS_ENOSPC, "$.materializer_bindings",
+                             "too many materializer bindings");
+  for (size_t i = 0u; i < json_array_size(bindings); ++i) {
+    json_value_t *binding = json_array_get(bindings, i);
+    json_value_t *resource_value;
+    const char *operation = NULL, *resource = NULL, *plugin = NULL, *schema = NULL;
+    uint64_t schema_version = 0u;
+    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    int rc;
+    flow_materializer_path(path, sizeof(path), i, NULL);
+    rc = flow_config_object_keys(binding, path, flow_materializer_keys,
+                                 sizeof(flow_materializer_keys) / sizeof(flow_materializer_keys[0]),
+                                 error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_identifier(json_object_get(binding, "operation"), i, "operation",
+                                      &operation, error);
+    if (rc != SALTS_OK) return rc;
+    resource_value = json_object_get(binding, "resource");
+    if (resource_value) {
+      rc = flow_materializer_identifier(resource_value, i, "resource", &resource, error);
+      if (rc != SALTS_OK) return rc;
+    }
+    rc = flow_materializer_identifier(json_object_get(binding, "plugin"), i, "plugin", &plugin,
+                                      error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_identifier(json_object_get(binding, "schema"), i, "schema", &schema,
+                                      error);
+    if (rc != SALTS_OK) return rc;
+    (void)plugin;
+    rc = flow_materializer_integer(json_object_get(binding, "schema_version"), i,
+                                   "schema_version", 1u, UINT32_MAX, &schema_version, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_encoding(json_object_get(binding, "encoding"), i, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_integer(json_object_get(binding, "max_encoded_bytes"), i,
+                                   "max_encoded_bytes", 1u,
+                                   TURBO_FLOW_CONFIG_MATERIALIZER_MAX_ENCODED_BYTES, NULL, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_target(operation_bindings, operation, resource, schema,
+                                  (uint32_t)schema_version, i, error);
+    if (rc != SALTS_OK) return rc;
+    for (size_t prior = 0u; prior < i; ++prior) {
+      json_value_t *other = json_array_get(bindings, prior);
+      json_value_t *other_resource_value = json_object_get(other, "resource");
+      const char *other_operation = json_string(json_object_get(other, "operation"));
+      const char *other_resource =
+          other_resource_value ? json_string(other_resource_value) : NULL;
+      if (strcmp(operation, other_operation) == 0 &&
+          ((!resource && !other_resource) ||
+           (resource && other_resource && strcmp(resource, other_resource) == 0))) {
+        flow_materializer_path(path, sizeof(path), i, "operation");
+        return flow_config_error(error, SALTS_EALREADY, path,
+                                 "duplicate materializer operation/resource binding");
+      }
+    }
+  }
+  return SALTS_OK;
+}
+
 static json_value_t *flow_operation_bindings(const turbo_flow_resolved_config_t *config) {
   json_value_t *bindings;
   if (!config || !config->document || json_type(config->document) != JSON_OBJECT) return NULL;
@@ -292,5 +457,48 @@ int turbo_flow_resolved_config_operation_binding_permission_at(
   permissions = json_object_get(binding, "permissions");
   if (permission_index >= json_array_size(permissions)) return SALTS_ENOENT;
   *permission = json_string(json_array_get(permissions, permission_index));
+  return SALTS_OK;
+}
+
+static json_value_t *flow_materializer_bindings(const turbo_flow_resolved_config_t *config) {
+  json_value_t *bindings;
+  if (!config || !config->document || json_type(config->document) != JSON_OBJECT) return NULL;
+  bindings = json_object_get(config->document, "materializer_bindings");
+  return bindings && json_type(bindings) == JSON_ARRAY ? bindings : NULL;
+}
+
+int turbo_flow_resolved_config_materializer_binding_count(
+    const turbo_flow_resolved_config_t *config, size_t *count) {
+  json_value_t *bindings;
+  if (count) *count = 0u;
+  if (!config || !count) return SALTS_EINVAL;
+  bindings = flow_materializer_bindings(config);
+  if (!bindings) return SALTS_OK;
+  *count = json_array_size(bindings);
+  return SALTS_OK;
+}
+
+int turbo_flow_resolved_config_materializer_binding_at(
+    const turbo_flow_resolved_config_t *config, size_t index,
+    turbo_flow_resolved_materializer_binding_view_t *view) {
+  json_value_t *bindings, *binding, *resource;
+  size_t size;
+  if (!view || view->size < sizeof(*view)) return SALTS_EINVAL;
+  size = view->size;
+  memset(view, 0, sizeof(*view));
+  view->size = size;
+  if (!config) return SALTS_EINVAL;
+  bindings = flow_materializer_bindings(config);
+  if (!bindings || index >= json_array_size(bindings)) return SALTS_ENOENT;
+  binding = json_array_get(bindings, index);
+  resource = json_object_get(binding, "resource");
+  view->operation = json_string(json_object_get(binding, "operation"));
+  view->resource = resource ? json_string(resource) : NULL;
+  view->plugin = json_string(json_object_get(binding, "plugin"));
+  view->schema = json_string(json_object_get(binding, "schema"));
+  view->schema_version = (uint32_t)json_number(json_object_get(binding, "schema_version"));
+  view->encoding = json_string(json_object_get(binding, "encoding"));
+  view->max_encoded_bytes =
+      (size_t)json_number(json_object_get(binding, "max_encoded_bytes"));
   return SALTS_OK;
 }
