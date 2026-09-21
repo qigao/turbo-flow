@@ -301,6 +301,34 @@ static int flow_plugin_generation_materializer_error(
   return flow_plugin_generation_error(error, status, path, message);
 }
 
+static int flow_plugin_generation_materializer_encoding(
+    turbo_flow_config_materializer_encoding_t configured,
+    turbo_flow_data_encoding_t *out) {
+  if (!out) return SALTS_EINVAL;
+  switch (configured) {
+  case TURBO_FLOW_CONFIG_MATERIALIZER_TBE:
+    *out = TURBO_FLOW_DATA_ENCODING_TBE;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_JSON:
+    *out = TURBO_FLOW_DATA_ENCODING_JSON;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_CSV:
+    *out = TURBO_FLOW_DATA_ENCODING_CSV;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_XML:
+    *out = TURBO_FLOW_DATA_ENCODING_XML;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_UTF8:
+    *out = TURBO_FLOW_DATA_ENCODING_UTF8;
+    return SALTS_OK;
+  case TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE:
+    *out = TURBO_FLOW_DATA_ENCODING_OPAQUE;
+    return SALTS_OK;
+  default:
+    return SALTS_EINVAL;
+  }
+}
+
 static int flow_plugin_generation_prepare_materializers(
     turbo_flow_plugin_catalog_snapshot_t *snapshot,
     const turbo_flow_resolved_config_t *resolved,
@@ -335,11 +363,16 @@ static int flow_plugin_generation_prepare_materializers(
         TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
     const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
     flow_plugin_generation_materializer_binding_t compiled;
+    turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
     size_t operation_index = SIZE_MAX;
     rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
           error, rc, i, NULL, "materializer binding projection failed");
+    rc = flow_plugin_generation_materializer_encoding(wanted.encoding, &encoding);
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, i, "encoding", "materializer encoding is invalid");
 
     for (size_t j = 0u; j < catalog.count; ++j) {
       const turbo_flow_plugin_materializer_catalog_entry_v1_t *entry = &catalog.entries[j];
@@ -347,8 +380,7 @@ static int flow_plugin_generation_prepare_materializers(
         continue;
       if (strcmp(entry->materializer.schema.schema_name, wanted.schema) != 0 ||
           entry->materializer.schema.schema_version != wanted.schema_version ||
-          entry->materializer.schema.encoding !=
-              (turbo_flow_data_encoding_t)wanted.encoding)
+          entry->materializer.schema.encoding != encoding)
         continue;
       selected = entry;
       break;
@@ -366,8 +398,7 @@ static int flow_plugin_generation_prepare_materializers(
         continue;
       if (strcmp(operation->operation.input.data->stable_id, wanted.schema) != 0 ||
           operation->operation.input.schema_version != wanted.schema_version ||
-          operation->operation.input.projection->encoding !=
-              (turbo_flow_data_encoding_t)wanted.encoding)
+          operation->operation.input.projection->encoding != encoding)
         continue;
       rc = turbo_flow_data_schema_match(
           &selected->materializer.schema, selected->materializer.data,
