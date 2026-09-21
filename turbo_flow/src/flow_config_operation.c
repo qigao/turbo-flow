@@ -294,3 +294,178 @@ int turbo_flow_resolved_config_operation_binding_permission_at(
   *permission = json_string(json_array_get(permissions, permission_index));
   return SALTS_OK;
 }
+
+
+static const char *const flow_materializer_keys[] = {
+    "plugin", "schema", "schema_version", "encoding"};
+
+static void flow_materializer_path(char *path, size_t capacity, size_t index,
+                                   const char *field) {
+  (void)snprintf(path, capacity, "$.materializer_bindings[%zu]%s%s", index,
+                 field ? "." : "", field ? field : "");
+}
+
+static int flow_materializer_identifier(const json_value_t *value, size_t index,
+                                        const char *field, const char **result,
+                                        turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  const char *text;
+  size_t length;
+  flow_materializer_path(path, sizeof(path), index, field);
+  if (!value || json_type(value) != JSON_STRING)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected identifier string");
+  text = json_string(value);
+  length = json_string_len(value);
+  if (!text || length == 0u || length > TURBO_FLOW_CONFIG_OPERATION_ID_MAX ||
+      strlen(text) != length)
+    return flow_config_error(error, SALTS_EINVAL, path, "invalid identifier length");
+  for (size_t i = 0u; i < length; ++i) {
+    const unsigned char ch = (unsigned char)text[i];
+    if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+          (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-'))
+      return flow_config_error(error, SALTS_EINVAL, path, "invalid identifier byte");
+  }
+  if (result) *result = text;
+  return SALTS_OK;
+}
+
+static int flow_materializer_schema_version(const json_value_t *value, size_t index,
+                                            uint32_t *out,
+                                            turbo_flow_config_error_t *error) {
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  double number;
+  uint64_t converted;
+  flow_materializer_path(path, sizeof(path), index, "schema_version");
+  if (!value || json_type(value) != JSON_NUMBER)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  number = json_number(value);
+  if (!isfinite(number) || number < 1.0 || number > (double)UINT32_MAX)
+    return flow_config_error(error, SALTS_EINVAL, path,
+                             "integer is outside the supported range");
+  converted = (uint64_t)number;
+  if ((double)converted != number)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected integer");
+  if (out) *out = (uint32_t)converted;
+  return SALTS_OK;
+}
+
+static int flow_materializer_encoding_value(
+    const json_value_t *value, size_t index,
+    turbo_flow_config_materializer_encoding_t *out,
+    turbo_flow_config_error_t *error) {
+  static const char *const names[] = {"tbe", "json", "csv", "xml", "utf8", "opaque"};
+  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  const char *text;
+  flow_materializer_path(path, sizeof(path), index, "encoding");
+  if (!value || json_type(value) != JSON_STRING)
+    return flow_config_error(error, SALTS_EINVAL, path, "expected encoding string");
+  text = json_string(value);
+  for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
+    if (json_string_len(value) == strlen(names[i]) &&
+        memcmp(text, names[i], json_string_len(value)) == 0) {
+      if (out) *out = (turbo_flow_config_materializer_encoding_t)i;
+      return SALTS_OK;
+    }
+  }
+  return flow_config_error(error, SALTS_EINVAL, path, "unsupported encoding");
+}
+
+int flow_config_validate_materializer_bindings(const json_value_t *bindings,
+                                               turbo_flow_config_error_t *error) {
+  if (!bindings) return SALTS_OK;
+  if (json_type(bindings) != JSON_ARRAY)
+    return flow_config_error(error, SALTS_EINVAL, "$.materializer_bindings",
+                             "expected array");
+  if (json_array_size(bindings) > TURBO_FLOW_CONFIG_MATERIALIZER_MAX_BINDINGS)
+    return flow_config_error(error, SALTS_ENOSPC, "$.materializer_bindings",
+                             "too many bindings");
+  for (size_t i = 0u; i < json_array_size(bindings); ++i) {
+    json_value_t *binding = json_array_get(bindings, i);
+    const char *plugin = NULL, *schema = NULL;
+    turbo_flow_config_materializer_encoding_t encoding;
+    uint32_t schema_version = 0u;
+    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    int rc;
+    flow_materializer_path(path, sizeof(path), i, NULL);
+    rc = flow_config_object_keys(binding, path, flow_materializer_keys,
+                                 sizeof(flow_materializer_keys) /
+                                     sizeof(flow_materializer_keys[0]),
+                                 error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_identifier(json_object_get(binding, "plugin"), i, "plugin",
+                                      &plugin, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_identifier(json_object_get(binding, "schema"), i, "schema",
+                                      &schema, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_schema_version(json_object_get(binding, "schema_version"), i,
+                                          &schema_version, error);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_materializer_encoding_value(json_object_get(binding, "encoding"), i,
+                                          &encoding, error);
+    if (rc != SALTS_OK) return rc;
+    (void)plugin;
+    for (size_t prior = 0u; prior < i; ++prior) {
+      json_value_t *other = json_array_get(bindings, prior);
+      const char *other_schema = json_string(json_object_get(other, "schema"));
+      const uint32_t other_version =
+          (uint32_t)json_number(json_object_get(other, "schema_version"));
+      turbo_flow_config_materializer_encoding_t other_encoding;
+      rc = flow_materializer_encoding_value(json_object_get(other, "encoding"), prior,
+                                            &other_encoding, error);
+      if (rc != SALTS_OK) return rc;
+      if (strcmp(schema, other_schema) == 0 && schema_version == other_version &&
+          encoding == other_encoding) {
+        flow_materializer_path(path, sizeof(path), i, "schema");
+        return flow_config_error(error, SALTS_EALREADY, path,
+                                 "duplicate materializer schema binding");
+      }
+    }
+  }
+  return SALTS_OK;
+}
+
+static json_value_t *flow_materializer_bindings(
+    const turbo_flow_resolved_config_t *config) {
+  json_value_t *bindings;
+  if (!config || !config->document || json_type(config->document) != JSON_OBJECT) return NULL;
+  bindings = json_object_get(config->document, "materializer_bindings");
+  return bindings && json_type(bindings) == JSON_ARRAY ? bindings : NULL;
+}
+
+int turbo_flow_resolved_config_materializer_binding_count(
+    const turbo_flow_resolved_config_t *config, size_t *count) {
+  json_value_t *bindings;
+  if (count) *count = 0u;
+  if (!config || !count) return SALTS_EINVAL;
+  bindings = flow_materializer_bindings(config);
+  if (!bindings) return SALTS_OK;
+  *count = json_array_size(bindings);
+  return SALTS_OK;
+}
+
+int turbo_flow_resolved_config_materializer_binding_at(
+    const turbo_flow_resolved_config_t *config, size_t index,
+    turbo_flow_resolved_materializer_binding_view_t *view) {
+  size_t size;
+  json_value_t *bindings, *binding;
+  turbo_flow_config_materializer_encoding_t encoding;
+  int rc;
+  if (!view || view->size < sizeof(*view)) return SALTS_EINVAL;
+  size = view->size;
+  memset(view, 0, sizeof(*view));
+  view->size = size;
+  if (!config) return SALTS_EINVAL;
+  bindings = flow_materializer_bindings(config);
+  if (!bindings || index >= json_array_size(bindings)) return SALTS_ENOENT;
+  binding = json_array_get(bindings, index);
+  rc = flow_materializer_encoding_value(json_object_get(binding, "encoding"), index,
+                                        &encoding, NULL);
+  if (rc != SALTS_OK) return rc;
+  view->plugin = json_string(json_object_get(binding, "plugin"));
+  view->schema = json_string(json_object_get(binding, "schema"));
+  view->schema_version =
+      (uint32_t)json_number(json_object_get(binding, "schema_version"));
+  view->encoding = encoding;
+  return SALTS_OK;
+}
