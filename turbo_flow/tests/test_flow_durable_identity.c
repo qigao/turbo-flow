@@ -133,7 +133,7 @@ spec("Graph durable message identity") {
     identity.size = sizeof(identity) - 1u;
     check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_EINVAL);
     identity = make_identity(source, admission, NULL, UINT64_C(1));
-    identity.version = TURBO_FLOW_DURABLE_BUFFER_API_VERSION + 1u;
+    identity.version = TURBO_FLOW_DURABLE_IDENTITY_API_VERSION + 1u;
     check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_EINVAL);
 
     check_equal(turbo_flow_msg_set_durable_identity(NULL, &identity), SALTS_EINVAL);

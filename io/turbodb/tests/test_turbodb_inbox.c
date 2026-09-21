@@ -39,7 +39,7 @@ static void inbox_complete_worker(void *arg) {
 }
 
 static const char INBOX_META_DDL[] =
-    "CREATE TABLE orders_inbox_meta_v2 ("
+    "CREATE TABLE orders_inbox_meta_v3 ("
     "singleton_id integer primary key not null, schema_magic text not null, "
     "schema_version integer not null, generation bigint not null, owner_state integer not null, "
     "next_record_id bigint not null, next_claim_token bigint not null, max_records bigint not "
@@ -51,12 +51,13 @@ static const char INBOX_META_DDL[] =
     "discarded bigint not null)";
 
 static const char INBOX_RECORDS_DDL[] =
-    "CREATE TABLE orders_inbox_records_v2 ("
+    "CREATE TABLE orders_inbox_records_v3 ("
     "record_id bigint primary key not null, phase integer not null, claim_generation bigint not "
     "null, "
     "claim_token bigint not null, failure_status integer not null, failure_kind integer not null, "
     "terminal_kind integer not null, envelope_schema text not null, envelope_schema_version "
-    "integer not null, source_id bytea not null, admission_id bytea not null, source_sequence_be "
+    "integer not null, source_id bytea not null, partition_key bytea not null, "
+    "admission_id bytea not null, source_sequence_be "
     "bytea not null, timestamp_ns_be bytea not null, message_type bigint not null, message_flags "
     "bigint not null, content_domain integer not null, content_profile integer not null, "
     "content_encoding integer not null, content_flags bigint not null, content_schema_version "
@@ -65,11 +66,12 @@ static const char INBOX_RECORDS_DDL[] =
     "payload bytea not null, retained_bytes bigint not null)";
 
 static const char INBOX_RECORDS_NULLABLE_PRIMARY_KEY_DDL[] =
-    "CREATE TABLE orders_inbox_records_v2 ("
+    "CREATE TABLE orders_inbox_records_v3 ("
     "record_id bigint primary key, phase integer not null, claim_generation bigint not null, "
     "claim_token bigint not null, failure_status integer not null, failure_kind integer not null, "
     "terminal_kind integer not null, envelope_schema text not null, envelope_schema_version "
-    "integer not null, source_id bytea not null, admission_id bytea not null, source_sequence_be "
+    "integer not null, source_id bytea not null, partition_key bytea not null, "
+    "admission_id bytea not null, source_sequence_be "
     "bytea not null, timestamp_ns_be bytea not null, message_type bigint not null, message_flags "
     "bigint not null, content_domain integer not null, content_profile integer not null, "
     "content_encoding integer not null, content_flags bigint not null, content_schema_version "
@@ -78,20 +80,20 @@ static const char INBOX_RECORDS_NULLABLE_PRIMARY_KEY_DDL[] =
     "payload bytea not null, retained_bytes bigint not null)";
 
 static const char INBOX_DEDUPE_INDEX_DDL[] =
-    "CREATE UNIQUE INDEX orders_inbox_records_v2_admission ON "
-    "orders_inbox_records_v2(source_id, admission_id)";
+    "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
+    "orders_inbox_records_v3(source_id, admission_id)";
 
 static const char INBOX_PHASE_INDEX_DDL[] =
-    "CREATE INDEX orders_inbox_records_v2_phase ON orders_inbox_records_v2(phase, record_id)";
+    "CREATE INDEX orders_inbox_records_v3_phase ON orders_inbox_records_v3(phase, record_id)";
 
-static const char INBOX_META_V2_ROW[] =
-    "INSERT INTO orders_inbox_meta_v2 VALUES "
-    "(1, 'turbo-flow.turbodb.inbox', 2, 0, 0, 1, 1, 4, 256, 128, 2, "
+static const char INBOX_META_V3_ROW[] =
+    "INSERT INTO orders_inbox_meta_v3 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 3, 0, 0, 1, 1, 4, 256, 128, 2, "
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 static const char INBOX_META_OLD_ROW[] =
-    "INSERT INTO orders_inbox_meta_v2 VALUES "
-    "(1, 'turbo-flow.turbodb.inbox', 1, 0, 0, 1, 1, 4, 256, 128, 2, "
+    "INSERT INTO orders_inbox_meta_v3 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 2, 0, 0, 1, 1, 4, 256, 128, 2, "
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 static void inbox_db_fixture_init(inbox_db_fixture_t *fixture) {
@@ -172,7 +174,7 @@ static void inbox_db_provision_with_records_ddl(inbox_db_fixture_t *fixture, int
   inbox_db_execute(connection, records_ddl, &error);
   inbox_db_execute(connection, INBOX_DEDUPE_INDEX_DDL, &error);
   inbox_db_execute(connection, INBOX_PHASE_INDEX_DDL, &error);
-  inbox_db_execute(connection, old_schema ? INBOX_META_OLD_ROW : INBOX_META_V2_ROW, &error);
+  inbox_db_execute(connection, old_schema ? INBOX_META_OLD_ROW : INBOX_META_V3_ROW, &error);
   orm_disconnect(connection);
 }
 
@@ -199,6 +201,7 @@ static turbo_flow_inbox_record_t inbox_test_record(const char *source_id, const 
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf(source_id, strlen(source_id));
+  record.partition_key = record.source_id;
   record.admission_id = vstr_from_buf(admission_id, strlen(admission_id));
   record.source_sequence = source_sequence;
   record.timestamp_ns = timestamp_ns;
@@ -224,6 +227,7 @@ static void check_view(vstr actual, vstr expected) {
 static void check_claim_matches(const turbo_flow_inbox_claim_t *claim,
                                 const turbo_flow_inbox_record_t *record) {
   check_view(claim->record.source_id, record->source_id);
+  check_view(claim->record.partition_key, record->partition_key);
   check_view(claim->record.admission_id, record->admission_id);
   check_equal(claim->record.source_sequence, record->source_sequence);
   check_equal(claim->record.timestamp_ns, record->timestamp_ns);
@@ -265,8 +269,8 @@ static void inbox_test_close_created(turbo_flow_inbox_t *inbox, int create_statu
   check_equal(turbo_flow_inbox_destroy(inbox), SALTS_OK);
 }
 
-spec("TurboDB durable inbox v2") {
-  it("provides v2 defaults and rejects non-file-backed SQLite or other drivers") {
+spec("TurboDB durable inbox v3") {
+  it("provides v3 defaults and rejects non-file-backed SQLite or other drivers") {
     turbo_flow_turbodb_inbox_config_t config = turbo_flow_turbodb_inbox_config_default();
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     orm_config_t database;
@@ -320,12 +324,12 @@ spec("TurboDB durable inbox v2") {
     inbox_db_provision(&fixture, 0);
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "DROP INDEX orders_inbox_records_v2_admission", &error);
+    inbox_db_execute(connection, "DROP INDEX orders_inbox_records_v3_admission", &error);
     inbox_db_execute(connection,
                      "CREATE TABLE decoy (source_id bytea not null, admission_id bytea not null)",
                      &error);
     inbox_db_execute(connection,
-                     "CREATE UNIQUE INDEX orders_inbox_records_v2_admission ON "
+                     "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
                      "decoy(source_id, admission_id)",
                      &error);
     orm_disconnect(connection);
@@ -348,10 +352,10 @@ spec("TurboDB durable inbox v2") {
     inbox_db_provision(&fixture, 0);
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "DROP INDEX orders_inbox_records_v2_admission", &error);
+    inbox_db_execute(connection, "DROP INDEX orders_inbox_records_v3_admission", &error);
     inbox_db_execute(connection,
-                     "CREATE UNIQUE INDEX orders_inbox_records_v2_admission ON "
-                     "orders_inbox_records_v2(source_id, admission_id) WHERE phase=0",
+                     "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
+                     "orders_inbox_records_v3(source_id, admission_id) WHERE phase=0",
                      &error);
     orm_disconnect(connection);
 
@@ -375,13 +379,13 @@ spec("TurboDB durable inbox v2") {
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
 
-    inbox_db_execute(connection, "UPDATE orders_inbox_records_v2 SET content_profile=1", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_records_v3 SET content_profile=1", &error);
     rc = turbo_flow_turbodb_inbox_create(&config, &inbox, &error);
     check_equal(rc, SALTS_EPROTO);
     inbox_test_close_created(&inbox, rc);
 
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_profile=0, "
+                     "UPDATE orders_inbox_records_v3 SET content_profile=0, "
                      "content_schema_version=0",
                      &error);
     inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
@@ -390,7 +394,7 @@ spec("TurboDB durable inbox v2") {
     inbox_test_close_created(&inbox, rc);
 
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_schema_version=3, "
+                     "UPDATE orders_inbox_records_v3 SET content_schema_version=3, "
                      "content_flags=9",
                      &error);
     inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
@@ -399,7 +403,7 @@ spec("TurboDB durable inbox v2") {
     inbox_test_close_created(&inbox, rc);
 
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_flags=1, content_encoding=5, "
+                     "UPDATE orders_inbox_records_v3 SET content_flags=1, content_encoding=5, "
                      "content_media_type='application/json'",
                      &error);
     inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
@@ -408,7 +412,7 @@ spec("TurboDB durable inbox v2") {
     inbox_test_close_created(&inbox, rc);
 
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_encoding=1, "
+                     "UPDATE orders_inbox_records_v3 SET content_encoding=1, "
                      "content_schema_name='orders'||char(0)||'.v2'",
                      &error);
     inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
@@ -433,11 +437,11 @@ spec("TurboDB durable inbox v2") {
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET phase=1, terminal_kind=0, "
+                     "UPDATE orders_inbox_records_v3 SET phase=1, terminal_kind=0, "
                      "claim_generation=1, claim_token=1",
                      &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET records=1, history_records=0, "
+                     "UPDATE orders_inbox_meta_v3 SET records=1, history_records=0, "
                      "in_flight_claims=1",
                      &error);
     orm_disconnect(connection);
@@ -463,11 +467,11 @@ spec("TurboDB durable inbox v2") {
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET phase=0, claim_generation=0, "
+                     "UPDATE orders_inbox_records_v3 SET phase=0, claim_generation=0, "
                      "claim_token=0, terminal_kind=0",
                      &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET records=1, history_records=0, "
+                     "UPDATE orders_inbox_meta_v3 SET records=1, history_records=0, "
                      "pending_records=1, completed=0",
                      &error);
     orm_disconnect(connection);
@@ -495,7 +499,7 @@ spec("TurboDB durable inbox v2") {
     inbox_test_seed_completed_record(&fixture);
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET admitted=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET admitted=0", &error);
     orm_disconnect(connection);
 
     rc = turbo_flow_turbodb_inbox_create(&config, &inbox, &error);
@@ -518,7 +522,7 @@ spec("TurboDB durable inbox v2") {
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET source_id=CAST('http.orders' AS TEXT)",
+                     "UPDATE orders_inbox_records_v3 SET source_id=CAST('http.orders' AS TEXT)",
                      &error);
     orm_disconnect(connection);
 
@@ -544,11 +548,11 @@ spec("TurboDB durable inbox v2") {
     config.expected_generation = 1u;
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET phase=1, terminal_kind=0, "
+                     "UPDATE orders_inbox_records_v3 SET phase=1, terminal_kind=0, "
                      "claim_generation=9, claim_token=1",
                      &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET owner_state=1, records=1, "
+                     "UPDATE orders_inbox_meta_v3 SET owner_state=1, records=1, "
                      "history_records=0, in_flight_claims=1",
                      &error);
     orm_disconnect(connection);
@@ -558,11 +562,11 @@ spec("TurboDB durable inbox v2") {
     if (rc == SALTS_OK) {
       connection = inbox_db_connect(&fixture, &error);
       inbox_db_execute(connection,
-                       "UPDATE orders_inbox_records_v2 SET phase=0, claim_generation=0, "
+                       "UPDATE orders_inbox_records_v3 SET phase=0, claim_generation=0, "
                        "claim_token=0",
                        &error);
       inbox_db_execute(connection,
-                       "UPDATE orders_inbox_meta_v2 SET pending_records=1, "
+                       "UPDATE orders_inbox_meta_v3 SET pending_records=1, "
                        "in_flight_claims=0",
                        &error);
       orm_disconnect(connection);
@@ -590,11 +594,11 @@ spec("TurboDB durable inbox v2") {
     config.expected_generation = 1u;
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET phase=1, terminal_kind=0, "
+                     "UPDATE orders_inbox_records_v3 SET phase=1, terminal_kind=0, "
                      "claim_generation=1, claim_token=1",
                      &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET owner_state=1, records=1, "
+                     "UPDATE orders_inbox_meta_v3 SET owner_state=1, records=1, "
                      "history_records=0, in_flight_claims=1, failed=9223372036854775807",
                      &error);
     orm_disconnect(connection);
@@ -603,7 +607,7 @@ spec("TurboDB durable inbox v2") {
     check_equal(rc, SALTS_ERANGE);
     if (rc == SALTS_OK) {
       connection = inbox_db_connect(&fixture, &error);
-      inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET failed=0", &error);
+      inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET failed=0", &error);
       orm_disconnect(connection);
       check_equal(turbo_flow_inbox_discard(&inbox, 1u), SALTS_OK);
       inbox_test_close_created(&inbox, rc);
@@ -624,13 +628,13 @@ spec("TurboDB durable inbox v2") {
     inbox_test_seed_completed_record(&fixture);
     config = inbox_test_config(&fixture);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET next_record_id=1", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET next_record_id=1", &error);
     rc = turbo_flow_turbodb_inbox_create(&config, &inbox, &error);
     check_equal(rc, SALTS_EPROTO);
     inbox_test_close_created(&inbox, rc);
 
     inbox_db_execute(
-        connection, "UPDATE orders_inbox_meta_v2 SET next_record_id=2, next_claim_token=1", &error);
+        connection, "UPDATE orders_inbox_meta_v3 SET next_record_id=2, next_claim_token=1", &error);
     inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
     rc = turbo_flow_turbodb_inbox_create(&config, &inbox, &error);
     check_equal(rc, SALTS_EPROTO);
@@ -655,14 +659,14 @@ spec("TurboDB durable inbox v2") {
     record = inbox_test_record("http.orders", "exhausted-1", "order-1", "payload", 1u, 2u);
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET next_record_id=9223372036854775807, "
+                     "UPDATE orders_inbox_meta_v3 SET next_record_id=9223372036854775807, "
                      "next_claim_token=9223372036854775807",
                      &error);
     orm_disconnect(connection);
 
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_ERANGE);
-    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_ERANGE);
+    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_ENOENT);
     check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
     inbox_db_fixture_destroy(&fixture);
@@ -687,7 +691,7 @@ spec("TurboDB durable inbox v2") {
     check_equal(turbo_flow_turbodb_inbox_create(&config, &old_inbox, &error), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&old_inbox, &record, &receipt), SALTS_OK);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET admitted=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET admitted=9223372036854775807",
                      &error);
     orm_disconnect(connection);
 
@@ -719,31 +723,31 @@ spec("TurboDB durable inbox v2") {
     record = inbox_test_record("http.orders", "overflow-1", "order-1", "payload", 1u, 2u);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET admitted=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET admitted=9223372036854775807",
                      &error);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_ERANGE);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET admitted=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET admitted=0", &error);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_OK);
     check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_OK);
 
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET completed=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET completed=9223372036854775807",
                      &error);
     check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_ERANGE);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET completed=0", &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET failed=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET completed=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET failed=9223372036854775807",
                      &error);
     check_equal(turbo_flow_inbox_fail(&inbox, &claim, SALTS_EIO), SALTS_ERANGE);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET failed=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET failed=0", &error);
     check_equal(turbo_flow_inbox_fail(&inbox, &claim, SALTS_EIO), SALTS_OK);
 
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET retried=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET retried=9223372036854775807",
                      &error);
     check_equal(turbo_flow_inbox_retry(&inbox, receipt.record_id), SALTS_ERANGE);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET retried=0", &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET discarded=9223372036854775807",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET retried=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET discarded=9223372036854775807",
                      &error);
     check_equal(turbo_flow_inbox_discard(&inbox, receipt.record_id), SALTS_ERANGE);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET discarded=0", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET discarded=0", &error);
     check_equal(turbo_flow_inbox_discard(&inbox, receipt.record_id), SALTS_OK);
     orm_disconnect(connection);
     check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
@@ -751,7 +755,7 @@ spec("TurboDB durable inbox v2") {
     inbox_db_fixture_destroy(&fixture);
   }
 
-  it("rejects missing old and inconsistent v2 metadata without repair") {
+  it("rejects missing old and inconsistent v3 metadata without repair") {
     inbox_db_fixture_t missing;
     inbox_db_fixture_t old;
     inbox_db_fixture_t invalid;
@@ -766,7 +770,7 @@ spec("TurboDB durable inbox v2") {
     connection = inbox_db_connect(&missing, &error);
     check_equal(inbox_db_read_int64(connection,
                                     "SELECT count(*) FROM sqlite_master WHERE type='table' AND "
-                                    "name='orders_inbox_meta_v2'",
+                                    "name='orders_inbox_meta_v3'",
                                     &error),
                 (int64_t)0);
     orm_disconnect(connection);
@@ -778,8 +782,8 @@ spec("TurboDB durable inbox v2") {
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_EPROTO);
     connection = inbox_db_connect(&old, &error);
     check_equal(
-        inbox_db_read_int64(connection, "SELECT schema_version FROM orders_inbox_meta_v2", &error),
-        (int64_t)1);
+        inbox_db_read_int64(connection, "SELECT schema_version FROM orders_inbox_meta_v3", &error),
+        (int64_t)2);
     orm_disconnect(connection);
     inbox_db_fixture_destroy(&old);
 
@@ -787,21 +791,21 @@ spec("TurboDB durable inbox v2") {
     inbox_db_provision(&invalid, 0);
     config = inbox_test_config(&invalid);
     connection = inbox_db_connect(&invalid, &error);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET schema_magic='wrong'", &error);
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET schema_magic='wrong'", &error);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_EPROTO);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_meta_v2 SET schema_magic='turbo-flow.turbodb.inbox', "
+                     "UPDATE orders_inbox_meta_v3 SET schema_magic='turbo-flow.turbodb.inbox', "
                      "max_records=5",
                      &error);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_EPROTO);
-    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v2 SET max_records=4, singleton_id=2",
+    inbox_db_execute(connection, "UPDATE orders_inbox_meta_v3 SET max_records=4, singleton_id=2",
                      &error);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_EPROTO);
     orm_disconnect(connection);
     inbox_db_fixture_destroy(&invalid);
   }
 
-  it("rejects a nullable records primary key in the exact v2 schema") {
+  it("rejects a nullable records primary key in the exact v3 schema") {
     inbox_db_fixture_t fixture;
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
@@ -824,9 +828,11 @@ spec("TurboDB durable inbox v2") {
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_record_t record;
     turbo_flow_inbox_record_t conflict;
+    turbo_flow_inbox_record_t partition_conflict;
     turbo_flow_inbox_receipt_t receipt = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t replay = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_receipt_t rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
+    turbo_flow_inbox_receipt_t partition_rejected = TURBO_FLOW_INBOX_RECEIPT_INIT;
     turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     turbo_flow_inbox_history_entry_t history = TURBO_FLOW_INBOX_HISTORY_ENTRY_INIT;
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
@@ -842,6 +848,9 @@ spec("TurboDB durable inbox v2") {
                                UINT64_C(0x8000000000000001));
     conflict = record;
     conflict.message_flags += 1u;
+    partition_conflict = record;
+    partition_conflict.partition_key =
+        vstr_from_buf("other-partition", sizeof("other-partition") - 1u);
 
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
@@ -851,14 +860,17 @@ spec("TurboDB durable inbox v2") {
     check_equal(replay.record_id, receipt.record_id);
     check_equal(turbo_flow_inbox_admit(&inbox, &conflict, &rejected), SALTS_EPROTO);
     check_equal(rejected.record_id, (uint64_t)0u);
+    check_equal(turbo_flow_inbox_admit(&inbox, &partition_conflict, &partition_rejected),
+                SALTS_EPROTO);
+    check_equal(partition_rejected.record_id, (uint64_t)0u);
 
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_check_text(connection, "SELECT hex(source_sequence_be) FROM orders_inbox_records_v2",
+    inbox_db_check_text(connection, "SELECT hex(source_sequence_be) FROM orders_inbox_records_v3",
                         "FFFFFFFFFFFFFFFF", &error);
-    inbox_db_check_text(connection, "SELECT hex(timestamp_ns_be) FROM orders_inbox_records_v2",
+    inbox_db_check_text(connection, "SELECT hex(timestamp_ns_be) FROM orders_inbox_records_v3",
                         "8000000000000001", &error);
     check_equal(
-        inbox_db_read_int64(connection, "SELECT owner_state FROM orders_inbox_meta_v2", &error),
+        inbox_db_read_int64(connection, "SELECT owner_state FROM orders_inbox_meta_v3", &error),
         (int64_t)1);
     orm_disconnect(connection);
 
@@ -934,6 +946,7 @@ spec("TurboDB durable inbox v2") {
 
     turbo_flow_inbox_record_init(&record);
     record.source_id = vstr_from_buf("s", 1u);
+    record.partition_key = record.source_id;
     record.admission_id = vstr_from_buf("a", 1u);
     record.source_sequence = UINT64_C(41);
     record.timestamp_ns = UINT64_C(123456789);
@@ -1152,19 +1165,19 @@ spec("TurboDB durable inbox v2") {
 
     connection = inbox_db_connect(&fixture, &error);
     check_equal(inbox_db_read_int64(
-                    connection, "SELECT generation FROM orders_inbox_meta_v2", &error),
+                    connection, "SELECT generation FROM orders_inbox_meta_v3", &error),
                 (int64_t)1);
     check_equal(inbox_db_read_int64(
-                    connection, "SELECT owner_state FROM orders_inbox_meta_v2", &error),
+                    connection, "SELECT owner_state FROM orders_inbox_meta_v3", &error),
                 (int64_t)1);
     check_equal(inbox_db_read_int64(
-                    connection, "SELECT records FROM orders_inbox_meta_v2", &error),
+                    connection, "SELECT records FROM orders_inbox_meta_v3", &error),
                 (int64_t)2);
     check_equal(inbox_db_read_int64(
-                    connection, "SELECT pending_records FROM orders_inbox_meta_v2", &error),
+                    connection, "SELECT pending_records FROM orders_inbox_meta_v3", &error),
                 (int64_t)1);
     check_equal(inbox_db_read_int64(
-                    connection, "SELECT in_flight_claims FROM orders_inbox_meta_v2", &error),
+                    connection, "SELECT in_flight_claims FROM orders_inbox_meta_v3", &error),
                 (int64_t)1);
     orm_disconnect(connection);
     connection = NULL;
@@ -1210,7 +1223,7 @@ spec("TurboDB durable inbox v2") {
     inbox_db_fixture_destroy(&fixture);
   }
 
-  it("claims the oldest eligible source partition transactionally") {
+  it("claims the oldest eligible canonical partition transactionally") {
     inbox_db_fixture_t fixture;
     turbo_flow_turbodb_inbox_config_t config;
     turbo_flow_inbox_record_t records[3];
@@ -1229,17 +1242,20 @@ spec("TurboDB durable inbox v2") {
     inbox_db_fixture_init(&fixture);
     inbox_db_provision(&fixture, 0);
     config = inbox_test_config(&fixture);
-    records[0] = inbox_test_record("source-A", "a-1", "a-1", "item", 1u, 101u);
-    records[1] = inbox_test_record("source-A", "a-2", "a-2", "item", 2u, 102u);
-    records[2] = inbox_test_record("source-B", "b-1", "b-1", "item", 3u, 103u);
+    records[0] = inbox_test_record("same-source", "a-1", "a-1", "item", 1u, 101u);
+    records[1] = inbox_test_record("same-source", "a-2", "a-2", "item", 2u, 102u);
+    records[2] = inbox_test_record("same-source", "b-1", "b-1", "item", 3u, 103u);
+    records[0].partition_key = vstr_from_buf("partition-A", sizeof("partition-A") - 1u);
+    records[1].partition_key = vstr_from_buf("partition-A", sizeof("partition-A") - 1u);
+    records[2].partition_key = vstr_from_buf("partition-B", sizeof("partition-B") - 1u);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     for (size_t index = 0u; index < 3u; ++index)
       check_equal(turbo_flow_inbox_admit(&inbox, &records[index], &receipts[index]), SALTS_OK);
 
-    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+    request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &first), SALTS_OK);
     check_equal(first.record_id, receipts[0].record_id);
-    excluded[0] = first.record.source_id;
+    excluded[0] = first.record.partition_key;
     request.excluded_partitions = excluded;
     request.excluded_partition_count = 1u;
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &second), SALTS_OK);
@@ -1248,7 +1264,7 @@ spec("TurboDB durable inbox v2") {
     check_equal(snapshot.pending_records, (size_t)1u);
     check_equal(snapshot.in_flight_claims, (size_t)2u);
 
-    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOSPC);
     check_equal(blocked.record_id, (uint64_t)0u);
     check_equal(turbo_flow_inbox_complete(&inbox, &second), SALTS_OK);
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
@@ -1326,7 +1342,7 @@ spec("TurboDB durable inbox v2") {
 
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_media_type="
+                     "UPDATE orders_inbox_records_v3 SET content_media_type="
                      "CAST(X'6170706C69636174696F6E2F6A736F6E006576696C' AS TEXT)",
                      &error);
     orm_disconnect(connection);
@@ -1335,7 +1351,7 @@ spec("TurboDB durable inbox v2") {
 
     connection = inbox_db_connect(&fixture, &error);
     inbox_db_execute(connection,
-                     "UPDATE orders_inbox_records_v2 SET content_media_type='application/json'",
+                     "UPDATE orders_inbox_records_v3 SET content_media_type='application/json'",
                      &error);
     orm_disconnect(connection);
     check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_OK);
@@ -1403,13 +1419,13 @@ spec("TurboDB durable inbox v2") {
     record = inbox_test_record("http.orders", "request-91", "order-91", "database", 91u, 191u);
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     connection = inbox_db_connect(&fixture, &error);
-    inbox_db_execute(connection, "DROP TABLE orders_inbox_records_v2", &error);
+    inbox_db_execute(connection, "DROP TABLE orders_inbox_records_v3", &error);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_EIO);
     check_equal(receipt.record_id, (uint64_t)0u);
-    check_equal(inbox_db_read_int64(connection, "SELECT records FROM orders_inbox_meta_v2", &error),
+    check_equal(inbox_db_read_int64(connection, "SELECT records FROM orders_inbox_meta_v3", &error),
                 (int64_t)0);
     check_equal(
-        inbox_db_read_int64(connection, "SELECT admitted FROM orders_inbox_meta_v2", &error),
+        inbox_db_read_int64(connection, "SELECT admitted FROM orders_inbox_meta_v3", &error),
         (int64_t)0);
     inbox_db_execute(connection, INBOX_RECORDS_DDL, &error);
     inbox_db_execute(connection, INBOX_DEDUPE_INDEX_DDL, &error);

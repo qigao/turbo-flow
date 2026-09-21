@@ -126,7 +126,10 @@ static int flow_durable_buffer_drain_config_valid(
   if (config->ordering != TURBO_FLOW_DURABLE_ORDER_GLOBAL &&
       config->ordering != TURBO_FLOW_DURABLE_ORDER_PARTITION)
     return 0;
-  if (config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID)
+  if (config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_SESSION_ID &&
+      config->partition_by != TURBO_FLOW_DURABLE_PARTITION_CUSTOM)
     return 0;
   if (config->workers == 0u ||
       config->workers > TURBO_FLOW_DURABLE_BUFFER_MAX_WORKERS ||
@@ -320,10 +323,12 @@ static int flow_durable_buffer_next_sequence(turbo_flow_durable_buffer_binding_t
   }
 }
 
-static int flow_durable_buffer_record_bytes(vstr source_id, vstr admission_id, vstr correlation,
+static int flow_durable_buffer_record_bytes(vstr source_id, vstr partition_key,
+                                            vstr admission_id, vstr correlation,
                                             vstr payload, size_t *out) {
   size_t total = 0u;
-  const size_t lengths[] = {source_id.len, admission_id.len, correlation.len, payload.len};
+  const size_t lengths[] = {source_id.len, partition_key.len, admission_id.len,
+                            correlation.len, payload.len};
 
   if (!out) return SALTS_EINVAL;
   for (size_t i = 0u; i < sizeof(lengths) / sizeof(lengths[0]); ++i) {
@@ -331,6 +336,40 @@ static int flow_durable_buffer_record_bytes(vstr source_id, vstr admission_id, v
     total += lengths[i];
   }
   *out = total;
+  return SALTS_OK;
+}
+
+static int flow_durable_buffer_select_partition_key(
+    const turbo_flow_durable_buffer_binding_t *binding,
+    const turbo_flow_durable_identity_t *identity, vstr generated_source, vstr *out) {
+  vstr selected = {NULL, 0u};
+  if (!binding || !out) return SALTS_EINVAL;
+
+  if (binding->drain_config.ordering != TURBO_FLOW_DURABLE_ORDER_PARTITION) {
+    selected = identity ? identity->source_id : generated_source;
+  } else {
+    switch (binding->drain_config.partition_by) {
+      case TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID:
+        selected = identity ? identity->source_id : generated_source;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_DEVICE_ID:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->device_id;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_SESSION_ID:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->session_id;
+        break;
+      case TURBO_FLOW_DURABLE_PARTITION_CUSTOM:
+        if (!identity) return SALTS_EINVAL;
+        selected = identity->partition_key;
+        break;
+      default:
+        return SALTS_EINVAL;
+    }
+  }
+  if (!selected.data || selected.len == 0u) return SALTS_EINVAL;
+  *out = selected;
   return SALTS_OK;
 }
 
@@ -397,17 +436,27 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
     if (rc == SALTS_ENOENT) return SALTS_EINVAL;
     if (rc != SALTS_OK) return rc;
     record->source_id = identity.source_id;
+    rc = flow_durable_buffer_select_partition_key(binding, &identity,
+                                                  (vstr){NULL, 0u},
+                                                  &record->partition_key);
+    if (rc != SALTS_OK) return rc;
     record->admission_id = identity.admission_id;
     record->correlation = identity.correlation;
     record->source_sequence = identity.source_sequence;
   } else {
     if (tstr_len(stage->name) > TURBO_FLOW_DURABLE_SOURCE_ID_MAX) return SALTS_ERANGE;
+    if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION &&
+        binding->drain_config.partition_by != TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID)
+      return SALTS_EINVAL;
     rc = flow_durable_buffer_next_sequence(binding, &sequence);
     if (rc != SALTS_OK) return rc;
     count = snprintf(generated_admission, generated_admission_capacity, "g%" PRIu64 ":%s:%" PRIu64,
                      binding->provider_generation, binding->admission_namespace, sequence);
     if (count < 0 || (size_t)count >= generated_admission_capacity) return SALTS_ERANGE;
     record->source_id = vstr_from_buf(stage->name, tstr_len(stage->name));
+    rc = flow_durable_buffer_select_partition_key(binding, NULL, record->source_id,
+                                                  &record->partition_key);
+    if (rc != SALTS_OK) return rc;
     record->admission_id = vstr_from_buf(generated_admission, (size_t)count);
     record->correlation = (vstr){NULL, 0u};
     record->source_sequence = sequence;
@@ -418,8 +467,9 @@ static int flow_durable_buffer_encode_record(turbo_flow_durable_buffer_binding_t
   record->message_flags = message->flags;
   record->payload = message->payload;
 
-  rc = flow_durable_buffer_record_bytes(record->source_id, record->admission_id,
-                                        record->correlation, record->payload, &retained_bytes);
+  rc = flow_durable_buffer_record_bytes(record->source_id, record->partition_key,
+                                        record->admission_id, record->correlation,
+                                        record->payload, &retained_bytes);
   if (rc != SALTS_OK) return rc;
   if (retained_bytes > binding->max_message_bytes) return SALTS_ENOSPC;
   return SALTS_OK;
@@ -718,7 +768,7 @@ static int flow_durable_buffer_progress_internal(
     if (status.state != TURBO_FLOW_INBOX_SOURCE_EMPTY) continue;
 
     if (binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION) {
-      request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID;
+      request.ordering = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY;
       request.excluded_partitions = excluded_count ? excluded : NULL;
       request.excluded_partition_count = excluded_count;
       rc = draining ? flow_inbox_driver_request_drain_ex(*slot, &request)
@@ -985,11 +1035,34 @@ int turbo_flow_durable_buffer_configure_drain(
     turbo_flow_t *flow, const char *resource_name,
     const turbo_flow_durable_buffer_drain_config_t *config) {
   turbo_flow_durable_buffer_binding_t *binding = NULL;
+  turbo_flow_inbox_snapshot_t provider = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+  turbo_flow_durable_buffer_partition_by_t current_key_policy;
+  turbo_flow_durable_buffer_partition_by_t next_key_policy;
   int rc;
   if (!flow_durable_buffer_drain_config_valid(config)) return SALTS_EINVAL;
   rc = flow_durable_buffer_operator_binding(flow, resource_name, &binding);
   if (rc != SALTS_OK) return rc;
   if (!flow_durable_buffer_drivers_idle(binding)) return SALTS_EBUSY;
+
+  /*
+   * The persisted partition key is chosen at admission time. Reusing live
+   * backlog under another key policy would mix incompatible partition
+   * semantics inside one buffer. GLOBAL and PARTITION_SOURCE_ID intentionally
+   * share the same SOURCE_ID admission policy.
+   */
+  current_key_policy =
+      binding->drain_config.ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION
+          ? binding->drain_config.partition_by
+          : TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+  next_key_policy =
+      config->ordering == TURBO_FLOW_DURABLE_ORDER_PARTITION
+          ? config->partition_by
+          : TURBO_FLOW_DURABLE_PARTITION_SOURCE_ID;
+  if (current_key_policy != next_key_policy) {
+    rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
+    if (rc != SALTS_OK) return rc;
+    if (provider.records != 0u || provider.in_flight_claims != 0u) return SALTS_EBUSY;
+  }
 
   /*
    * Reconfiguration is an idle control-plane action. Drop reusable extra

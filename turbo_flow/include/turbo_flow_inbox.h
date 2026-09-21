@@ -10,9 +10,9 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_INBOX_API_VERSION UINT32_C(3)
+#define TURBO_FLOW_INBOX_API_VERSION UINT32_C(4)
 #define TURBO_FLOW_INBOX_RECORD_SCHEMA "turbo-flow.inbox.record"
-#define TURBO_FLOW_INBOX_RECORD_SCHEMA_VERSION UINT32_C(2)
+#define TURBO_FLOW_INBOX_RECORD_SCHEMA_VERSION UINT32_C(3)
 
 #define TURBO_FLOW_INBOX_MEMORY_DEFAULT_MAX_RECORDS 1024u
 #define TURBO_FLOW_INBOX_MEMORY_DEFAULT_MAX_TOTAL_BYTES (64u * 1024u * 1024u)
@@ -38,6 +38,8 @@ typedef struct turbo_flow_inbox_record_s {
   uint32_t envelope_schema_version;
   /** Stable configured Source identity; non-empty and included in admission identity. */
   vstr source_id;
+  /** Canonical persisted partition key used by all partitioned claim modes. */
+  vstr partition_key;
   /** Stable per-Source admission identity; non-empty and safe to replay verbatim. */
   vstr admission_id;
   uint64_t source_sequence;
@@ -89,17 +91,19 @@ typedef enum turbo_flow_inbox_claim_ordering_e {
   /** Preserve the existing total FIFO order. No partition exclusions are allowed. */
   TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL = 0,
   /**
-   * Treat source_id as the stable partition key and skip pending records whose
-   * source_id appears in excluded_partitions. The oldest eligible record wins.
+   * Skip pending records whose persisted canonical partition_key appears in
+   * excluded_partitions. The oldest eligible record wins.
    */
-  TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID = 1
+  TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY = 1,
+  /** Compatibility name for the original source_id-only coordinator slice. */
+  TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID = TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY
 } turbo_flow_inbox_claim_ordering_t;
 
 /**
  * Exact-version, caller-owned selector for one non-blocking claim.
  *
  * excluded_partitions is borrowed for the call. It is valid only for
- * PARTITION_SOURCE_ID ordering, is explicitly bounded, and may not contain
+ * PARTITION_KEY ordering, is explicitly bounded, and may not contain
  * empty or duplicate keys. An excluded record remains PENDING; no provider
  * counter or claim token advances for a skipped partition.
  */

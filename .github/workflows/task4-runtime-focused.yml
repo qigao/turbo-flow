@@ -15,6 +15,7 @@ on:
     paths:
       - 'turbo_flow/**'
       - 'io/durable/**'
+      - 'io/turbodb/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
@@ -30,9 +31,11 @@ env:
   VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
+  TURBODB_COMMIT: c20018d0c5677865a39217a091e02f34530aced2
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   TSAN_OPTIONS: halt_on_error=1:history_size=7
+  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib:/opt/turbodb/debug/lib
 
 jobs:
   focused-runtime:
@@ -66,6 +69,7 @@ jobs:
             turbo_flow/src/
             turbo_flow/tests/
             io/durable/
+            io/turbodb/
 
       - name: Checkout pinned Salts
         uses: actions/checkout@v4
@@ -81,6 +85,14 @@ jobs:
           repository: qigao/salts-utils
           ref: ${{ env.SALTS_UTILS_COMMIT }}
           path: .ci/deps/salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned TurboDB
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/turbodb
+          ref: ${{ env.TURBODB_COMMIT }}
+          path: .ci/deps/turbodb
           persist-credentials: false
 
       - name: Checkout pinned vcpkg
@@ -153,12 +165,42 @@ jobs:
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
           sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
 
+      - name: Build and install pinned TurboDB ORM SDK
+        shell: bash
+        working-directory: .ci/deps/turbodb
+        env:
+          SALTS_ROOT: /opt/salts/debug
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/ci-orm -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DORM_BUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DTURBODB_BUILD_DBTOOLS=OFF \
+            -DTURBODB_BUILD_REDIS=OFF \
+            -DORM_WITH_SQLITE=ON \
+            -DORM_WITH_PGSQL=OFF \
+            -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
+            -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
+            -DENABLE_ASAN=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE/.ci/deps/turbodb" \
+            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed-turbodb"
+          cmake --build build/ci-orm -j2
+          cmake --install build/ci-orm --prefix "$RUNNER_TEMP/sdk/turbodb-debug"
+          test -f "$RUNNER_TEMP/sdk/turbodb-debug/lib/cmake/Orm/OrmConfig.cmake"
+          sudo mkdir -p /opt/turbodb
+          sudo ln -sfn "$RUNNER_TEMP/sdk/turbodb-debug" /opt/turbodb/debug
+
       - name: Apply focused Task 4 validation-only CMake assembly
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py
-          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
+          python3 .github/ci/task4_runtime_assembly.py --turbodb
+          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
 
       - name: Configure focused exact-source Graph build
         shell: bash
@@ -166,6 +208,7 @@ jobs:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
           DATABIND_ROOT: /opt/databind/debug
+          TURBODB_ROOT: /opt/turbodb/debug
         run: |
           set -euxo pipefail
           cmake -S . -B build/task4-runtime -G Ninja \
@@ -176,7 +219,7 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
@@ -188,20 +231,22 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_lifecycle test_flow_durable_memory_plugin test_flow_plugin_generation test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_lifecycle test_flow_durable_memory_plugin test_flow_plugin_generation test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault test_turbodb_inbox -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
       - name: Run durable buffer and shared driver tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime -R '^test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
-
+          ctest --test-dir build/task4-runtime \
+            -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_inbox)$' \
+            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
       - name: Configure Release ThreadSanitizer concurrency build
         shell: bash
         env:
           SALTS_ROOT: /opt/salts/debug
           SALTS_UTILS_ROOT: /opt/salts-utils/debug
           DATABIND_ROOT: /opt/databind/debug
+          TURBODB_ROOT: /opt/turbodb/debug
         run: |
           set -euxo pipefail
           cmake -S . -B build/task4-runtime-tsan -G Ninja \
@@ -213,7 +258,7 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
@@ -258,8 +303,8 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt)$' || true)"
-          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)$' || true)"
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
 
       - name: Upload Task 4 evidence
         if: always()

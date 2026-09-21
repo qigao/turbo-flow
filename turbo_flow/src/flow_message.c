@@ -60,15 +60,21 @@ static const flow_msg_projection_t *flow_msg_projection(const turbo_flow_msg_t *
 
 static int flow_msg_durable_identity_validate(const turbo_flow_durable_identity_t *identity) {
   if (!identity || identity->size != sizeof(*identity) ||
-      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+      identity->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION) {
     return SALTS_EINVAL;
   }
   if (!identity->source_id.data || identity->source_id.len == 0u ||
       !identity->admission_id.data || identity->admission_id.len == 0u ||
+      (!identity->device_id.data && identity->device_id.len != 0u) ||
+      (!identity->session_id.data && identity->session_id.len != 0u) ||
+      (!identity->partition_key.data && identity->partition_key.len != 0u) ||
       (!identity->correlation.data && identity->correlation.len != 0u)) {
     return SALTS_EINVAL;
   }
   if (identity->source_id.len > TURBO_FLOW_DURABLE_SOURCE_ID_MAX ||
+      identity->device_id.len > TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX ||
+      identity->session_id.len > TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX ||
+      identity->partition_key.len > TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX ||
       identity->admission_id.len > TURBO_FLOW_DURABLE_ADMISSION_ID_MAX ||
       identity->correlation.len > TURBO_FLOW_DURABLE_CORRELATION_MAX) {
     return SALTS_ERANGE;
@@ -95,6 +101,13 @@ int turbo_flow_msg_set_durable_identity(turbo_flow_msg_t *msg,
 
   memcpy(projection->durable_source_id, identity->source_id.data, identity->source_id.len);
   projection->durable_source_id[identity->source_id.len] = '\0';
+  if (identity->device_id.len != 0u)
+    memcpy(projection->durable_device_id, identity->device_id.data, identity->device_id.len);
+  if (identity->session_id.len != 0u)
+    memcpy(projection->durable_session_id, identity->session_id.data, identity->session_id.len);
+  if (identity->partition_key.len != 0u)
+    memcpy(projection->durable_partition_key, identity->partition_key.data,
+           identity->partition_key.len);
   memcpy(projection->durable_admission_id, identity->admission_id.data,
          identity->admission_id.len);
   projection->durable_admission_id[identity->admission_id.len] = '\0';
@@ -102,8 +115,14 @@ int turbo_flow_msg_set_durable_identity(turbo_flow_msg_t *msg,
     memcpy(projection->durable_correlation, identity->correlation.data,
            identity->correlation.len);
   }
+  projection->durable_device_id[identity->device_id.len] = '\0';
+  projection->durable_session_id[identity->session_id.len] = '\0';
+  projection->durable_partition_key[identity->partition_key.len] = '\0';
   projection->durable_correlation[identity->correlation.len] = '\0';
   projection->durable_source_id_len = identity->source_id.len;
+  projection->durable_device_id_len = identity->device_id.len;
+  projection->durable_session_id_len = identity->session_id.len;
+  projection->durable_partition_key_len = identity->partition_key.len;
   projection->durable_admission_id_len = identity->admission_id.len;
   projection->durable_correlation_len = identity->correlation.len;
   projection->durable_source_sequence = identity->source_sequence;
@@ -116,7 +135,7 @@ int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
   const flow_msg_projection_t *projection;
 
   if (!msg || !out || out->size != sizeof(*out) ||
-      out->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION) {
+      out->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION) {
     return SALTS_EINVAL;
   }
   projection = flow_msg_projection(msg);
@@ -124,6 +143,12 @@ int turbo_flow_msg_durable_identity(const turbo_flow_msg_t *msg,
 
   out->source_id = vstr_from_buf(projection->durable_source_id,
                                  projection->durable_source_id_len);
+  out->device_id = vstr_from_buf(projection->durable_device_id,
+                                 projection->durable_device_id_len);
+  out->session_id = vstr_from_buf(projection->durable_session_id,
+                                  projection->durable_session_id_len);
+  out->partition_key = vstr_from_buf(projection->durable_partition_key,
+                                     projection->durable_partition_key_len);
   out->admission_id = vstr_from_buf(projection->durable_admission_id,
                                     projection->durable_admission_id_len);
   out->correlation = vstr_from_buf(projection->durable_correlation,

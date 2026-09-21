@@ -80,7 +80,7 @@ static int flow_inbox_claim_request_valid(const turbo_flow_inbox_claim_request_t
     return 0;
   if (request->ordering == TURBO_FLOW_INBOX_CLAIM_ORDER_GLOBAL)
     return request->excluded_partition_count == 0u;
-  if (request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID ||
+  if (request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY ||
       request->excluded_partition_count > TURBO_FLOW_INBOX_CLAIM_MAX_EXCLUDED_PARTITIONS ||
       (request->excluded_partition_count != 0u && !request->excluded_partitions))
     return 0;
@@ -100,10 +100,10 @@ static int flow_inbox_claim_partition_excluded(
     const turbo_flow_inbox_record_t *record,
     const turbo_flow_inbox_claim_request_t *request) {
   if (!record || !request ||
-      request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_SOURCE_ID)
+      request->ordering != TURBO_FLOW_INBOX_CLAIM_ORDER_PARTITION_KEY)
     return 0;
   for (size_t i = 0u; i < request->excluded_partition_count; ++i)
-    if (flow_inbox_view_equal(record->source_id, request->excluded_partitions[i])) return 1;
+    if (flow_inbox_view_equal(record->partition_key, request->excluded_partitions[i])) return 1;
   return 0;
 }
 
@@ -117,8 +117,9 @@ static int flow_inbox_record_valid(const turbo_flow_inbox_record_t *record) {
       record->envelope_schema_version != TURBO_FLOW_INBOX_RECORD_SCHEMA_VERSION) {
     return SALTS_EPROTO;
   }
-  if (!record->source_id.data || record->source_id.len == 0u || !record->admission_id.data ||
-      record->admission_id.len == 0u ||
+  if (!record->source_id.data || record->source_id.len == 0u ||
+      !record->partition_key.data || record->partition_key.len == 0u ||
+      !record->admission_id.data || record->admission_id.len == 0u ||
       (record->correlation.len != 0u && !record->correlation.data) ||
       (record->payload.len != 0u && !record->payload.data)) {
     return SALTS_EINVAL;
@@ -182,6 +183,7 @@ static int flow_inbox_record_equal(const turbo_flow_inbox_record_t *left,
          left->timestamp_ns == right->timestamp_ns && left->message_type == right->message_type &&
          left->message_flags == right->message_flags &&
          flow_inbox_view_equal(left->source_id, right->source_id) &&
+         flow_inbox_view_equal(left->partition_key, right->partition_key) &&
          flow_inbox_view_equal(left->admission_id, right->admission_id) &&
          flow_inbox_view_equal(left->correlation, right->correlation) &&
          flow_inbox_view_equal(left->payload, right->payload) && a->domain == b->domain &&
@@ -208,12 +210,16 @@ static int flow_inbox_memory_record_copy(const turbo_flow_inbox_record_t *source
   }
   bytes = mem_buffer_data(record->storage);
   memcpy(bytes, source->source_id.data, source->source_id.len);
-  memcpy(bytes + source->source_id.len, source->admission_id.data, source->admission_id.len);
+  memcpy(bytes + source->source_id.len, source->partition_key.data, source->partition_key.len);
+  memcpy(bytes + source->source_id.len + source->partition_key.len,
+         source->admission_id.data, source->admission_id.len);
   if (source->correlation.len != 0u)
-    memcpy(bytes + source->source_id.len + source->admission_id.len, source->correlation.data,
-           source->correlation.len);
+    memcpy(bytes + source->source_id.len + source->partition_key.len +
+               source->admission_id.len,
+           source->correlation.data, source->correlation.len);
   if (source->payload.len != 0u)
-    memcpy(bytes + source->source_id.len + source->admission_id.len + source->correlation.len,
+    memcpy(bytes + source->source_id.len + source->partition_key.len +
+               source->admission_id.len + source->correlation.len,
            source->payload.data, source->payload.len);
   mem_set_used(record->storage, retained_bytes);
   record->phase = FLOW_INBOX_RECORD_PENDING;
@@ -223,13 +229,19 @@ static int flow_inbox_memory_record_copy(const turbo_flow_inbox_record_t *source
   record->view = *source;
   record->view.envelope_schema = TURBO_FLOW_INBOX_RECORD_SCHEMA;
   record->view.source_id = vstr_from_buf(bytes, source->source_id.len);
+  record->view.partition_key =
+      vstr_from_buf(bytes + source->source_id.len, source->partition_key.len);
   record->view.admission_id =
-      vstr_from_buf(bytes + source->source_id.len, source->admission_id.len);
-  record->view.correlation = vstr_from_buf(bytes + source->source_id.len + source->admission_id.len,
-                                           source->correlation.len);
-  record->view.payload = vstr_from_buf(bytes + source->source_id.len + source->admission_id.len +
-                                           source->correlation.len,
-                                       source->payload.len);
+      vstr_from_buf(bytes + source->source_id.len + source->partition_key.len,
+                    source->admission_id.len);
+  record->view.correlation =
+      vstr_from_buf(bytes + source->source_id.len + source->partition_key.len +
+                        source->admission_id.len,
+                    source->correlation.len);
+  record->view.payload =
+      vstr_from_buf(bytes + source->source_id.len + source->partition_key.len +
+                        source->admission_id.len + source->correlation.len,
+                    source->payload.len);
   *out = record;
   return SALTS_OK;
 }
@@ -282,20 +294,28 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
   int size_status = SALTS_OK;
   int rc = SALTS_OK;
 
-  if (source->source_id.len > SIZE_MAX - source->admission_id.len) {
+  if (source->source_id.len > SIZE_MAX - source->partition_key.len) {
     size_status = SALTS_ERANGE;
   } else {
-    retained_bytes = source->source_id.len + source->admission_id.len;
-    if (source->correlation.len > SIZE_MAX - retained_bytes) {
+    retained_bytes = source->source_id.len + source->partition_key.len;
+  }
+  if (size_status == SALTS_OK) {
+    if (source->admission_id.len > SIZE_MAX - retained_bytes)
       size_status = SALTS_ERANGE;
-    } else {
+    else
+      retained_bytes += source->admission_id.len;
+  }
+  if (size_status == SALTS_OK) {
+    if (source->correlation.len > SIZE_MAX - retained_bytes)
+      size_status = SALTS_ERANGE;
+    else
       retained_bytes += source->correlation.len;
-      if (source->payload.len > SIZE_MAX - retained_bytes) {
-        size_status = SALTS_ERANGE;
-      } else {
-        retained_bytes += source->payload.len;
-      }
-    }
+  }
+  if (size_status == SALTS_OK) {
+    if (source->payload.len > SIZE_MAX - retained_bytes)
+      size_status = SALTS_ERANGE;
+    else
+      retained_bytes += source->payload.len;
   }
 
   salts_mutex_lock(&memory->mutex);

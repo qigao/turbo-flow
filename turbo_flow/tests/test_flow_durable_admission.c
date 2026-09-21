@@ -202,6 +202,33 @@ static void bind_projection(turbo_flow_msg_t *msg, int with_descriptor) {
 }
 
 spec("Graph durable admission boundaries") {
+  it("round-trips durable partition identity components across message clone") {
+    turbo_flow_msg_t msg;
+    turbo_flow_msg_t clone;
+    turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+    turbo_flow_durable_identity_t observed = TURBO_FLOW_DURABLE_IDENTITY_INIT;
+    message_init(&msg);
+    identity.source_id = vstr_from_buf("source", 6u);
+    identity.device_id = vstr_from_buf("device", 6u);
+    identity.session_id = vstr_from_buf("session", 7u);
+    identity.partition_key = vstr_from_buf("custom", 6u);
+    identity.admission_id = vstr_from_buf("admission", 9u);
+    identity.correlation = vstr_from_buf("correlation", 11u);
+    identity.source_sequence = UINT64_C(77);
+    check_equal(turbo_flow_msg_set_durable_identity(&msg, &identity), SALTS_OK);
+    check_equal(turbo_flow_msg_clone(&clone, &msg), SALTS_OK);
+    check_equal(turbo_flow_msg_durable_identity(&clone, &observed), SALTS_OK);
+    check_equal(observed.source_id.data, "source", 6u);
+    check_equal(observed.device_id.data, "device", 6u);
+    check_equal(observed.session_id.data, "session", 7u);
+    check_equal(observed.partition_key.data, "custom", 6u);
+    check_equal(observed.admission_id.data, "admission", 9u);
+    check_equal(observed.correlation.data, "correlation", 11u);
+    check_equal(observed.source_sequence, UINT64_C(77));
+    turbo_flow_msg_cleanup(&clone);
+    turbo_flow_msg_cleanup(&msg);
+  }
+
   it("rejects missing stable identity before calling the provider") {
     admission_fixture_t f; turbo_flow_msg_t msg;
     fixture_open(&f, TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED); message_init(&msg);
@@ -293,6 +320,7 @@ spec("Graph durable admission boundaries") {
     msg.flags--; check_storage(&f, 1u); turbo_flow_msg_cleanup(&msg);
     check_equal(turbo_flow_inbox_claim(&f.backing, &claim), SALTS_OK);
     check_equal(claim.record.source_id.data, "src", 3u);
+    check_equal(claim.record.partition_key.data, "src", 3u);
     check_equal(claim.record.admission_id.data, "a", 1u);
     check_equal(claim.record.correlation.data, "corr", 4u);
     check_equal(claim.record.source_sequence, UINT64_C(17));
@@ -410,8 +438,8 @@ spec("Graph durable admission boundaries") {
   }
 
   it("enforces binding, record and retained byte limits at the exact bound") {
-    /* src(3) + admission(1) + correlation(4) + payload(4) = 12 variable bytes. */
-    enum { RECORD_BYTES = 12 };
+    /* src(3) + partition_key(3) + admission(1) + correlation(4) + payload(4) = 15 bytes. */
+    enum { RECORD_BYTES = 15 };
     for (int bound = 0; bound < 3; ++bound) {
       admission_fixture_t f; turbo_flow_msg_t msg;
       turbo_flow_inbox_memory_config_t limits = turbo_flow_inbox_memory_config_default();

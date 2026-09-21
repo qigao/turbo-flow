@@ -25,10 +25,16 @@ typedef struct flow_msg_projection_s {
   int claim_active;
   int has_durable_identity;
   size_t durable_source_id_len;
+  size_t durable_device_id_len;
+  size_t durable_session_id_len;
+  size_t durable_partition_key_len;
   size_t durable_admission_id_len;
   size_t durable_correlation_len;
   uint64_t durable_source_sequence;
   char durable_source_id[TURBO_FLOW_DURABLE_SOURCE_ID_MAX + 1u];
+  char durable_device_id[TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX + 1u];
+  char durable_session_id[TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX + 1u];
+  char durable_partition_key[TURBO_FLOW_DURABLE_PARTITION_COMPONENT_MAX + 1u];
   char durable_admission_id[TURBO_FLOW_DURABLE_ADMISSION_ID_MAX + 1u];
   char durable_correlation[TURBO_FLOW_DURABLE_CORRELATION_MAX + 1u];
 } flow_msg_projection_t;
