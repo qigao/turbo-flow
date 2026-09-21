@@ -428,7 +428,7 @@ static int flow_plugin_generation_prepare_materializers(
     return flow_plugin_generation_materializer_error(
         error, rc, 0u, NULL, "materializer binding config is unavailable");
   rc = turbo_flow_stl_error(
-      vec_init_bytes(out, sizeof(flow_plugin_generation_materializer_binding_t),
+      vec_init_bytes(out, sizeof(turbo_flow_plugin_materializer_binding_t),
                      _Alignof(turbo_flow_max_align_t), count));
   if (rc != SALTS_OK)
     return flow_plugin_generation_materializer_error(
