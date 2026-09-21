@@ -1,4 +1,5 @@
 #include "flow_plugin_operation_internal.h"
+#include "flow_projection_owner_internal.h"
 #include "flow_internal.h"
 #include "turbo_flow_plugin_generation.h"
 
@@ -22,9 +23,15 @@ typedef struct flow_plugin_generation_owner_s {
   int resource;
 } flow_plugin_generation_owner_t;
 
-typedef struct flow_plugin_generation_materializer_binding_s {
+typedef struct flow_plugin_materializer_projection_context_s {
+  size_t native_bytes;
+} flow_plugin_materializer_projection_context_t;
+
+struct turbo_flow_plugin_materializer_binding_s {
   turbo_flow_plugin_materializer_v1_t materializer;
-} flow_plugin_generation_materializer_binding_t;
+  turbo_flow_projection_owner_t *owner;
+  size_t config_index;
+};
 
 struct turbo_flow_plugin_generation_s {
   turbo_flow_t *flow;
@@ -291,6 +298,81 @@ static int flow_plugin_generation_owner_valid(const turbo_flow_plugin_product_ow
 }
 
 
+static int flow_plugin_materializer_projection_clone(const void *value, void *ctx,
+                                                     void **out) {
+  const flow_plugin_materializer_projection_context_t *projection =
+      (const flow_plugin_materializer_projection_context_t *)ctx;
+  void *copy;
+  if (out) *out = NULL;
+  if (!value || !projection || !projection->native_bytes || !out) return SALTS_EINVAL;
+  copy = malloc(projection->native_bytes);
+  if (!copy) return SALTS_ENOMEM;
+  memcpy(copy, value, projection->native_bytes);
+  *out = copy;
+  return SALTS_OK;
+}
+
+static void flow_plugin_materializer_projection_destroy(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
+}
+
+static int flow_plugin_materializer_projection_release(void *ctx) {
+  free(ctx);
+  return SALTS_OK;
+}
+
+static int flow_plugin_materializer_owner_discard(
+    turbo_flow_plugin_materializer_binding_t *binding) {
+  int rc;
+  if (!binding || !binding->owner) return SALTS_OK;
+  rc = turbo_flow_projection_owner_stop(binding->owner);
+  if (rc == SALTS_OK) rc = turbo_flow_projection_owner_destroy(binding->owner);
+  if (rc == SALTS_OK) binding->owner = NULL;
+  return rc;
+}
+
+static int flow_plugin_materializers_discard(vec_t *bindings) {
+  int first = SALTS_OK;
+  if (!bindings) return SALTS_OK;
+  for (size_t i = vec_size(bindings); i > 0u; --i) {
+    turbo_flow_plugin_materializer_binding_t *binding =
+        (turbo_flow_plugin_materializer_binding_t *)vec_at(bindings, i - 1u);
+    int rc = flow_plugin_materializer_owner_discard(binding);
+    if (first == SALTS_OK && rc != SALTS_OK) first = rc;
+  }
+  vec_destroy(bindings);
+  return first;
+}
+
+static int flow_plugin_materializers_stop_and_check(
+    vec_t *bindings, turbo_flow_config_error_t *error) {
+  if (!bindings) return SALTS_OK;
+  for (size_t i = 0u; i < vec_size(bindings); ++i) {
+    turbo_flow_plugin_materializer_binding_t *binding =
+        (turbo_flow_plugin_materializer_binding_t *)vec_at(bindings, i);
+    turbo_flow_projection_owner_snapshot_t state =
+        TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
+    int rc;
+    if (!binding || !binding->owner) continue;
+    rc = turbo_flow_projection_owner_stop(binding->owner);
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, binding->config_index, NULL,
+          "failed to stop materializer projection admission");
+    rc = turbo_flow_projection_owner_snapshot(binding->owner, &state);
+    if (rc != SALTS_OK)
+      return flow_plugin_generation_materializer_error(
+          error, rc, binding->config_index, NULL,
+          "failed to inspect materializer projection admission");
+    if (state.outstanding != 0u)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_EBUSY, binding->config_index, NULL,
+          "materialized projections are still outstanding");
+  }
+  return SALTS_OK;
+}
+
 static int flow_plugin_generation_materializer_error(
     turbo_flow_config_error_t *error, int status, size_t index,
     const char *field, const char *message) {
@@ -361,9 +443,14 @@ static int flow_plugin_generation_prepare_materializers(
     turbo_flow_resolved_materializer_binding_view_t wanted =
         TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
     const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
-    flow_plugin_generation_materializer_binding_t compiled;
+    turbo_flow_plugin_materializer_binding_t compiled;
+    turbo_flow_projection_owner_config_t owner_config =
+        TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
+    flow_plugin_materializer_projection_context_t *projection_ctx = NULL;
     turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
     size_t consumer_count = 0u;
+    size_t projection_capacity = 0u;
+    size_t max_retained_bytes = 0u;
     rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
     if (rc != SALTS_OK)
       return flow_plugin_generation_materializer_error(
@@ -406,6 +493,11 @@ static int flow_plugin_generation_prepare_materializers(
         return flow_plugin_generation_materializer_error(
             error, SALTS_EPROTO, i, "schema",
             "materializer schema/CMeta does not exactly match every operation input consumer");
+      if (operation->request.limits.max_inflight > SIZE_MAX - projection_capacity)
+        return flow_plugin_generation_materializer_error(
+            error, SALTS_EINVAL, i, "schema",
+            "materializer projection capacity overflow");
+      projection_capacity += operation->request.limits.max_inflight;
       ++consumer_count;
     }
     if (consumer_count == 0u)
@@ -413,12 +505,47 @@ static int flow_plugin_generation_prepare_materializers(
           error, SALTS_EPROTO, i, "schema",
           "materializer binding has no exact typed-operation input consumer");
 
+    if (!projection_capacity ||
+        selected->materializer.native_bytes > SIZE_MAX / projection_capacity)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_EINVAL, i, "schema",
+          "materializer retained-byte capacity overflow");
+    max_retained_bytes = projection_capacity * selected->materializer.native_bytes;
+    projection_ctx =
+        (flow_plugin_materializer_projection_context_t *)calloc(1u, sizeof(*projection_ctx));
+    if (!projection_ctx)
+      return flow_plugin_generation_materializer_error(
+          error, SALTS_ENOMEM, i, NULL,
+          "materializer projection context allocation failed");
+    projection_ctx->native_bytes = selected->materializer.native_bytes;
+    owner_config.flags = TURBO_FLOW_PROJECTION_IMMUTABLE |
+                         TURBO_FLOW_PROJECTION_CROSS_THREAD |
+                         TURBO_FLOW_PROJECTION_INDEPENDENT_CONTEXT;
+    owner_config.capacity = projection_capacity;
+    owner_config.max_result_bytes = selected->materializer.native_bytes;
+    owner_config.max_retained_bytes = max_retained_bytes;
+    owner_config.schema = &selected->materializer.schema;
+    owner_config.clone = flow_plugin_materializer_projection_clone;
+    owner_config.destroy = flow_plugin_materializer_projection_destroy;
+    owner_config.ctx = projection_ctx;
+    owner_config.release_context = flow_plugin_materializer_projection_release;
+
     memset(&compiled, 0, sizeof(compiled));
     compiled.materializer = selected->materializer;
-    rc = turbo_flow_stl_error(vec_push(out, &compiled));
-    if (rc != SALTS_OK)
+    compiled.config_index = i;
+    rc = turbo_flow_plugin_projection_owner_create(snapshot, &owner_config, &compiled.owner);
+    if (rc != SALTS_OK) {
+      free(projection_ctx);
       return flow_plugin_generation_materializer_error(
-          error, rc, i, NULL, "materializer binding commit failed");
+          error, rc, i, NULL, "materializer projection owner creation failed");
+    }
+    rc = turbo_flow_stl_error(vec_push(out, &compiled));
+    if (rc != SALTS_OK) {
+      int cleanup_rc = flow_plugin_materializer_owner_discard(&compiled);
+      return flow_plugin_generation_materializer_error(
+          error, cleanup_rc != SALTS_OK ? cleanup_rc : rc, i, NULL,
+          "materializer binding commit failed");
+    }
   }
   return SALTS_OK;
 }
@@ -598,7 +725,7 @@ preflight_failed:
     flow_plugin_generation_error(error, rc, "$.generation.preflight",
                                  "generation preflight failed");
   if (generation->snapshot) turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
-  vec_destroy(&generation->materializers);
+  (void)flow_plugin_materializers_discard(&generation->materializers);
   flow_plugin_operations_free(&generation->bindings);
   vec_destroy(&generation->owners);
   free(generation);
@@ -691,6 +818,8 @@ static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generat
   if (rc != SALTS_OK)
     return flow_plugin_generation_error(error, rc, "$.generation.buffers",
                                         "durable backlog must settle before retirement");
+  rc = flow_plugin_materializers_stop_and_check(&generation->materializers, error);
+  if (rc != SALTS_OK) return rc;
   rc = flow_plugin_operations_close(&generation->bindings);
   if (rc != SALTS_OK)
     return flow_plugin_generation_error(error, rc, "$.generation.inflight",
@@ -746,8 +875,11 @@ static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generat
     if (entry) entry->owner.destroy(entry->owner.ctx);
   }
   flow_plugin_result_domain_detach(generation->domain);
+  rc = flow_plugin_materializers_discard(&generation->materializers);
+  if (rc != SALTS_OK)
+    return flow_plugin_generation_error(error, rc, "$.generation.materializers",
+                                        "materializer projection owner cleanup failed");
   turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
-  vec_destroy(&generation->materializers);
   flow_plugin_operations_free(&generation->bindings);
   vec_destroy(&generation->owners);
   memset(generation, 0, sizeof(*generation));
