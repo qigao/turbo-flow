@@ -87,17 +87,26 @@ typedef struct turbo_flow_resolved_operation_binding_view_s {
    0u,                                                                                             \
    0u}
 
+typedef enum turbo_flow_config_materializer_encoding_e {
+  TURBO_FLOW_CONFIG_MATERIALIZER_TBE = 0,
+  TURBO_FLOW_CONFIG_MATERIALIZER_JSON,
+  TURBO_FLOW_CONFIG_MATERIALIZER_CSV,
+  TURBO_FLOW_CONFIG_MATERIALIZER_XML,
+  TURBO_FLOW_CONFIG_MATERIALIZER_UTF8,
+  TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE
+} turbo_flow_config_materializer_encoding_t;
+
 typedef struct turbo_flow_resolved_materializer_binding_view_s {
   size_t size;
   const char *plugin;
   const char *schema;
   uint32_t schema_version;
-  uint32_t encoding;
+  turbo_flow_config_materializer_encoding_t encoding;
 } turbo_flow_resolved_materializer_binding_view_t;
 
 #define TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT                                         \
   {sizeof(turbo_flow_resolved_materializer_binding_view_t), NULL, NULL, 0u,                        \
-   0u}
+   TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE}
 
 typedef enum turbo_flow_config_value_type_e {
   TURBO_FLOW_CONFIG_NULL = 0,
