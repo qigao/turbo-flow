@@ -2,6 +2,7 @@
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_inbox_source.h"
 #include "../src/flow_inbox_driver_internal.h"
+#include "../src/flow_projection_owner_internal.h"
 
 #include <salts/clock.h>
 #include <stdatomic.h>
@@ -13,6 +14,7 @@ typedef struct driver_probe_s {
   int saw_null_transport;
   int saw_payload;
   int saw_durable_identity;
+  int saw_durable_claim;
 } driver_probe_t;
 
 typedef struct async_probe_s {
@@ -61,6 +63,7 @@ static int driver_sink(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_pla
       memcmp(identity.source_id.data, "durable.intake", identity.source_id.len) == 0 &&
       identity.admission_id.len > 0u && identity.correlation.len == identity.admission_id.len &&
       memcmp(identity.correlation.data, identity.admission_id.data, identity.admission_id.len) == 0;
+  probe->saw_durable_claim = flow_msg_has_durable_claim(message);
   return probe->status;
 }
 
@@ -155,6 +158,7 @@ spec("Internal Inbox claim-to-Graph driver") {
     check_equal(probe.saw_null_transport, 1);
     check_equal(probe.saw_payload, 1);
     check_equal(probe.saw_durable_identity, 1);
+    check_equal(probe.saw_durable_claim, 1);
     check_equal(flow_inbox_driver_poll(driver, &result), SALTS_OK);
     check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_COMPLETED);
     check_equal(result.record_id, receipt.record_id);
