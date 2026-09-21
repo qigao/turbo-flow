@@ -39,6 +39,60 @@ static const char graph_text[] =
     "  input -> calculate\n"
     "}\n";
 
+static const char yaml_two_consumers[] =
+    "version: 1\n"
+    "operation_bindings:\n"
+    "  - operation: fixture.double\n"
+    "    plugin: fixture.operation\n"
+    "    version: 1\n"
+    "    input_schema: cmeta.int.data\n"
+    "    input_schema_version: 1\n"
+    "    output_schema: cmeta.int.data\n"
+    "    output_schema_version: 1\n"
+    "    execution: inline\n"
+    "    threading: thread_safe\n"
+    "    cancellation: none\n"
+    "    permissions: []\n"
+    "    max_inflight: 1\n"
+    "    max_input_bytes: 8\n"
+    "    max_result_bytes: 8\n"
+    "    max_retained_bytes: 32\n"
+    "    max_steps: 2\n"
+    "    deadline_ms: 0\n"
+    "  - operation: fixture.other\n"
+    "    plugin: fixture.operation\n"
+    "    version: 1\n"
+    "    input_schema: cmeta.int.data\n"
+    "    input_schema_version: 1\n"
+    "    output_schema: cmeta.int.data\n"
+    "    output_schema_version: 1\n"
+    "    execution: inline\n"
+    "    threading: thread_safe\n"
+    "    cancellation: none\n"
+    "    permissions: []\n"
+    "    max_inflight: 1\n"
+    "    max_input_bytes: 8\n"
+    "    max_result_bytes: 8\n"
+    "    max_retained_bytes: 32\n"
+    "    max_steps: 2\n"
+    "    deadline_ms: 0\n"
+    "materializer_bindings:\n"
+    "  - plugin: fixture.materializer.operation\n"
+    "    schema: cmeta.int.data\n"
+    "    schema_version: 1\n"
+    "    encoding: opaque\n"
+    "adapters: {}\n";
+
+static const char graph_two_consumers[] =
+    "source input\n"
+    "stage calculate operation fixture.double\n"
+    "stage decide operation fixture.other\n"
+    "stage main {\n"
+    "  input -> calculate\n"
+    "  calculate -> decide\n"
+    "}\n";
+
+
 typedef struct materializer_generation_test_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
@@ -50,8 +104,11 @@ typedef struct materializer_generation_test_s {
   turbo_flow_config_error_t error;
 } materializer_generation_test_t;
 
-static int open_test(materializer_generation_test_t *t, const char *materializer_path,
-                     const char *yaml) {
+static int open_test_with_operation(materializer_generation_test_t *t,
+                                    const char *operation_path,
+                                    const char *materializer_path,
+                                    const char *yaml, const char *graph,
+                                    size_t result_capacity, int register_other) {
   turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_operation_descriptor_t operation = {0};
@@ -64,13 +121,13 @@ static int open_test(materializer_generation_test_t *t, const char *materializer
   hc.materializer_capacity = 2u;
   rc = turbo_flow_plugin_host_create(&hc, &t->host, &pe);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_plugin_host_load(t->host, FLOW_OPERATION_OK, &pe);
+  rc = turbo_flow_plugin_host_load(t->host, operation_path, &pe);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_host_load(t->host, materializer_path, &pe);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_catalog_snapshot_create(t->host, &t->snapshot, &pe);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_plugin_result_domain_create(t->snapshot, 1u, &t->domain, &pe);
+  rc = turbo_flow_plugin_result_domain_create(t->snapshot, result_capacity, &t->domain, &pe);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &t->resolved, &t->error);
   if (rc != SALTS_OK) return rc;
@@ -90,7 +147,18 @@ static int open_test(materializer_generation_test_t *t, const char *materializer
   operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   rc = turbo_flow_register_operation(t->flow, &operation);
   if (rc != SALTS_OK) return rc;
-  return turbo_flow_parse_string(t->flow, graph_text, sizeof(graph_text) - 1u);
+  if (register_other) {
+    operation.name = "fixture.other";
+    rc = turbo_flow_register_operation(t->flow, &operation);
+    if (rc != SALTS_OK) return rc;
+  }
+  return turbo_flow_parse_string(t->flow, graph, strlen(graph));
+}
+
+static int open_test(materializer_generation_test_t *t, const char *materializer_path,
+                     const char *yaml) {
+  return open_test_with_operation(t, FLOW_OPERATION_OK, materializer_path, yaml,
+                                  graph_text, 1u, 0);
 }
 
 static int create_generation(materializer_generation_test_t *t) {
@@ -177,6 +245,18 @@ spec("generation materializer preflight") {
     check_equal(create_generation(&t), SALTS_EPROTO);
     check_equal(strcmp(t.error.path, "$.materializer_bindings[0].schema"), 0);
     check_null(t.generation);
+    close_test(&t);
+  }
+
+  it("shares one schema-level materializer across multiple operation consumers") {
+    materializer_generation_test_t t;
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_TWO_NAMES,
+                                         FLOW_MATERIALIZER_OPERATION,
+                                         yaml_two_consumers, graph_two_consumers,
+                                         2u, 1), SALTS_OK);
+    check_equal(create_generation(&t), SALTS_OK);
+    check_not_null(t.generation);
+    check_null(t.cleanup);
     close_test(&t);
   }
 
