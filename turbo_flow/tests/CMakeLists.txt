@@ -58,7 +58,8 @@ set_tests_properties(test_flow_plugin_materializer_generation
   PROPERTIES LABELS "graph;plugin;abi3;materializer" TIMEOUT 30)
 
 add_executable(test_flow_plugin_materializer_runtime
-  test_flow_plugin_materializer_runtime.c)
+  test_flow_plugin_materializer_runtime.c
+  plugin_generation_header_cpp.cpp)
 target_link_libraries(test_flow_plugin_materializer_runtime
   PRIVATE TurboFlow::PluginHost Salts::TinyTest)
 target_compile_definitions(test_flow_plugin_materializer_runtime PRIVATE
