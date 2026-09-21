@@ -666,7 +666,7 @@ spec("TurboDB durable inbox v3") {
 
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_OK);
     check_equal(turbo_flow_inbox_admit(&inbox, &record, &receipt), SALTS_ERANGE);
-    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_ERANGE);
+    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_ENOENT);
     check_equal(turbo_flow_inbox_close(&inbox), SALTS_OK);
     check_equal(turbo_flow_inbox_destroy(&inbox), SALTS_OK);
     inbox_db_fixture_destroy(&fixture);
@@ -755,7 +755,7 @@ spec("TurboDB durable inbox v3") {
     inbox_db_fixture_destroy(&fixture);
   }
 
-  it("rejects missing old and inconsistent v2 metadata without repair") {
+  it("rejects missing old and inconsistent v3 metadata without repair") {
     inbox_db_fixture_t missing;
     inbox_db_fixture_t old;
     inbox_db_fixture_t invalid;
@@ -783,7 +783,7 @@ spec("TurboDB durable inbox v3") {
     connection = inbox_db_connect(&old, &error);
     check_equal(
         inbox_db_read_int64(connection, "SELECT schema_version FROM orders_inbox_meta_v3", &error),
-        (int64_t)1);
+        (int64_t)2);
     orm_disconnect(connection);
     inbox_db_fixture_destroy(&old);
 
@@ -1264,7 +1264,7 @@ spec("TurboDB durable inbox v3") {
     check_equal(snapshot.pending_records, (size_t)1u);
     check_equal(snapshot.in_flight_claims, (size_t)2u);
 
-    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
+    check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOSPC);
     check_equal(blocked.record_id, (uint64_t)0u);
     check_equal(turbo_flow_inbox_complete(&inbox, &second), SALTS_OK);
     check_equal(turbo_flow_inbox_claim_ex(&inbox, &request, &blocked), SALTS_ENOENT);
