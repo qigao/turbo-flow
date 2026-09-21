@@ -7,7 +7,7 @@ add_library(tf_rulesforge_provider SHARED
 target_compile_definitions(tf_rulesforge_provider PRIVATE TURBO_FLOW_PLUGIN_BUILD)
 
 target_include_directories(tf_rulesforge_provider
-  PRIVATE \${CMAKE_CURRENT_SOURCE_DIR}/include)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(tf_rulesforge_provider
   PRIVATE TurboFlow::PluginHost RulesForge::RulesForge)
