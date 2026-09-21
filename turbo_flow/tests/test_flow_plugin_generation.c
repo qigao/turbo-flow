@@ -1029,7 +1029,8 @@ spec("transactional plugin Graph generation") {
           &context.cleanup, &config_error);
       info("resource order generation status=%d path=%s message=%s", rc, config_error.path,
            config_error.message);
-      check_equal(rc, SALTS_EINVAL);
+      check_equal(rc, SALTS_ENOENT);
+      check_equal(config_error.path, "$.graph");
     }
     check_null(generation);
     check_null(context.flow);
