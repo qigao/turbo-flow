@@ -54,7 +54,7 @@ typedef struct turbo_flow_plugin_product_owner_v1_s {
    NULL}
 
 /**
- * Publish a complete local owner descriptor into an exact ABI 3.0 destination.
+ * Publish a complete local owner descriptor into an exact current shared plugin ABI destination.
  *
  * A materializer must preserve the host-seeded size/version and use this helper instead of
  * assigning the complete structure. Both source and destination must have the exact size and
