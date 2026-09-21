@@ -24,6 +24,7 @@ typedef struct flow_msg_projection_s {
   turbo_flow_projection_owner_t *result_owner;
   int claim_active;
   int has_durable_identity;
+  int durable_claim_origin;
   size_t durable_source_id_len;
   size_t durable_device_id_len;
   size_t durable_session_id_len;
