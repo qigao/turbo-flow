@@ -35,7 +35,6 @@ concurrency:
 
 env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
@@ -88,14 +87,6 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout pinned vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_COMMIT }}
-          path: vcpkg
-          fetch-depth: 0
-          persist-credentials: false
 
       - name: Verify public dependency revisions
         shell: bash
@@ -103,11 +94,11 @@ jobs:
           set -euxo pipefail
           test "$(git -C .ci/deps/salts rev-parse HEAD)" = "$SALTS_COMMIT"
           test "$(git -C .ci/deps/salts-utils rev-parse HEAD)" = "$SALTS_UTILS_COMMIT"
-          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_COMMIT"
+          test "$(git -C "$VCPKG_ROOT" rev-parse HEAD)" = "$VCPKG_TOOL_REVISION"
           {
             printf 'salts %s\n' "$SALTS_COMMIT"
             printf 'salts-utils %s\n' "$SALTS_UTILS_COMMIT"
-            printf 'vcpkg %s\n' "$VCPKG_COMMIT"
+            printf 'vcpkg %s\n' "$VCPKG_TOOL_REVISION"
           } | tee "$RUNNER_TEMP/protocol-intake-evidence/dependencies.txt"
 
 
@@ -117,9 +108,9 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          test -x "$VCPKG_ROOT/vcpkg"
           sudo mkdir -p /opt
-          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+          sudo ln -sfn "$VCPKG_ROOT" /opt/vcpkg
 
 
       - name: Build standalone host Lemon
@@ -136,7 +127,6 @@ jobs:
         working-directory: .ci/deps/salts
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
           cmake --preset linux-dev-user \
@@ -183,7 +173,7 @@ jobs:
             -DTURBO_FLOW_SOURCE_DIR="$GITHUB_WORKSPACE" \
             -DSALTS_SOURCE_DIR="$GITHUB_WORKSPACE/.ci/deps/salts" \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
             -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
