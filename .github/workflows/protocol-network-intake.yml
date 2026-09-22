@@ -39,6 +39,7 @@ env:
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib
 
 jobs:
   linux-public-compile:
@@ -245,14 +246,48 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          trap 'git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt' EXIT
           cmake --build build/protocol-network-runtime \
             --target test_protocol_network_intake_config test_protocol_network_intake_core -j2 \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
           ctest --test-dir build/protocol-network-runtime \
-            -R '^test_protocol_network_intake_(config|core)$' \
+            -R '^test_protocol_network_intake_(config|core)
+      - name: Verify sanitizer instrumentation flags
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ninja -C build/protocol-network-compile -t commands > "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F -- '-fsanitize=address' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F -- '-fsanitize=undefined' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'flow_protocol_network_intake.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_network_jtt808.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_network_coap.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_semantic_mapper.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'protocol_semantic_mapper_header_cpp.cpp' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+
+      - name: Verify committed source was not modified
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload exact-head compile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-network-intake-public-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/protocol-intake-evidence/
+            build/protocol-network-compile/CMakeCache.txt
+            build/protocol-network-runtime/CMakeCache.txt
+ \
             --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
-          git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt
 
       - name: Verify sanitizer instrumentation flags
         shell: bash
