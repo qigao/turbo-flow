@@ -201,6 +201,7 @@ intake_test_settings(turbo_flow_protocol_kind_t kind) {
   flow_protocol_network_intake_settings_t settings;
   memset(&settings, 0, sizeof(settings));
   settings.protocol_kind = kind;
+  settings.schema_version = 2u;
   settings.transport_kind = kind == TURBO_FLOW_PROTOCOL_JTT_808
                                 ? FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP
                                 : FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
