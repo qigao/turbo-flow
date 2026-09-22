@@ -3,6 +3,7 @@
 
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_protocol_source.h"
+#include "turbo_flow_protocol_mapper.h"
 #include "turbo_flow_resolved_config.h"
 
 #ifdef __cplusplus
@@ -22,6 +23,15 @@ typedef struct flow_protocol_network_intake_settings_s {
   char source_id[TURBO_FLOW_DURABLE_SOURCE_ID_MAX + 1u];
   char source_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
   char decoder_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  uint32_t schema_version;
+  char mapper_plugin[TURBO_FLOW_CONFIG_PLUGIN_ID_MAX + 1u];
+  char mapper_name[TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX + 1u];
+  char mapper_profile[TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX + 1u];
+  uint32_t mapper_message_type;
+  uint32_t mapper_semantic_type;
+  char mapper_semantic_media_type[TURBO_FLOW_CONTENT_MEDIA_TYPE_MAX + 1u];
+  size_t mapper_max_semantic_bytes;
+  size_t mapper_max_output_bytes;
   size_t max_sessions;
   size_t max_frame_size;
   size_t max_pending_claims;
@@ -48,6 +58,8 @@ typedef struct flow_protocol_network_intake_sink_config_s {
   turbo_flow_t *downstream_flow;
   const char *decoded_source_name;
   const flow_protocol_network_intake_settings_t *settings;
+  const turbo_flow_protocol_mapper_v1_t *mapper;
+  const turbo_flow_protocol_mapper_contract_t *mapper_contract;
 } flow_protocol_network_intake_sink_config_t;
 
 int flow_protocol_network_intake_preflight(
