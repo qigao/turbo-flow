@@ -15,6 +15,15 @@ typedef struct intake_completion_probe_s {
   atomic_int status;
 } intake_completion_probe_t;
 
+typedef struct intake_semantic_probe_s {
+  size_t decode_calls;
+} intake_semantic_probe_t;
+
+typedef struct intake_mapper_probe_s {
+  size_t calls;
+  int status;
+} intake_mapper_probe_t;
+
 static int intake_test_jtt_inspect(void *ctx, const char *configured_version,
                                    const turbo_flow_protocol_frame_view_t *frame,
                                    turbo_flow_protocol_metadata_t *metadata) {
@@ -40,6 +49,122 @@ static int intake_test_coap_inspect(void *ctx, const char *configured_version,
   metadata->sequence = ((uint64_t)frame->data[2] << 8u) | frame->data[3];
   memcpy(metadata->operation, "get", sizeof("get"));
   return SALTS_OK;
+}
+
+static int intake_test_coap_semantic(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata,
+    turbo_flow_protocol_semantic_output_t *output) {
+  static const uint8_t canonical[] = "{\"age\":21}";
+  intake_semantic_probe_t *probe = (intake_semantic_probe_t *)ctx;
+  (void)configured_version;
+  if (!probe || !frame || frame->data_size != 4u || frame->data[0] != 0x40u ||
+      !metadata || !output || output->size != sizeof(*output) ||
+      output->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+      !output->data || output->capacity < sizeof(canonical) - 1u)
+    return SALTS_EINVAL;
+  probe->decode_calls++;
+  metadata->message_type = frame->data[1];
+  metadata->sequence = ((uint64_t)frame->data[2] << 8u) | frame->data[3];
+  memcpy(metadata->operation, "post", sizeof("post"));
+  memcpy(output->data, canonical, sizeof(canonical) - 1u);
+  output->data_size = sizeof(canonical) - 1u;
+  output->semantic_type = 50u;
+  memcpy(output->media_type, "application/json", sizeof("application/json"));
+  return SALTS_OK;
+}
+
+static turbo_flow_protocol_t *
+intake_test_semantic_protocol(intake_semantic_probe_t *probe) {
+  turbo_flow_protocol_open_request_t request = TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
+  turbo_flow_protocol_codec_ops_t ops = TURBO_FLOW_PROTOCOL_CODEC_OPS_INIT;
+  turbo_flow_protocol_t *protocol = NULL;
+  request.protocol = TURBO_FLOW_PROTOCOL_COAP;
+  request.protocol_version = "RFC7252";
+  request.max_frame_size = 64u;
+  ops.inspect = intake_test_coap_inspect;
+  ops.decode_semantic = intake_test_coap_semantic;
+  check_equal(turbo_flow_protocol_create(
+                  &request, "coap-semantic-test", "RFC7252",
+                  TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
+                      TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE |
+                      TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE,
+                  &ops, probe, &protocol),
+              SALTS_OK);
+  check_not_null(protocol);
+  return protocol;
+}
+
+static int intake_test_mapper_preflight(
+    void *ctx, const turbo_flow_protocol_mapper_preflight_request_t *request,
+    turbo_flow_protocol_mapper_contract_t *contract) {
+  (void)ctx;
+  (void)request;
+  (void)contract;
+  return SALTS_ENOTSUP;
+}
+
+static int intake_test_mapper_map(
+    void *ctx, const turbo_flow_protocol_mapper_request_t *request,
+    turbo_flow_protocol_mapper_output_t *output) {
+  intake_mapper_probe_t *probe = (intake_mapper_probe_t *)ctx;
+  if (!probe || !request || request->size != sizeof(*request) ||
+      request->abi_version != TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION ||
+      request->protocol != TURBO_FLOW_PROTOCOL_COAP ||
+      !request->profile || strcmp(request->profile, "applicant-json") != 0 ||
+      request->metadata.message_type != 2u ||
+      request->semantic_type != 50u ||
+      !request->semantic_media_type ||
+      strcmp(request->semantic_media_type, "application/json") != 0 ||
+      !request->semantic_data || !output || output->size != sizeof(*output) ||
+      output->abi_version != TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION ||
+      !output->payload || request->semantic_size > output->payload_capacity)
+    return SALTS_EINVAL;
+  probe->calls++;
+  if (probe->status != SALTS_OK) return probe->status;
+  memcpy(output->payload, request->semantic_data, request->semantic_size);
+  output->payload_size = request->semantic_size;
+  if (turbo_flow_content_descriptor_init(
+          &output->content, TURBO_FLOW_DOMAIN_DATA,
+          TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_JSON,
+          "application/json", "intake.mapper") != SALTS_OK)
+    return SALTS_EPROTO;
+  return turbo_flow_content_descriptor_declare_schema(
+      &output->content, "rulesforge.Applicant.data", "Applicant", 1u);
+}
+
+static turbo_flow_protocol_mapper_v1_t
+intake_test_mapper(intake_mapper_probe_t *probe) {
+  turbo_flow_protocol_mapper_v1_t mapper = TURBO_FLOW_PROTOCOL_MAPPER_V1_INIT;
+  mapper.name = "fixture.mapper";
+  mapper.protocol = TURBO_FLOW_PROTOCOL_COAP;
+  mapper.profile = "applicant-json";
+  mapper.max_semantic_bytes = 64u;
+  mapper.max_output_bytes = 64u;
+  mapper.ctx = probe;
+  mapper.preflight = intake_test_mapper_preflight;
+  mapper.map = intake_test_mapper_map;
+  return mapper;
+}
+
+static turbo_flow_protocol_mapper_contract_t intake_test_mapper_contract(void) {
+  turbo_flow_protocol_mapper_contract_t contract = TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT;
+  contract.protocol = TURBO_FLOW_PROTOCOL_COAP;
+  contract.message_type = 2u;
+  contract.semantic_type = 50u;
+  memcpy(contract.profile, "applicant-json", sizeof("applicant-json"));
+  contract.max_semantic_bytes = 64u;
+  contract.max_output_bytes = 64u;
+  check_equal(turbo_flow_content_descriptor_init(
+                  &contract.content, TURBO_FLOW_DOMAIN_DATA,
+                  TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_JSON,
+                  "application/json", "intake.mapper"),
+              SALTS_OK);
+  check_equal(turbo_flow_content_descriptor_declare_schema(
+                  &contract.content, "rulesforge.Applicant.data", "Applicant", 1u),
+              SALTS_OK);
+  return contract;
 }
 
 static turbo_flow_protocol_t *intake_test_protocol(turbo_flow_protocol_kind_t kind) {
@@ -108,9 +233,11 @@ static turbo_flow_inbox_t intake_test_inbox(size_t max_records) {
   return inbox;
 }
 
-static turbo_flow_t *intake_test_flow(
+static turbo_flow_t *intake_test_flow_with_mapper(
     flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
     turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
+    const turbo_flow_protocol_mapper_v1_t *mapper,
+    const turbo_flow_protocol_mapper_contract_t *mapper_contract,
     turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
   static const char graph[] = "source input\n"
                               "stage decode adapter protocol.decode\n"
@@ -148,6 +275,8 @@ static turbo_flow_t *intake_test_flow(
   config.downstream_flow = downstream;
   config.decoded_source_name = "decoded";
   config.settings = settings;
+  config.mapper = mapper;
+  config.mapper_contract = mapper_contract;
   check_equal(flow_protocol_network_intake_sink_create(&config, sink_out), SALTS_OK);
   check_not_null(*sink_out);
   check_equal(flow_protocol_network_intake_sink_register(*sink_out), SALTS_OK);
@@ -155,6 +284,14 @@ static turbo_flow_t *intake_test_flow(
   check_equal(turbo_flow_start(flow), SALTS_OK);
   *downstream_out = downstream;
   return flow;
+}
+
+static turbo_flow_t *intake_test_flow(
+    flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
+    turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
+  return intake_test_flow_with_mapper(sink_out, protocol, inbox, settings, NULL, NULL,
+                                      downstream_out, binding_out);
 }
 
 static void intake_completion(void *ctx, const turbo_flow_publish_result_t *result) {
@@ -390,6 +527,91 @@ spec("protocol network intake core") {
     check_equal(snapshot.pending_records, 1u);
 
     intake_free_one_record(&inbox);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
+  }
+
+  it("maps codec semantic content to canonical business bytes before durable admission") {
+    static const uint8_t coap_post[] = {0x40u, 0x02u, 0x12u, 0x34u};
+    static const char canonical[] = "{\"age\":21}";
+    intake_semantic_probe_t semantic = {0};
+    intake_mapper_probe_t mapper_probe = {0, SALTS_OK};
+    turbo_flow_protocol_t *protocol = intake_test_semantic_protocol(&semantic);
+    flow_protocol_network_intake_settings_t settings =
+        intake_test_settings(TURBO_FLOW_PROTOCOL_COAP);
+    turbo_flow_protocol_mapper_v1_t mapper = intake_test_mapper(&mapper_probe);
+    turbo_flow_protocol_mapper_contract_t contract = intake_test_mapper_contract();
+    turbo_flow_inbox_t inbox = intake_test_inbox(1u);
+    flow_protocol_network_intake_sink_t *sink = NULL;
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow;
+    intake_completion_probe_t completion;
+    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
+    turbo_flow_msg_t message;
+    uint64_t record_id;
+
+    settings.schema_version = 3u;
+    memcpy(settings.mapper_semantic_media_type, "application/json",
+           sizeof("application/json"));
+    flow = intake_test_flow_with_mapper(&sink, protocol, &inbox, &settings,
+                                        &mapper, &contract, &downstream, &binding);
+
+    intake_probe_init(&completion);
+    message = intake_packet_message(20u, 1u, 1u, coap_post, sizeof(coap_post));
+    check_equal(intake_publish(flow, &message, &completion), SALTS_OK);
+    intake_wait_calls(&completion, 1u);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
+    check_equal(semantic.decode_calls, (size_t)1u);
+    check_equal(mapper_probe.calls, (size_t)1u);
+
+    check_equal(turbo_flow_inbox_claim(&inbox, &claim), SALTS_OK);
+    check_equal(claim.record.content.domain, TURBO_FLOW_DOMAIN_DATA);
+    check_equal(claim.record.content.encoding, TURBO_FLOW_DATA_ENCODING_JSON);
+    check_equal(claim.record.content.schema_version, 1u);
+    check_equal(claim.record.content.schema_name, "rulesforge.Applicant.data");
+    check_equal(claim.record.content.type_name, "Applicant");
+    check_equal(claim.record.payload.len, sizeof(canonical) - 1u);
+    check_equal(claim.record.payload.data, canonical, sizeof(canonical) - 1u);
+    record_id = claim.record_id;
+    check_equal(turbo_flow_inbox_complete(&inbox, &claim), SALTS_OK);
+    check_equal(turbo_flow_inbox_forget(&inbox, record_id), SALTS_OK);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
+  }
+
+  it("fails mapping before durable admission without raw-envelope fallback") {
+    static const uint8_t coap_post[] = {0x40u, 0x02u, 0x12u, 0x35u};
+    intake_semantic_probe_t semantic = {0};
+    intake_mapper_probe_t mapper_probe = {0, SALTS_EPROTO};
+    turbo_flow_protocol_t *protocol = intake_test_semantic_protocol(&semantic);
+    flow_protocol_network_intake_settings_t settings =
+        intake_test_settings(TURBO_FLOW_PROTOCOL_COAP);
+    turbo_flow_protocol_mapper_v1_t mapper = intake_test_mapper(&mapper_probe);
+    turbo_flow_protocol_mapper_contract_t contract = intake_test_mapper_contract();
+    turbo_flow_inbox_t inbox = intake_test_inbox(1u);
+    flow_protocol_network_intake_sink_t *sink = NULL;
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    turbo_flow_t *flow;
+    intake_completion_probe_t completion;
+    turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
+    turbo_flow_msg_t message;
+
+    settings.schema_version = 3u;
+    memcpy(settings.mapper_semantic_media_type, "application/json",
+           sizeof("application/json"));
+    flow = intake_test_flow_with_mapper(&sink, protocol, &inbox, &settings,
+                                        &mapper, &contract, &downstream, &binding);
+
+    intake_probe_init(&completion);
+    message = intake_packet_message(21u, 1u, 1u, coap_post, sizeof(coap_post));
+    check_equal(intake_publish(flow, &message, &completion), SALTS_OK);
+    intake_wait_calls(&completion, 1u);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_EPROTO);
+    check_equal(semantic.decode_calls, (size_t)1u);
+    check_equal(mapper_probe.calls, (size_t)1u);
+    check_equal(turbo_flow_inbox_snapshot(&inbox, &snapshot), SALTS_OK);
+    check_equal(snapshot.pending_records, (size_t)0u);
+    check_equal(snapshot.admitted, (uint64_t)0u);
     intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
   }
 
