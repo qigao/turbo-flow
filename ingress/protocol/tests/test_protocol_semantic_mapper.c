@@ -154,15 +154,29 @@ spec("protocol semantic decode and mapper ABI") {
     turbo_flow_protocol_destroy(protocol);
   }
 
-  it("defines a bounded pre-durable mapper contract without raw-frame access") {
-    turbo_flow_protocol_mapper_request_t request = TURBO_FLOW_PROTOCOL_MAPPER_REQUEST_INIT;
-    turbo_flow_protocol_mapper_output_t output = TURBO_FLOW_PROTOCOL_MAPPER_OUTPUT_INIT;
+  it("defines preflight plus bounded pre-durable mapping without raw-frame access") {
+    turbo_flow_protocol_mapper_preflight_request_t preflight =
+        TURBO_FLOW_PROTOCOL_MAPPER_PREFLIGHT_REQUEST_INIT;
+    turbo_flow_protocol_mapper_contract_t contract =
+        TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT;
+    turbo_flow_protocol_mapper_request_t request =
+        TURBO_FLOW_PROTOCOL_MAPPER_REQUEST_INIT;
+    turbo_flow_protocol_mapper_output_t output =
+        TURBO_FLOW_PROTOCOL_MAPPER_OUTPUT_INIT;
     turbo_flow_protocol_mapper_v1_t mapper = TURBO_FLOW_PROTOCOL_MAPPER_V1_INIT;
+    check_equal(preflight.size, sizeof(preflight));
+    check_equal(contract.size, sizeof(contract));
     check_equal(request.size, sizeof(request));
     check_equal(output.size, sizeof(output));
     check_equal(mapper.size, sizeof(mapper));
+    check_equal(preflight.semantic_type, TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE);
+    check_equal(contract.semantic_type, TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE);
     check_equal(request.semantic_type, TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE);
+    check_equal(contract.content.size, sizeof(contract.content));
+    check_equal(contract.content.domain, TURBO_FLOW_DOMAIN_DATA);
+    check_equal(output.content.size, sizeof(output.content));
     check_equal(output.payload_size, (size_t)0u);
+    check_null(mapper.preflight);
     check_null(mapper.map);
   }
 }
