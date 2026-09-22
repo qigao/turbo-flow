@@ -385,6 +385,7 @@ static turbo_flow_inbox_record_t intake_prefill_record(void) {
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf("prefill", sizeof("prefill") - 1u);
+  record.partition_key = vstr_from_buf("prefill", sizeof("prefill") - 1u);
   record.admission_id = vstr_from_buf("prefill", sizeof("prefill") - 1u);
   record.source_sequence = 1u;
   check_equal(turbo_flow_content_descriptor_init(
