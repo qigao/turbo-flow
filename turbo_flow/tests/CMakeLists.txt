@@ -987,3 +987,49 @@ if(WIN32)
     PROPERTIES ENVIRONMENT_MODIFICATION
                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>;PATH=path_list_prepend:$<TARGET_FILE_DIR:Salts::DataBind>")
 endif()
+
+
+# Protocol mapper PluginHost catalog (ABI 3.2).
+foreach(_mapper_case IN ITEMS GOOD SECOND DUPLICATE MISSING_MAP)
+  string(TOLOWER "${_mapper_case}" _mapper_case_lower)
+  add_library(test_flow_protocol_mapper_fixture_${_mapper_case_lower} SHARED
+    plugin_protocol_mapper_fixture.c)
+  target_link_libraries(test_flow_protocol_mapper_fixture_${_mapper_case_lower}
+    PRIVATE TurboFlow::PluginHost)
+  target_compile_definitions(test_flow_protocol_mapper_fixture_${_mapper_case_lower}
+    PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+  set_target_properties(test_flow_protocol_mapper_fixture_${_mapper_case_lower}
+    PROPERTIES FOLDER "turbo_flow/tests/plugin-fixtures")
+endforeach()
+
+target_compile_definitions(test_flow_protocol_mapper_fixture_second PRIVATE
+  FLOW_PROTOCOL_MAPPER_FIXTURE_ID="fixture.protocol-mapper.second"
+  FLOW_PROTOCOL_MAPPER_NAME="fixture.mapper.second")
+target_compile_definitions(test_flow_protocol_mapper_fixture_duplicate PRIVATE
+  FLOW_PROTOCOL_MAPPER_FIXTURE_ID="fixture.protocol-mapper.duplicate"
+  FLOW_PROTOCOL_MAPPER_MODE=1)
+target_compile_definitions(test_flow_protocol_mapper_fixture_missing_map PRIVATE
+  FLOW_PROTOCOL_MAPPER_FIXTURE_ID="fixture.protocol-mapper.missing-map"
+  FLOW_PROTOCOL_MAPPER_MODE=2)
+
+add_executable(test_flow_plugin_protocol_mapper
+  test_flow_plugin_protocol_mapper.c
+  plugin_protocol_mapper_header_cpp.cpp)
+target_link_libraries(test_flow_plugin_protocol_mapper
+  PRIVATE TurboFlow::PluginHost Salts::TinyTest)
+target_compile_definitions(test_flow_plugin_protocol_mapper PRIVATE
+  FLOW_PROTOCOL_MAPPER_GOOD="$<TARGET_FILE:test_flow_protocol_mapper_fixture_good>"
+  FLOW_PROTOCOL_MAPPER_SECOND="$<TARGET_FILE:test_flow_protocol_mapper_fixture_second>"
+  FLOW_PROTOCOL_MAPPER_DUPLICATE="$<TARGET_FILE:test_flow_protocol_mapper_fixture_duplicate>"
+  FLOW_PROTOCOL_MAPPER_MISSING_MAP="$<TARGET_FILE:test_flow_protocol_mapper_fixture_missing_map>")
+add_dependencies(test_flow_plugin_protocol_mapper
+  test_flow_protocol_mapper_fixture_good
+  test_flow_protocol_mapper_fixture_second
+  test_flow_protocol_mapper_fixture_duplicate
+  test_flow_protocol_mapper_fixture_missing_map)
+set_target_properties(test_flow_plugin_protocol_mapper
+  PROPERTIES FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_protocol_mapper
+  COMMAND test_flow_plugin_protocol_mapper)
+set_tests_properties(test_flow_plugin_protocol_mapper
+  PROPERTIES LABELS "graph;plugin;abi3;protocol-mapper" TIMEOUT 30)
