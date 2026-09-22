@@ -15,6 +15,8 @@ typedef struct flow_protocol_plugin_descriptor_s {
   turbo_flow_protocol_reply_fn reply;
   turbo_flow_protocol_encode_fn encode;
   void *inspect_ctx;
+  /** Optional append-only semantic ingress decoder; NULL preserves legacy raw-only decode. */
+  turbo_flow_protocol_decode_semantic_fn decode_semantic;
 } flow_protocol_plugin_descriptor_t;
 
 typedef struct flow_protocol_root_plugin_s {

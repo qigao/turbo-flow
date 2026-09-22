@@ -38,6 +38,7 @@ int flow_protocol_plugin_open(
   ops.inspect = descriptor->inspect;
   ops.reply = descriptor->reply;
   ops.encode = descriptor->encode;
+  ops.decode_semantic = descriptor->decode_semantic;
   if (ops.reply) capabilities |= TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY;
   if (ops.encode) capabilities |= TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE;
   rc = turbo_flow_protocol_create(

@@ -106,3 +106,18 @@ add_library(protocol_network_cpp_contract OBJECT
 target_include_directories(protocol_network_cpp_contract PRIVATE ${_tf_include_dirs})
 target_compile_options(protocol_network_cpp_contract PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
 target_link_libraries(protocol_network_cpp_contract PRIVATE Salts::Core Salts::CFlow Salts::CNet)
+
+
+add_executable(protocol_semantic_mapper_contract
+    "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/common/src/flow_protocol.c"
+    "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/test_protocol_semantic_mapper.c"
+    "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/protocol_semantic_mapper_header_cpp.cpp")
+target_include_directories(protocol_semantic_mapper_contract PRIVATE ${_tf_include_dirs})
+target_compile_definitions(protocol_semantic_mapper_contract PRIVATE TURBO_FLOW_BUILD)
+target_compile_options(protocol_semantic_mapper_contract PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>
+    $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
+target_link_options(protocol_semantic_mapper_contract PRIVATE
+    -fsanitize=address -fsanitize=undefined)
+target_link_libraries(protocol_semantic_mapper_contract PRIVATE
+    Salts::Core Salts::TinyTest)
