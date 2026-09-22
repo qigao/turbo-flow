@@ -72,6 +72,14 @@ static int fixture_map(
     return SALTS_EINVAL;
   memcpy(output->payload, request->semantic_data, request->semantic_size);
   output->payload_size = request->semantic_size;
+  if (turbo_flow_content_descriptor_init(
+          &output->content, TURBO_FLOW_DOMAIN_DATA,
+          TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_JSON,
+          "application/json", "fixture.mapper") != SALTS_OK)
+    return SALTS_EPROTO;
+  if (turbo_flow_content_descriptor_declare_schema(
+          &output->content, "rulesforge.Applicant.data", "Applicant", 1u) != SALTS_OK)
+    return SALTS_EPROTO;
   return SALTS_OK;
 }
 
