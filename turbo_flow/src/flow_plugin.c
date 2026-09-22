@@ -84,6 +84,11 @@ typedef struct flow_plugin_materializer_s {
   size_t module_index;
 } flow_plugin_materializer_t;
 
+typedef struct flow_plugin_protocol_mapper_s {
+  turbo_flow_protocol_mapper_v1_t mapper;
+  size_t module_index;
+} flow_plugin_protocol_mapper_t;
+
 struct turbo_flow_plugin_host_s {
   turbo_flow_plugin_host_config_t config;
   turbo_flow_plugin_host_v1_t host_api;
@@ -97,6 +102,7 @@ struct turbo_flow_plugin_host_s {
   vec_t schemas;
   vec_t operations;
   vec_t materializers;
+  vec_t protocol_mappers;
   size_t active_snapshots;
   flow_plugin_host_state_t state;
 };
@@ -112,6 +118,7 @@ struct turbo_flow_plugin_catalog_snapshot_s {
   vec_t schemas;
   vec_t operations;
   vec_t materializers;
+  vec_t protocol_mappers;
   size_t leased_module_count;
   size_t references;
 };
@@ -128,6 +135,7 @@ typedef struct flow_plugin_registration_context_s {
   size_t schema_count_before;
   size_t operation_count_before;
   size_t materializer_count_before;
+  size_t protocol_mapper_count_before;
   int first_error;
 } flow_plugin_registration_context_t;
 
