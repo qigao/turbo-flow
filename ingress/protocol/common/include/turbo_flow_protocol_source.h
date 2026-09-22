@@ -27,9 +27,9 @@ typedef struct turbo_flow_protocol_source_config_s {
   size_t max_sessions;
   size_t max_frame_size;
   /**
-   * Hard allocation budget for all session frame buffers plus one decode
-   * scratch buffer. create fails unless it covers
-   * (max_sessions + 1) * max_frame_size.
+   * Hard allocation budget for all session frame buffers plus the raw decode
+   * scratch and, in SEMANTIC mode, the semantic scratch. create fails unless
+   * it covers (max_sessions + 1) * max_frame_size + max_semantic_bytes.
    */
   size_t max_buffered_bytes;
   /** RAW preserves ABI1 behavior; SEMANTIC additionally invokes the codec's
@@ -43,7 +43,8 @@ typedef struct turbo_flow_protocol_source_config_s {
   {sizeof(turbo_flow_protocol_source_config_t), TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION,            \
    TURBO_FLOW_PROTOCOL_SOURCE_DEFAULT_MAX_SESSIONS,                                                \
    TURBO_FLOW_PROTOCOL_SOURCE_DEFAULT_MAX_FRAME_SIZE,                                              \
-   TURBO_FLOW_PROTOCOL_SOURCE_DEFAULT_MAX_BUFFERED_BYTES}
+   TURBO_FLOW_PROTOCOL_SOURCE_DEFAULT_MAX_BUFFERED_BYTES,                                          \
+   TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW, 0u}
 
 typedef struct turbo_flow_protocol_source_session_open_request_s {
   size_t size;
