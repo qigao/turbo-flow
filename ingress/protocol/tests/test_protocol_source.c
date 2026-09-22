@@ -11,6 +11,8 @@ typedef struct source_probe_s {
   size_t successful_admits;
   size_t closes;
   size_t codec_replies;
+  size_t inspect_calls;
+  size_t semantic_decode_calls;
   size_t capacity_failures;
   uint64_t last_delivery_id;
   uint64_t last_session_id;
@@ -21,6 +23,10 @@ typedef struct source_probe_s {
   char last_operation[TURBO_FLOW_PROTOCOL_OPERATION_MAX + 1u];
   uint8_t last_payload[64];
   size_t last_payload_size;
+  uint8_t last_semantic[64];
+  size_t last_semantic_size;
+  uint32_t last_semantic_type;
+  char last_semantic_media_type[TURBO_FLOW_PROTOCOL_SEMANTIC_MEDIA_TYPE_MAX + 1u];
 } source_probe_t;
 
 static int source_inspect(void *ctx, const char *configured_version,
@@ -29,11 +35,38 @@ static int source_inspect(void *ctx, const char *configured_version,
   source_probe_t *probe = (source_probe_t *)ctx;
   (void)configured_version;
   if (!frame || !metadata || !frame->data || frame->data_size == 0u) return SALTS_EPROTO;
-  if (probe && probe->inspect_status != SALTS_OK) return probe->inspect_status;
+  if (probe) {
+    probe->inspect_calls++;
+    if (probe->inspect_status != SALTS_OK) return probe->inspect_status;
+  }
   metadata->message_type = frame->data[0];
   metadata->sequence = frame->data_size;
   memcpy(metadata->operation, "frame", sizeof("frame"));
   if (!frame->device_id) memcpy(metadata->device_id, "frame-device", sizeof("frame-device"));
+  return SALTS_OK;
+}
+
+static int source_decode_semantic(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata,
+    turbo_flow_protocol_semantic_output_t *output) {
+  static const char semantic[] = "{\"age\":21}";
+  source_probe_t *probe = (source_probe_t *)ctx;
+  (void)configured_version;
+  if (!probe || !frame || !frame->data || frame->data_size == 0u || !metadata || !output ||
+      output->size != sizeof(*output) ||
+      output->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+      !output->data || output->capacity < sizeof(semantic) - 1u)
+    return SALTS_EINVAL;
+  probe->semantic_decode_calls++;
+  metadata->message_type = frame->data[0];
+  metadata->sequence = frame->data_size;
+  memcpy(metadata->operation, "semantic", sizeof("semantic"));
+  memcpy(output->data, semantic, sizeof(semantic) - 1u);
+  output->data_size = sizeof(semantic) - 1u;
+  output->semantic_type = 50u;
+  memcpy(output->media_type, "application/json", sizeof("application/json"));
   return SALTS_OK;
 }
 
@@ -72,6 +105,20 @@ static int source_admit(void *ctx, const turbo_flow_protocol_source_admit_reques
   probe->last_payload_size = request->message->payload_size;
   memcpy(probe->last_operation, request->message->metadata.operation,
          sizeof(probe->last_operation));
+  probe->last_semantic_size = 0u;
+  probe->last_semantic_type = TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE;
+  probe->last_semantic_media_type[0] = '\0';
+  if (request->semantic) {
+    if (request->semantic->size != sizeof(*request->semantic) ||
+        request->semantic->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+        request->semantic->data_size > sizeof(probe->last_semantic))
+      return SALTS_EPROTO;
+    memcpy(probe->last_semantic, request->semantic->data, request->semantic->data_size);
+    probe->last_semantic_size = request->semantic->data_size;
+    probe->last_semantic_type = request->semantic->semantic_type;
+    memcpy(probe->last_semantic_media_type, request->semantic->media_type,
+           sizeof(probe->last_semantic_media_type));
+  }
   probe->successful_admits++;
   return SALTS_OK;
 }
@@ -98,6 +145,40 @@ static int source_protocol_create(turbo_flow_protocol_kind_t protocol, source_pr
       TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
           TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE | TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY,
       &ops, probe, out);
+}
+
+static int source_protocol_create_semantic(source_probe_t *probe,
+                                           turbo_flow_protocol_t **out) {
+  turbo_flow_protocol_open_request_t request = TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
+  turbo_flow_protocol_codec_ops_t ops = TURBO_FLOW_PROTOCOL_CODEC_OPS_INIT;
+  request.protocol = TURBO_FLOW_PROTOCOL_COAP;
+  request.protocol_version = "test";
+  request.max_frame_size = 64u;
+  ops.inspect = source_inspect;
+  ops.reply = source_codec_reply;
+  ops.decode_semantic = source_decode_semantic;
+  return turbo_flow_protocol_create(
+      &request, "source-semantic-test", "test",
+      TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
+          TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE | TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
+          TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE,
+      &ops, probe, out);
+}
+
+static int source_create_semantic(turbo_flow_protocol_t *protocol, source_probe_t *probe,
+                                  size_t max_sessions, size_t max_semantic_bytes,
+                                  turbo_flow_protocol_source_t **out) {
+  turbo_flow_protocol_source_config_t config = TURBO_FLOW_PROTOCOL_SOURCE_CONFIG_INIT;
+  turbo_flow_protocol_source_ops_t ops = TURBO_FLOW_PROTOCOL_SOURCE_OPS_INIT;
+  config.max_sessions = max_sessions;
+  config.max_frame_size = 64u;
+  config.decode_mode = TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC;
+  config.max_semantic_bytes = max_semantic_bytes;
+  config.max_buffered_bytes =
+      (max_sessions + 1u) * config.max_frame_size + config.max_semantic_bytes;
+  ops.admit = source_admit;
+  ops.session_closed = source_closed;
+  return turbo_flow_protocol_source_create(protocol, &config, &ops, probe, out);
 }
 
 static int source_create(turbo_flow_protocol_t *protocol, source_probe_t *probe,
@@ -143,7 +224,7 @@ spec("protocol source") {
         TURBO_FLOW_PROTOCOL_SOURCE_SESSION_OPEN_REQUEST_INIT;
     turbo_flow_protocol_source_feed_result_t feed = TURBO_FLOW_PROTOCOL_SOURCE_FEED_RESULT_INIT;
     turbo_flow_protocol_source_snapshot_t snapshot = TURBO_FLOW_PROTOCOL_SOURCE_SNAPSHOT_INIT;
-    check_equal(TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION, 1u);
+    check_equal(TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION, 2u);
     check_equal(source_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &probe, &protocol), SALTS_OK);
     config.max_sessions = 1u;
     config.max_frame_size = 64u;
@@ -223,6 +304,71 @@ spec("protocol source") {
     check_equal(turbo_flow_protocol_source_begin_shutdown(source), SALTS_OK);
     check_equal(turbo_flow_protocol_source_destroy(source), SALTS_OK);
     turbo_flow_protocol_destroy(protocol);
+  }
+
+  it("admits codec-owned semantic bytes without reparsing the raw frame") {
+    static const uint8_t frame[] = {0x42u, 0x01u, 0x02u};
+    static const char expected[] = "{\"age\":21}";
+    source_probe_t probe = {0};
+    turbo_flow_protocol_t *protocol = NULL;
+    turbo_flow_protocol_source_t *source = NULL;
+    turbo_flow_protocol_source_feed_result_t result = TURBO_FLOW_PROTOCOL_SOURCE_FEED_RESULT_INIT;
+
+    check_equal(source_protocol_create_semantic(&probe, &protocol), SALTS_OK);
+    check_equal(source_create_semantic(protocol, &probe, 1u, 32u, &source), SALTS_OK);
+    check_equal(source_session_open(source, 20u, "sensor-20"), SALTS_OK);
+    check_equal(turbo_flow_protocol_source_session_feed(
+                    source, 20u, 1u, frame, sizeof(frame), &result),
+                SALTS_OK);
+    check_equal(result.frames_admitted, 1u);
+    check_equal(probe.semantic_decode_calls, (size_t)1u);
+    check_equal(probe.inspect_calls, (size_t)0u);
+    check_equal(probe.last_payload_size, sizeof(frame));
+    check_equal(probe.last_payload, frame, sizeof(frame));
+    check_equal(probe.last_operation, "semantic");
+    check_equal(probe.last_semantic_size, sizeof(expected) - 1u);
+    check_equal(probe.last_semantic, expected, sizeof(expected) - 1u);
+    check_equal(probe.last_semantic_type, 50u);
+    check_equal(probe.last_semantic_media_type, "application/json");
+    check_equal(turbo_flow_protocol_source_begin_shutdown(source), SALTS_OK);
+    check_equal(turbo_flow_protocol_source_destroy(source), SALTS_OK);
+    turbo_flow_protocol_destroy(protocol);
+  }
+
+  it("fails semantic Source creation before admission when capability or budget is missing") {
+    source_probe_t probe = {0};
+    turbo_flow_protocol_t *raw_protocol = NULL;
+    turbo_flow_protocol_t *semantic_protocol = NULL;
+    turbo_flow_protocol_source_t *source = NULL;
+    turbo_flow_protocol_source_config_t config = TURBO_FLOW_PROTOCOL_SOURCE_CONFIG_INIT;
+    turbo_flow_protocol_source_ops_t ops = TURBO_FLOW_PROTOCOL_SOURCE_OPS_INIT;
+
+    ops.admit = source_admit;
+    check_equal(source_protocol_create(TURBO_FLOW_PROTOCOL_COAP, &probe, &raw_protocol), SALTS_OK);
+    config.max_sessions = 1u;
+    config.max_frame_size = 64u;
+    config.decode_mode = TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC;
+    config.max_semantic_bytes = 32u;
+    config.max_buffered_bytes = 160u;
+    check_equal(turbo_flow_protocol_source_create(
+                    raw_protocol, &config, &ops, &probe, &source),
+                SALTS_ENOTSUP);
+    check_null(source);
+    turbo_flow_protocol_destroy(raw_protocol);
+
+    check_equal(source_protocol_create_semantic(&probe, &semantic_protocol), SALTS_OK);
+    config.max_buffered_bytes = 128u;
+    check_equal(turbo_flow_protocol_source_create(
+                    semantic_protocol, &config, &ops, &probe, &source),
+                SALTS_ENOSPC);
+    check_null(source);
+    config.max_buffered_bytes = 160u;
+    config.max_semantic_bytes = 0u;
+    check_equal(turbo_flow_protocol_source_create(
+                    semantic_protocol, &config, &ops, &probe, &source),
+                SALTS_EINVAL);
+    check_null(source);
+    turbo_flow_protocol_destroy(semantic_protocol);
   }
 
   it("validates the complete protocol version before comparing it") {
