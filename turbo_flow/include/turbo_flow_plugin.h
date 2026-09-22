@@ -4,7 +4,6 @@
 #include "turbo_flow_product.h"
 #include "turbo_flow_plugin_materializer.h"
 #include "turbo_flow_plugin_operation.h"
-#include "turbo_flow_plugin_protocol_mapper.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -32,6 +31,11 @@ extern "C" {
 
 typedef struct turbo_flow_plugin_host_s turbo_flow_plugin_host_t;
 typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_snapshot_t;
+struct turbo_flow_protocol_mapper_v1_s;
+struct turbo_flow_plugin_protocol_mapper_catalog_v1_s;
+
+typedef int (*turbo_flow_plugin_add_protocol_mapper_fn)(
+    void *ctx, const struct turbo_flow_protocol_mapper_v1_s *mapper);
 
 typedef uint64_t turbo_flow_plugin_capabilities_t;
 enum {
@@ -323,7 +327,7 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_materializer_catalog(
 /** Borrow immutable pre-durable protocol mapper descriptors from a live catalog snapshot. */
 TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_protocol_mapper_catalog(
     const turbo_flow_plugin_catalog_snapshot_t *snapshot,
-    turbo_flow_plugin_protocol_mapper_catalog_v1_t *catalog_out);
+    struct turbo_flow_plugin_protocol_mapper_catalog_v1_s *catalog_out);
 /** Release a snapshot and all module leases; accepts NULL. */
 TURBO_FLOW_C_API void
 turbo_flow_plugin_catalog_snapshot_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot);
