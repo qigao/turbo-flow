@@ -1,6 +1,7 @@
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_protocol_mapper.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifndef FLOW_PROTOCOL_MAPPER_FIXTURE_ID
