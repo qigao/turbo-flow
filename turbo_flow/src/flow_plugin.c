@@ -409,7 +409,8 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
       TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
       TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL | TURBO_FLOW_PLUGIN_CAP_SCHEMA |
       (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_OPERATION |
-      (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_MATERIALIZER;
+      (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_MATERIALIZER |
+      (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_PROTOCOL_MAPPER;
   if (!api || api->size != sizeof(*api) || api->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       api->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
@@ -958,6 +959,15 @@ static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
 
 static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
   int rc;
+  rc = turbo_flow_stl_error(
+      vec_init_bytes(&host->protocol_mappers, sizeof(flow_plugin_protocol_mapper_t),
+                     _Alignof(turbo_flow_max_align_t), host->config.protocol_mapper_capacity));
+  if (rc != SALTS_OK) return rc;
+  if (host->config.protocol_mapper_capacity) {
+    rc = turbo_flow_stl_error(
+        vec_reserve(&host->protocol_mappers, host->config.protocol_mapper_capacity));
+    if (rc != SALTS_OK) return rc;
+  }
   rc = turbo_flow_stl_error(vec_init_bytes(&host->materializers, sizeof(flow_plugin_materializer_t),
                                            _Alignof(turbo_flow_max_align_t),
                                            host->config.materializer_capacity));
@@ -1034,6 +1044,7 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
 
 static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
   if (!host) return;
+  vec_destroy(&host->protocol_mappers);
   vec_destroy(&host->materializers);
   vec_destroy(&host->operations);
   vec_destroy(&host->schemas);
@@ -1071,7 +1082,8 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
       normalized.transactional_resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.schema_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.operation_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      normalized.materializer_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
+      normalized.materializer_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
+      normalized.protocol_mapper_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS) {
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
                                    NULL, "invalid bounded PluginHost configuration");
   }
@@ -1183,6 +1195,7 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
   registration.schema_count_before = vec_size(&host->schemas);
   registration.operation_count_before = vec_size(&host->operations);
   registration.materializer_count_before = vec_size(&host->materializers);
+  registration.protocol_mapper_count_before = vec_size(&host->protocol_mappers);
   registration.first_error = SALTS_OK;
   registration_api.size = sizeof(registration_api);
   registration_api.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
@@ -1199,6 +1212,7 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
   registration_api.add_schema = flow_plugin_add_schema;
   registration_api.add_operation = flow_plugin_add_operation;
   registration_api.add_materializer = flow_plugin_add_materializer;
+  registration_api.add_protocol_mapper = flow_plugin_add_protocol_mapper;
   rc = api->register_capabilities(plugin, &registration_api);
   if (registration.first_error != SALTS_OK) rc = registration.first_error;
   if (rc == SALTS_OK) rc = flow_plugin_operation_resolve_schemas(&registration);
@@ -1225,6 +1239,8 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
       actual |= TURBO_FLOW_PLUGIN_CAP_OPERATION;
     if (vec_size(&host->materializers) > registration.materializer_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_MATERIALIZER;
+    if (vec_size(&host->protocol_mappers) > registration.protocol_mapper_count_before)
+      actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL_MAPPER;
     if (actual != (api->capabilities & ~TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
@@ -1338,6 +1354,10 @@ turbo_flow_plugin_host_transactional_resource_provider_count(const turbo_flow_pl
 
 size_t turbo_flow_plugin_host_materializer_count(const turbo_flow_plugin_host_t *host) {
   return host ? vec_size(&host->materializers) : 0u;
+}
+
+size_t turbo_flow_plugin_host_protocol_mapper_count(const turbo_flow_plugin_host_t *host) {
+  return host ? vec_size(&host->protocol_mappers) : 0u;
 }
 
 static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_snapshot_t *snapshot,
