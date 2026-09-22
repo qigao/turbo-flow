@@ -752,6 +752,62 @@ static int flow_plugin_add_materializer(
   return rc;
 }
 
+
+static int flow_plugin_protocol_mapper_valid(const turbo_flow_protocol_mapper_v1_t *mapper) {
+  if (!mapper || mapper->size != sizeof(*mapper) ||
+      mapper->abi_version != TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION ||
+      flow_plugin_bounded_length(mapper->name, TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX) == 0u ||
+      flow_plugin_bounded_length(mapper->name, TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX) >
+          TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX ||
+      mapper->protocol < TURBO_FLOW_PROTOCOL_MQTT_SN ||
+      mapper->protocol > TURBO_FLOW_PROTOCOL_JTT_808 ||
+      flow_plugin_bounded_length(mapper->profile, TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX) == 0u ||
+      flow_plugin_bounded_length(mapper->profile, TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX) >
+          TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX ||
+      !mapper->max_semantic_bytes || !mapper->max_output_bytes ||
+      !mapper->preflight || !mapper->map)
+    return SALTS_EINVAL;
+  return SALTS_OK;
+}
+
+static int flow_plugin_find_protocol_mapper(
+    const turbo_flow_plugin_host_t *host,
+    const turbo_flow_protocol_mapper_v1_t *mapper) {
+  if (!host || !mapper) return -1;
+  for (size_t i = 0u; i < vec_size(&host->protocol_mappers); ++i) {
+    const flow_plugin_protocol_mapper_t *entry =
+        (const flow_plugin_protocol_mapper_t *)vec_at_const(&host->protocol_mappers, i);
+    if (entry && entry->mapper.protocol == mapper->protocol &&
+        strcmp(entry->mapper.name, mapper->name) == 0 &&
+        strcmp(entry->mapper.profile, mapper->profile) == 0)
+      return (int)i;
+  }
+  return -1;
+}
+
+static int flow_plugin_add_protocol_mapper(
+    void *ctx, const turbo_flow_protocol_mapper_v1_t *mapper) {
+  flow_plugin_registration_context_t *registration =
+      (flow_plugin_registration_context_t *)ctx;
+  flow_plugin_protocol_mapper_t entry;
+  int rc;
+  if (!registration || !registration->host) return SALTS_EINVAL;
+  if (registration->first_error != SALTS_OK) return registration->first_error;
+  rc = flow_plugin_protocol_mapper_valid(mapper);
+  if (rc != SALTS_OK) return registration->first_error = rc;
+  if (flow_plugin_find_protocol_mapper(registration->host, mapper) >= 0)
+    return registration->first_error = SALTS_EALREADY;
+  if (vec_size(&registration->host->protocol_mappers) >=
+      registration->host->config.protocol_mapper_capacity)
+    return registration->first_error = SALTS_ENOSPC;
+  memset(&entry, 0, sizeof(entry));
+  entry.mapper = *mapper;
+  entry.module_index = registration->module_index;
+  rc = turbo_flow_stl_error(vec_push(&registration->host->protocol_mappers, &entry));
+  if (rc != SALTS_OK) registration->first_error = rc;
+  return rc;
+}
+
 static int flow_plugin_operation_schema_valid(const turbo_flow_plugin_operation_schema_v3_t *s) {
   if (s->size != sizeof(*s) || s->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       s->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !s->schema_version || !s->projection ||
