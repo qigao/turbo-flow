@@ -236,17 +236,24 @@ spec("Graph durable admission boundaries") {
     check_equal(f.calls, 0u); check_storage(&f, 0u);
     turbo_flow_msg_cleanup(&msg); fixture_close(&f);
   }
-  it("rejects malformed payload and transport context without losing caller ownership") {
+  it("rejects malformed payload but cuts transport context from durable storage") {
     admission_fixture_t f; turbo_flow_msg_t msg;
+    turbo_flow_inbox_claim_t claim = TURBO_FLOW_INBOX_CLAIM_INIT;
     fixture_open(&f, TURBO_FLOW_DURABLE_IDENTITY_GENERATED); message_init(&msg);
     msg.payload.len++;
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EINVAL);
     msg.payload.data = NULL;
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EINVAL);
-    msg.payload = tstr_to_v(msg.owned_payload); msg.transport_context = &f;
-    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ENOTSUP);
-    check_equal(f.calls, 0u); check_storage(&f, 0u);
+    msg.payload = tstr_to_v(msg.owned_payload);
+    msg.transport_context = &f;
+    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_OK);
+    check_equal(f.calls, 1u); check_storage(&f, 1u);
+    check_equal(msg.transport_context, &f);
     check_equal(msg.payload.data, "data", 4u);
+    check_equal(turbo_flow_inbox_claim(&f.backing, &claim), SALTS_OK);
+    check_equal(claim.record.payload.data, "data", 4u);
+    check_equal(claim.record.payload.len, 4u);
+    check_equal(turbo_flow_inbox_complete(&f.backing, &claim), SALTS_OK);
     msg.transport_context = NULL; turbo_flow_msg_cleanup(&msg); fixture_close(&f);
   }
   it("rejects a projection without its descriptor or canonical payload") {
@@ -389,9 +396,13 @@ spec("Graph durable admission boundaries") {
     f.admit_status = SALTS_EIO;
     check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_EIO);
     f.admit_status = SALTS_OK;
-    msg.transport_context = &f;
-    check_equal(turbo_flow_publish(f.flow, "telemetry", &msg), SALTS_ENOTSUP);
-    msg.transport_context = NULL;
+    {
+      turbo_flow_msg_t malformed;
+      message_init(&malformed);
+      bind_projection(&malformed, 0);
+      check_equal(turbo_flow_publish(f.flow, "telemetry", &malformed), SALTS_ENOTSUP);
+      turbo_flow_msg_cleanup(&malformed);
+    }
 
     observed = (turbo_flow_durable_buffer_pressure_snapshot_t)
         TURBO_FLOW_DURABLE_BUFFER_PRESSURE_SNAPSHOT_INIT;
