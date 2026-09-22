@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef FLOW_PROTOCOL_NETWORK_SOURCE_KIND
+#define FLOW_PROTOCOL_NETWORK_SOURCE_KIND "cnet.listener_source"
+#endif
+#ifndef FLOW_PROTOCOL_NETWORK_SOURCE_SCHEME
+#define FLOW_PROTOCOL_NETWORK_SOURCE_SCHEME "tcp"
+#endif
+
 typedef struct network_source_fixture_root_s network_source_fixture_root_t;
 typedef struct network_source_fixture_owner_s network_source_fixture_owner_t;
 
@@ -132,7 +139,8 @@ static int fixture_connection_snapshot(void *ctx, turbo_flow_connection_snapshot
                    : (owner->started ? TURBO_FLOW_CONNECTION_READY
                                      : TURBO_FLOW_CONNECTION_STOPPED);
   out->last_status = owner->status;
-  count = snprintf(out->endpoint, sizeof(out->endpoint), "tcp://127.0.0.1:%u",
+  count = snprintf(out->endpoint, sizeof(out->endpoint),
+                   FLOW_PROTOCOL_NETWORK_SOURCE_SCHEME "://127.0.0.1:%u",
                    owner->started ? 12345u : 0u);
   return count < 0 || (size_t)count >= sizeof(out->endpoint) ? SALTS_ERANGE : SALTS_OK;
 }
@@ -300,7 +308,7 @@ static int fixture_register(void *plugin,
   if (!root || !registration || registration->size != sizeof(*registration) ||
       !registration->add_transactional_adapter_provider)
     return SALTS_EINVAL;
-  provider.kind = "cnet.listener_source";
+  provider.kind = FLOW_PROTOCOL_NETWORK_SOURCE_KIND;
   provider.ctx = &root->provider;
   provider.preflight = fixture_preflight;
   provider.materialize = fixture_materialize;
