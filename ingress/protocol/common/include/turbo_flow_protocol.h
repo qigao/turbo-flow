@@ -46,6 +46,7 @@ typedef uint64_t turbo_flow_protocol_capabilities_t;
 #define TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE (UINT64_C(1) << 2u)
 #define TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY (UINT64_C(1) << 3u)
 #define TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE (UINT64_C(1) << 4u)
+#define TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE (UINT64_C(1) << 5u)
 
 typedef struct turbo_flow_protocol_s turbo_flow_protocol_t;
 typedef struct turbo_flow_protocol_registry_s turbo_flow_protocol_registry_t;
