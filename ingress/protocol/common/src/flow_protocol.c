@@ -77,6 +77,20 @@ static int flow_protocol_cstr_segment_valid(const char *text, size_t maximum) {
   return length <= maximum && flow_protocol_segment_valid(text, length);
 }
 
+static int flow_protocol_ranges_overlap(const void *left, size_t left_size,
+                                        const void *right, size_t right_size) {
+  const uintptr_t left_begin = (uintptr_t)left;
+  const uintptr_t right_begin = (uintptr_t)right;
+  uintptr_t left_end, right_end;
+  if (left_size == 0u || right_size == 0u) return 0;
+  if (!left || !right || left_size > UINTPTR_MAX - left_begin ||
+      right_size > UINTPTR_MAX - right_begin)
+    return 1;
+  left_end = left_begin + left_size;
+  right_end = right_begin + right_size;
+  return left_begin < right_end && right_begin < left_end;
+}
+
 static int flow_protocol_frame_validate(const turbo_flow_protocol_t *protocol,
                                        const turbo_flow_protocol_frame_view_t *frame) {
   if (!protocol || !frame || frame->size < sizeof(*frame) ||
@@ -262,6 +276,14 @@ int turbo_flow_protocol_decode_semantic(
     return SALTS_EBUSY;
   if (!protocol->ops.decode_semantic) return SALTS_ENOTSUP;
   if (frame->data_size > raw_output->payload_capacity) return SALTS_EMSGSIZE;
+  if (flow_protocol_ranges_overlap(raw_output->payload,
+                                   raw_output->payload_capacity,
+                                   semantic_output->data,
+                                   semantic_output->capacity) ||
+      flow_protocol_ranges_overlap(frame->data, frame->data_size,
+                                   semantic_output->data,
+                                   semantic_output->capacity))
+    return SALTS_EINVAL;
 
   semantic = *semantic_output;
   semantic_data = semantic.data;
