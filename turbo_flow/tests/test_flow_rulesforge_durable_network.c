@@ -176,6 +176,15 @@ static cnet_datagram_peer ipv4_peer(uint16_t port) {
   return peer;
 }
 
+static void packet_receive_ignored(void *user, cnet_packet_endpoint *endpoint,
+                                   cnet_packet_session session,
+                                   const cnet_receive_view *view) {
+  (void)user;
+  (void)endpoint;
+  (void)session;
+  (void)view;
+}
+
 static void tcp_state(void *ctx, cnet_connection connection, cnet_connection_state state,
                       const cnet_error *error) {
   tcp_probe_t *probe = (tcp_probe_t *)ctx;
@@ -554,6 +563,7 @@ spec("RulesForge real network composition") {
     udp_config.datagram.max_datagram_bytes = 1024u;
     udp_config.datagram.receive_buffer_bytes = 1024u;
     udp_config.datagram.reuse_port = false;
+    udp_config.observer.on_receive = packet_receive_ignored;
     check_equal(cnet_packet_endpoint_init(&udp_peer, &udp_config), SALTS_OK);
     udp_destination = ipv4_peer(udp_port);
     check_equal(cnet_packet_session_open(&udp_peer, &udp_destination, 0u, &udp_session), SALTS_OK);
