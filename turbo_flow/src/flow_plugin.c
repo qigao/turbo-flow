@@ -937,6 +937,8 @@ static void flow_plugin_registration_rollback(flow_plugin_registration_context_t
                                registration->operation_count_before);
   flow_plugin_zero_vector_tail(&registration->host->materializers,
                                registration->materializer_count_before);
+  flow_plugin_zero_vector_tail(&registration->host->protocol_mappers,
+                               registration->protocol_mapper_count_before);
 }
 
 static void flow_plugin_cleanup_uncommitted(turbo_flow_plugin_host_t *host,
