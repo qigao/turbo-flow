@@ -125,10 +125,10 @@ static int intake_adapter_u32(const turbo_flow_resolved_adapter_view_t *view,
   int rc;
   if (!out) return SALTS_EINVAL;
   rc = turbo_flow_resolved_adapter_get_u64(view, field, &raw);
-  if (rc != SALTS_OK || raw == 0u || raw > UINT32_MAX)
+  if (rc != SALTS_OK || raw > UINT32_MAX)
     return intake_config_field_error(error, rc == SALTS_OK ? SALTS_ERANGE : SALTS_EINVAL,
                                      adapter_name, field,
-                                     "expected positive uint32 value");
+                                     "expected uint32 value");
   *out = (uint32_t)raw;
   return SALTS_OK;
 }
@@ -153,13 +153,13 @@ static int intake_read_source(const turbo_flow_resolved_adapter_view_t *source,
                                        "packet_mode is required");
     if (strcmp(mode, "udp") != 0)
       return intake_config_field_error(error, SALTS_ENOTSUP, source_adapter_name, "packet_mode",
-                                       "ProtocolNetworkIntake v2 supports UDP packet sources only");
+                                       "ProtocolNetworkIntake supports UDP packet sources only");
     settings->transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
     rc = intake_adapter_size(source, source_adapter_name, "session_capacity", transport_capacity,
                              error);
   } else {
     return intake_config_error(error, SALTS_ENOTSUP, "$.adapters",
-                               "ProtocolNetworkIntake v2 supports CNet listener or UDP packet sources");
+                               "ProtocolNetworkIntake supports CNet listener or UDP packet sources");
   }
   if (rc != SALTS_OK) return rc;
   rc = intake_adapter_size(source, source_adapter_name, "scheduler_max_steps_per_poll",
@@ -194,7 +194,7 @@ static int intake_read_protocol(const turbo_flow_resolved_adapter_view_t *intake
   else if (strcmp(kind, "coap") == 0) settings->protocol_kind = TURBO_FLOW_PROTOCOL_COAP;
   else
     return intake_config_field_error(error, SALTS_ENOTSUP, decoder_adapter_name, "protocol_kind",
-                                     "ProtocolNetworkIntake v2 supports jtt808 or coap only");
+                                     "ProtocolNetworkIntake supports jtt808 or coap only");
 
   rc = intake_adapter_size(intake, decoder_adapter_name, "max_sessions", &settings->max_sessions,
                            error);
