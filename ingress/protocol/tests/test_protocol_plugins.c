@@ -17,6 +17,16 @@ typedef struct protocol_case_s {
   size_t frame_size;
 } protocol_case_t;
 
+static int protocol_open_one(const char *module, const char *name,
+                             turbo_flow_protocol_kind_t protocol, const char *version,
+                             turbo_flow_plugin_host_t **host_out,
+                             turbo_flow_protocol_registry_t **registry_out,
+                             turbo_flow_protocol_owner_t **owner_out,
+                             turbo_flow_protocol_t **protocol_out);
+static void protocol_close_one(turbo_flow_plugin_host_t *host,
+                               turbo_flow_protocol_registry_t *registry,
+                               turbo_flow_protocol_owner_t *owner);
+
 static size_t protocol_gbt32960_frame(uint8_t *out, size_t capacity) {
   static const char vin[] = "L1234567890123456";
   uint8_t checksum = 0u;
