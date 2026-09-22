@@ -249,7 +249,7 @@ jobs:
             --target test_protocol_network_intake_config test_protocol_network_intake_core -j2 \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
           ctest --test-dir build/protocol-network-runtime \
-            -R '^test_protocol_network_intake_(config|core)
+            -R '^test_protocol_network_intake_(config|core)$' \
             --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
           git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt
