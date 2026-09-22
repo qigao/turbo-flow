@@ -1365,8 +1365,18 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
                                                    size_t protocols, size_t businesses,
                                                    size_t transactional_adapters,
                                                    size_t transactional_resources, size_t schemas,
-                                                   size_t operations, size_t materializers) {
+                                                   size_t operations, size_t materializers,
+                                                   size_t protocol_mappers) {
   int rc = turbo_flow_stl_error(vec_init_bytes(
+      &snapshot->protocol_mappers,
+      sizeof(turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t),
+      _Alignof(turbo_flow_max_align_t), protocol_mappers));
+  if (rc != SALTS_OK) return rc;
+  if (protocol_mappers) {
+    rc = turbo_flow_stl_error(vec_reserve(&snapshot->protocol_mappers, protocol_mappers));
+    if (rc != SALTS_OK) return rc;
+  }
+  rc = turbo_flow_stl_error(vec_init_bytes(
       &snapshot->materializers, sizeof(turbo_flow_plugin_materializer_catalog_entry_v1_t),
       _Alignof(turbo_flow_max_align_t), materializers));
   if (rc != SALTS_OK) return rc;
@@ -1432,6 +1442,7 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
 
 static void flow_plugin_snapshot_vectors_destroy(turbo_flow_plugin_catalog_snapshot_t *snapshot) {
   if (!snapshot) return;
+  vec_destroy(&snapshot->protocol_mappers);
   vec_destroy(&snapshot->materializers);
   vec_destroy(&snapshot->operations);
   vec_destroy(&snapshot->schemas);
@@ -1474,7 +1485,8 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
       vec_size(&host->protocol_providers), vec_size(&host->business_providers),
       vec_size(&host->transactional_adapter_providers),
       vec_size(&host->transactional_resource_providers), vec_size(&host->schemas),
-      vec_size(&host->operations), vec_size(&host->materializers));
+      vec_size(&host->operations), vec_size(&host->materializers),
+      vec_size(&host->protocol_mappers));
   if (rc != SALTS_OK) goto allocation_failed;
   for (size_t i = 0u; i < vec_size(&host->adapter_providers); ++i) {
     const flow_plugin_adapter_provider_t *entry =
@@ -1576,6 +1588,19 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
     rc = turbo_flow_stl_error(vec_push(&snapshot->materializers, &copy));
     if (rc != SALTS_OK) goto allocation_failed;
   }
+  for (size_t i = 0; i < vec_size(&host->protocol_mappers); ++i) {
+    const flow_plugin_protocol_mapper_t *entry = vec_at_const(&host->protocol_mappers, i);
+    const flow_plugin_module_t *module = flow_plugin_module_at_const(host, entry->module_index);
+    turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t copy;
+    if (!entry || !module || !module->api) {
+      rc = SALTS_EPROTO;
+      goto allocation_failed;
+    }
+    copy.plugin_id = module->api->plugin_id;
+    copy.mapper = entry->mapper;
+    rc = turbo_flow_stl_error(vec_push(&snapshot->protocol_mappers, &copy));
+    if (rc != SALTS_OK) goto allocation_failed;
+  }
   snapshot->host = host;
   snapshot->leased_module_count = vec_size(&host->modules);
   snapshot->references = 1u;
@@ -1607,6 +1632,22 @@ int turbo_flow_plugin_catalog_snapshot_materializer_catalog(
   out->entries = (const turbo_flow_plugin_materializer_catalog_entry_v1_t *)
       vec_data_const(&snapshot->materializers);
   out->count = vec_size(&snapshot->materializers);
+  return SALTS_OK;
+}
+
+int turbo_flow_plugin_catalog_snapshot_protocol_mapper_catalog(
+    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    turbo_flow_plugin_protocol_mapper_catalog_v1_t *out) {
+  if (!out || out->size != sizeof(*out) ||
+      out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+      out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
+    return SALTS_EINVAL;
+  *out = (turbo_flow_plugin_protocol_mapper_catalog_v1_t)
+      TURBO_FLOW_PLUGIN_PROTOCOL_MAPPER_CATALOG_V1_INIT;
+  if (!snapshot || !snapshot->references) return SALTS_EINVAL;
+  out->entries = (const turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t *)
+      vec_data_const(&snapshot->protocol_mappers);
+  out->count = vec_size(&snapshot->protocol_mappers);
   return SALTS_OK;
 }
 
