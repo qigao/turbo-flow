@@ -75,6 +75,12 @@ elif args.protocol_intake:
         "add_subdirectory(ingress/protocol/network)\n"
         "\n"
         "cmake_add_test(\n"
+        "  test_protocol_network_intake_config\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/ingress/protocol/tests/test_protocol_network_intake_config.c\n"
+        "  LIBS tf_protocol_network_intake_core Salts::TinyTest\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/ingress/protocol/network/src\n"
+        '  FOLDER "ingress/protocol/tests")\n'
+        "cmake_add_test(\n"
         "  test_protocol_network_intake_core\n"
         "  SOURCES ${CMAKE_SOURCE_DIR}/ingress/protocol/tests/test_protocol_network_intake_core.c\n"
         "  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest\n"
