@@ -198,6 +198,13 @@ jobs:
           cmake --build build/protocol-network-compile --parallel 2 \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/compile.log"
 
+      - name: Run semantic decode and mapper ABI contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./build/protocol-network-compile/protocol_semantic_mapper_contract \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/semantic-mapper.log"
+
       - name: Verify sanitizer instrumentation flags
         shell: bash
         run: |
@@ -208,6 +215,8 @@ jobs:
           grep -F 'flow_protocol_network_intake.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
           grep -F 'test_protocol_network_jtt808.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
           grep -F 'test_protocol_network_coap.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_semantic_mapper.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'protocol_semantic_mapper_header_cpp.cpp' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
 
       - name: Verify committed source was not modified
         if: always()
