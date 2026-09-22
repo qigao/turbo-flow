@@ -135,6 +135,32 @@ spec("protocol semantic decode and mapper ABI") {
     turbo_flow_protocol_destroy(protocol);
   }
 
+  it("rejects semantic storage that aliases raw preserve or input wire bytes") {
+    semantic_probe_t probe = {0};
+    turbo_flow_protocol_t *protocol = NULL;
+    turbo_flow_protocol_frame_view_t frame;
+    turbo_flow_protocol_message_output_t raw;
+    turbo_flow_protocol_semantic_output_t semantic;
+    uint8_t shared[64] = {0};
+    uint8_t semantic_bytes[32] = {0};
+
+    check_equal(create_fixture(&probe, 1, &protocol), SALTS_OK);
+    setup_outputs(&frame, &raw, &semantic, shared, sizeof(shared),
+                  shared + 8u, 16u);
+    check_equal(turbo_flow_protocol_decode_semantic(protocol, &frame, &raw, &semantic),
+                SALTS_EINVAL);
+    check_equal(probe.semantic_calls, 0);
+
+    setup_outputs(&frame, &raw, &semantic, shared, sizeof(shared),
+                  semantic_bytes, sizeof(semantic_bytes));
+    semantic.data = (uint8_t *)(uintptr_t)frame.data;
+    semantic.capacity = frame.data_size;
+    check_equal(turbo_flow_protocol_decode_semantic(protocol, &frame, &raw, &semantic),
+                SALTS_EINVAL);
+    check_equal(probe.semantic_calls, 0);
+    turbo_flow_protocol_destroy(protocol);
+  }
+
   it("rejects a semantic codec that replaces caller-owned storage") {
     semantic_probe_t probe = {.replace_buffer = 1};
     turbo_flow_protocol_t *protocol = NULL;
