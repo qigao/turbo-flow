@@ -34,6 +34,7 @@ struct turbo_flow_protocol_source_s {
   flow_protocol_source_session_t *sessions;
   uint8_t *storage;
   uint8_t *scratch_payload;
+  uint8_t *scratch_semantic;
   uint64_t next_delivery_id;
   int accepting;
 };
@@ -150,6 +151,7 @@ static int flow_protocol_source_admit(turbo_flow_protocol_source_t *source,
                                       int *provider_called) {
   turbo_flow_protocol_frame_view_t frame = TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
   turbo_flow_protocol_message_output_t message = TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT;
+  turbo_flow_protocol_semantic_output_t semantic = TURBO_FLOW_PROTOCOL_SEMANTIC_OUTPUT_INIT;
   turbo_flow_protocol_source_admit_request_t request =
       TURBO_FLOW_PROTOCOL_SOURCE_ADMIT_REQUEST_INIT;
   uint64_t delivery_id;
@@ -164,12 +166,20 @@ static int flow_protocol_source_admit(turbo_flow_protocol_source_t *source,
   frame.protocol_version = session->protocol_version;
   message.payload = source->scratch_payload;
   message.payload_capacity = source->config.max_frame_size;
-  rc = turbo_flow_protocol_decode(source->protocol, &frame, &message);
+  if (source->config.decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC) {
+    semantic.data = source->scratch_semantic;
+    semantic.capacity = source->config.max_semantic_bytes;
+    rc = turbo_flow_protocol_decode_semantic(source->protocol, &frame, &message, &semantic);
+  } else {
+    rc = turbo_flow_protocol_decode(source->protocol, &frame, &message);
+  }
   if (rc != SALTS_OK) return rc;
   request.delivery_id = delivery_id;
   request.session_id = session->session_id;
   request.session_generation = session->generation;
   request.message = &message;
+  request.semantic =
+      source->config.decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC ? &semantic : NULL;
   *provider_called = 1;
   rc = source->ops.admit(source->callback_ctx, &request);
   if (rc != SALTS_OK) return rc;
@@ -218,21 +228,34 @@ int turbo_flow_protocol_source_create(turbo_flow_protocol_t *protocol,
   turbo_flow_protocol_source_t *source;
   turbo_flow_protocol_info_t info = TURBO_FLOW_PROTOCOL_INFO_INIT;
   size_t buffer_count;
+  size_t frame_buffer_bytes;
   size_t buffer_bytes;
   int rc;
   if (out) *out = NULL;
   if (!protocol || !config || config->size != sizeof(*config) ||
       config->abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION || config->max_sessions == 0u ||
-      config->max_frame_size == 0u || !ops || ops->size != sizeof(*ops) ||
+      config->max_frame_size == 0u ||
+      (config->decode_mode != TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW &&
+       config->decode_mode != TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC) ||
+      (config->decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW &&
+       config->max_semantic_bytes != 0u) ||
+      (config->decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC &&
+       config->max_semantic_bytes == 0u) ||
+      !ops || ops->size != sizeof(*ops) ||
       ops->abi_version != TURBO_FLOW_PROTOCOL_SOURCE_ABI_VERSION || !ops->admit || !out)
     return SALTS_EINVAL;
   rc = turbo_flow_protocol_get_info(protocol, &info);
   if (rc != SALTS_OK) return rc;
   if (config->max_frame_size > info.max_frame_size) return SALTS_ERANGE;
+  if (config->decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC &&
+      (info.capabilities & TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE) == 0u)
+    return SALTS_ENOTSUP;
   if (config->max_sessions == SIZE_MAX) return SALTS_EMSGSIZE;
   buffer_count = config->max_sessions + 1u;
   if (config->max_frame_size > SIZE_MAX / buffer_count) return SALTS_EMSGSIZE;
-  buffer_bytes = buffer_count * config->max_frame_size;
+  frame_buffer_bytes = buffer_count * config->max_frame_size;
+  if (config->max_semantic_bytes > SIZE_MAX - frame_buffer_bytes) return SALTS_EMSGSIZE;
+  buffer_bytes = frame_buffer_bytes + config->max_semantic_bytes;
   if (buffer_bytes > config->max_buffered_bytes) return SALTS_ENOSPC;
   source = (turbo_flow_protocol_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
@@ -248,6 +271,10 @@ int turbo_flow_protocol_source_create(turbo_flow_protocol_t *protocol,
   for (size_t i = 0u; i < config->max_sessions; ++i)
     source->sessions[i].buffer = source->storage + i * config->max_frame_size;
   source->scratch_payload = source->storage + config->max_sessions * config->max_frame_size;
+  source->scratch_semantic =
+      config->decode_mode == TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC
+          ? source->scratch_payload + config->max_frame_size
+          : NULL;
   source->protocol = protocol;
   source->protocol_info = info;
   source->config = *config;
