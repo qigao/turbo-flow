@@ -1,7 +1,7 @@
 #include "turbo_flow_plugin_materializer.h"
 
 static_assert(TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR == 3u);
-static_assert(TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR == 1u);
+static_assert(TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR == 2u);
 
 int turbo_flow_plugin_materializer_header_cpp_probe() {
   turbo_flow_plugin_materializer_v1_t materializer =
