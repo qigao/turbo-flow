@@ -1,5 +1,6 @@
 #include "flow_plugin_operation_internal.h"
 #include "turbo_flow_plugin.h"
+#include "turbo_flow_plugin_protocol_mapper.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
 
