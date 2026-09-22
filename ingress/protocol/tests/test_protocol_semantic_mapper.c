@@ -60,7 +60,8 @@ static int create_fixture(semantic_probe_t *probe, int semantic,
   return turbo_flow_protocol_create(
       &request, "fixture", "fixture-v1",
       TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
-          TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE,
+          TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE |
+          (semantic ? TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE : 0u),
       &ops, probe, out);
 }
 
