@@ -36,10 +36,15 @@ struct flow_protocol_network_intake_sink_s {
   turbo_flow_t *downstream_flow;
   turbo_flow_protocol_source_t *protocol_source;
   flow_protocol_network_intake_settings_t settings;
+  turbo_flow_protocol_mapper_v1_t mapper;
+  turbo_flow_protocol_mapper_contract_t mapper_contract;
+  int mapper_bound;
   tstr adapter_name;
   tstr decoded_source_name;
   uint8_t *envelope_scratch;
   size_t max_envelope_bytes;
+  uint8_t *mapped_scratch;
+  size_t mapped_capacity;
   intake_parser_slot_t *parser_slots;
   intake_pending_claim_t *pending;
   size_t pending_head;
@@ -106,6 +111,79 @@ static int intake_identity_resolve(
   return SALTS_OK;
 }
 
+static int intake_mapper_content_exact(
+    const turbo_flow_content_descriptor_t *expected,
+    const turbo_flow_content_descriptor_t *actual) {
+  if (!expected || !actual ||
+      turbo_flow_content_descriptor_check(expected) != SALTS_OK ||
+      turbo_flow_content_descriptor_check(actual) != SALTS_OK ||
+      turbo_flow_content_descriptor_validate(expected, actual) != SALTS_OK)
+    return 0;
+  return expected->domain == actual->domain &&
+         expected->profile == actual->profile &&
+         expected->encoding == actual->encoding &&
+         expected->flags == actual->flags &&
+         expected->schema_version == actual->schema_version &&
+         strcmp(expected->media_type, actual->media_type) == 0 &&
+         strcmp(expected->schema_name, actual->schema_name) == 0 &&
+         strcmp(expected->type_name, actual->type_name) == 0 &&
+         strcmp(expected->identity, actual->identity) == 0;
+}
+
+static int intake_map_business(
+    flow_protocol_network_intake_sink_t *sink,
+    const turbo_flow_protocol_source_admit_request_t *admit,
+    size_t *payload_size,
+    turbo_flow_content_descriptor_t *content) {
+  turbo_flow_protocol_mapper_request_t request = TURBO_FLOW_PROTOCOL_MAPPER_REQUEST_INIT;
+  turbo_flow_protocol_mapper_output_t output = TURBO_FLOW_PROTOCOL_MAPPER_OUTPUT_INIT;
+  uint8_t *owned_payload;
+  size_t owned_capacity;
+  int rc;
+  if (payload_size) *payload_size = 0u;
+  if (!sink || !sink->mapper_bound || !admit || !admit->message || !admit->semantic ||
+      !payload_size || !content || !sink->mapped_scratch || sink->mapped_capacity == 0u)
+    return SALTS_EINVAL;
+  if (admit->semantic->size != sizeof(*admit->semantic) ||
+      admit->semantic->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+      (!admit->semantic->data && admit->semantic->data_size != 0u) ||
+      admit->semantic->data_size > sink->mapper_contract.max_semantic_bytes ||
+      admit->message->metadata.protocol != sink->mapper_contract.protocol ||
+      admit->message->metadata.message_type != sink->mapper_contract.message_type ||
+      admit->semantic->semantic_type != sink->mapper_contract.semantic_type ||
+      strcmp(admit->semantic->media_type, sink->settings.mapper_semantic_media_type) != 0)
+    return SALTS_EPROTO;
+
+  request.protocol = sink->mapper_contract.protocol;
+  request.profile = sink->mapper_contract.profile;
+  request.metadata = admit->message->metadata;
+  request.semantic_data = admit->semantic->data;
+  request.semantic_size = admit->semantic->data_size;
+  request.semantic_type = admit->semantic->semantic_type;
+  request.semantic_media_type = admit->semantic->media_type;
+
+  output.payload = sink->mapped_scratch;
+  output.payload_capacity = sink->mapped_capacity;
+  owned_payload = output.payload;
+  owned_capacity = output.payload_capacity;
+  rc = sink->mapper.map(sink->mapper.ctx, &request, &output);
+  if (rc != SALTS_OK) {
+    output.payload_size = 0u;
+    return rc;
+  }
+  if (output.size != sizeof(output) ||
+      output.abi_version != TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION ||
+      output.payload != owned_payload || output.payload_capacity != owned_capacity ||
+      output.payload_size > output.payload_capacity ||
+      output.payload_size > sink->mapper_contract.max_output_bytes ||
+      !intake_mapper_content_exact(&sink->mapper_contract.content, &output.content))
+    return SALTS_EPROTO;
+
+  *payload_size = output.payload_size;
+  *content = output.content;
+  return SALTS_OK;
+}
+
 static int intake_decoded_admit(void *ctx,
                                 const turbo_flow_protocol_source_admit_request_t *request) {
   flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
@@ -113,6 +191,7 @@ static int intake_decoded_admit(void *ctx,
   turbo_flow_content_descriptor_t content = TURBO_FLOW_CONTENT_DESCRIPTOR_INIT;
   turbo_flow_msg_t message;
   mem_buffer_t *buffer = NULL;
+  const uint8_t *payload_data = NULL;
   size_t encoded_size = 0u;
   int rc;
   if (!sink || !request || request->size != sizeof(*request) ||
@@ -120,22 +199,36 @@ static int intake_decoded_admit(void *ctx,
       request->delivery_id == 0u || request->session_id == 0u ||
       request->session_generation == 0u || !request->message)
     return SALTS_EINVAL;
+  if ((sink->mapper_bound && !request->semantic) ||
+      (!sink->mapper_bound && request->semantic))
+    return SALTS_EPROTO;
+
   rc = intake_identity_resolve(sink, request->message, &identity);
   if (rc != SALTS_OK) return rc;
-  rc = flow_protocol_envelope_encode(request->message, sink->settings.max_frame_size,
-                                     sink->envelope_scratch, sink->max_envelope_bytes,
-                                     &encoded_size);
-  if (rc != SALTS_OK) return rc;
-  buffer = mem_wrap_external(sink->envelope_scratch, encoded_size, NULL, NULL);
+
+  if (sink->mapper_bound) {
+    rc = intake_map_business(sink, request, &encoded_size, &content);
+    if (rc != SALTS_OK) return rc;
+    payload_data = sink->mapped_scratch;
+  } else {
+    rc = flow_protocol_envelope_encode(request->message, sink->settings.max_frame_size,
+                                       sink->envelope_scratch, sink->max_envelope_bytes,
+                                       &encoded_size);
+    if (rc != SALTS_OK) return rc;
+    rc = flow_protocol_envelope_content_descriptor(&content);
+    if (rc != SALTS_OK) return rc;
+    payload_data = sink->envelope_scratch;
+  }
+
+  buffer = mem_wrap_external((void *)payload_data, encoded_size, NULL, NULL);
   if (!buffer) return SALTS_ENOMEM;
   turbo_flow_msg_init(&message);
   message.id = request->delivery_id;
   message.ts_ns = 0u;
   message.type = request->message->metadata.message_type;
   message.buffer = buffer;
-  message.payload = vstr_from_buf((const char *)sink->envelope_scratch, encoded_size);
-  rc = flow_protocol_envelope_content_descriptor(&content);
-  if (rc == SALTS_OK) rc = turbo_flow_msg_copy_content_descriptor(&message, &content);
+  message.payload = vstr_from_buf((const char *)payload_data, encoded_size);
+  rc = turbo_flow_msg_copy_content_descriptor(&message, &content);
   if (rc == SALTS_OK) rc = turbo_flow_msg_set_durable_identity(&message, &identity);
   if (rc == SALTS_OK)
     rc = turbo_flow_publish(sink->downstream_flow, sink->decoded_source_name, &message);
@@ -548,7 +641,11 @@ int flow_protocol_network_intake_sink_create(
       config->settings->max_sessions == 0u || config->settings->max_frame_size == 0u ||
       config->settings->max_pending_claims == 0u || config->settings->max_pending_bytes == 0u ||
       strcmp(config->adapter_name, config->settings->decoder_adapter_name) != 0 ||
-      !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name))
+      !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name) ||
+      (config->settings->schema_version == 3u &&
+       (!config->mapper || !config->mapper_contract)) ||
+      (config->settings->schema_version == 2u &&
+       (config->mapper || config->mapper_contract)))
     return SALTS_EINVAL;
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
@@ -557,27 +654,47 @@ int flow_protocol_network_intake_sink_create(
       config->settings->max_frame_size > SIZE_MAX - TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD)
     return SALTS_ERANGE;
   source_buffer_bytes = (config->settings->max_sessions + 1u) * config->settings->max_frame_size;
+  if (config->mapper_contract &&
+      config->mapper_contract->max_semantic_bytes > SIZE_MAX - source_buffer_bytes)
+    return SALTS_ERANGE;
+  if (config->mapper_contract)
+    source_buffer_bytes += config->mapper_contract->max_semantic_bytes;
   sink = (flow_protocol_network_intake_sink_t *)calloc(1u, sizeof(*sink));
   if (!sink) return SALTS_ENOMEM;
   sink->flow = config->flow;
   sink->protocol = config->protocol;
   sink->downstream_flow = config->downstream_flow;
   sink->settings = *config->settings;
-  sink->max_envelope_bytes =
-      sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
+  if (config->mapper && config->mapper_contract) {
+    sink->mapper = *config->mapper;
+    sink->mapper_contract = *config->mapper_contract;
+    sink->mapper_bound = 1;
+  }
+  sink->max_envelope_bytes = sink->mapper_bound
+                                 ? 0u
+                                 : sink->settings.max_frame_size +
+                                       TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
+  sink->mapped_capacity =
+      sink->mapper_bound ? sink->mapper_contract.max_output_bytes : 0u;
   sink->adapter_name = tstr_dup(config->adapter_name);
   sink->decoded_source_name = tstr_dup(config->decoded_source_name);
-  sink->envelope_scratch = (uint8_t *)malloc(sink->max_envelope_bytes);
+  sink->envelope_scratch =
+      sink->mapper_bound ? NULL : (uint8_t *)malloc(sink->max_envelope_bytes);
+  sink->mapped_scratch =
+      sink->mapper_bound ? (uint8_t *)malloc(sink->mapped_capacity) : NULL;
   sink->parser_slots =
       (intake_parser_slot_t *)calloc(sink->settings.max_sessions, sizeof(*sink->parser_slots));
   sink->pending =
       (intake_pending_claim_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->pending));
   sink->terminal_status = SALTS_OK;
-  if (!sink->adapter_name || !sink->decoded_source_name || !sink->envelope_scratch ||
+  if (!sink->adapter_name || !sink->decoded_source_name ||
+      (!sink->mapper_bound && !sink->envelope_scratch) ||
+      (sink->mapper_bound && !sink->mapped_scratch) ||
       !sink->parser_slots || !sink->pending) {
     tstr_free(sink->adapter_name);
     tstr_free(sink->decoded_source_name);
     free(sink->envelope_scratch);
+    free(sink->mapped_scratch);
     free(sink->parser_slots);
     free(sink->pending);
     free(sink);
@@ -586,6 +703,11 @@ int flow_protocol_network_intake_sink_create(
   source_config.max_sessions = sink->settings.max_sessions;
   source_config.max_frame_size = sink->settings.max_frame_size;
   source_config.max_buffered_bytes = source_buffer_bytes;
+  source_config.decode_mode = sink->mapper_bound
+                                  ? TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC
+                                  : TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW;
+  source_config.max_semantic_bytes =
+      sink->mapper_bound ? sink->mapper_contract.max_semantic_bytes : 0u;
   source_ops.admit = intake_decoded_admit;
   rc = turbo_flow_protocol_source_create(sink->protocol, &source_config, &source_ops,
                                          sink, &sink->protocol_source);
@@ -596,6 +718,7 @@ fail:
   tstr_free(sink->adapter_name);
   tstr_free(sink->decoded_source_name);
   free(sink->envelope_scratch);
+  free(sink->mapped_scratch);
   free(sink->parser_slots);
   free(sink->pending);
   free(sink);
@@ -690,6 +813,7 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
   tstr_free(sink->adapter_name);
   tstr_free(sink->decoded_source_name);
   free(sink->envelope_scratch);
+  free(sink->mapped_scratch);
   free(sink->parser_slots);
   free(sink->pending);
   free(sink);
