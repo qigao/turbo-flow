@@ -797,11 +797,16 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
     const turbo_flow_operation_descriptor_t *operation;
     const turbo_flow_primitive_descriptor_t *resource = NULL;
     const flow_adapter_registration_t *adapter = NULL;
+    int provider_index;
     uint32_t required_role;
     uint32_t exec_bit;
 
     if (!stage || stage_in_inactive_template(flow, stage) || stage->is_port) continue;
     operation = flow_stage_operation_descriptor(stage);
+    provider_index = stage->operation_name
+                         ? flow_find_operation_provider(flow, stage->operation_name,
+                                                        stage->resource_name)
+                         : -1;
     if (!operation) {
       return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                             "runtime node has no resolved operation contract");
@@ -849,7 +854,7 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
         return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "resource primitive version is incompatible with operation contract");
       }
-    } else if (stage->resource_name && !stage->is_buffer) {
+    } else if (stage->resource_name && !stage->is_buffer && provider_index < 0) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stateless operation cannot bind a resource primitive");
     }
