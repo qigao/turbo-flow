@@ -1,7 +1,7 @@
 #ifndef TURBO_FLOW_PLUGIN_PROTOCOL_MAPPER_H
 #define TURBO_FLOW_PLUGIN_PROTOCOL_MAPPER_H
 
-#include "turbo_flow_plugin_abi.h"
+#include "turbo_flow_plugin.h"
 #include "turbo_flow_protocol_mapper.h"
 
 #include <stddef.h>
@@ -14,9 +14,6 @@ extern "C" {
 enum {
   TURBO_FLOW_PLUGIN_CAP_PROTOCOL_MAPPER = UINT64_C(1) << 10
 };
-
-typedef int (*turbo_flow_plugin_add_protocol_mapper_fn)(
-    void *ctx, const turbo_flow_protocol_mapper_v1_t *mapper);
 
 typedef struct turbo_flow_plugin_protocol_mapper_catalog_entry_v1_s {
   const char *plugin_id;
