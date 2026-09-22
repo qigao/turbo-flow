@@ -36,6 +36,9 @@ struct flow_protocol_network_intake_sink_s {
   turbo_flow_t *downstream_flow;
   turbo_flow_protocol_source_t *protocol_source;
   flow_protocol_network_intake_settings_t settings;
+  turbo_flow_protocol_mapper_v1_t mapper;
+  turbo_flow_protocol_mapper_contract_t mapper_contract;
+  int mapper_bound;
   tstr adapter_name;
   tstr decoded_source_name;
   uint8_t *envelope_scratch;
@@ -548,7 +551,11 @@ int flow_protocol_network_intake_sink_create(
       config->settings->max_sessions == 0u || config->settings->max_frame_size == 0u ||
       config->settings->max_pending_claims == 0u || config->settings->max_pending_bytes == 0u ||
       strcmp(config->adapter_name, config->settings->decoder_adapter_name) != 0 ||
-      !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name))
+      !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name) ||
+      (config->settings->schema_version == 3u &&
+       (!config->mapper || !config->mapper_contract)) ||
+      (config->settings->schema_version == 2u &&
+       (config->mapper || config->mapper_contract)))
     return SALTS_EINVAL;
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
@@ -563,6 +570,11 @@ int flow_protocol_network_intake_sink_create(
   sink->protocol = config->protocol;
   sink->downstream_flow = config->downstream_flow;
   sink->settings = *config->settings;
+  if (config->mapper && config->mapper_contract) {
+    sink->mapper = *config->mapper;
+    sink->mapper_contract = *config->mapper_contract;
+    sink->mapper_bound = 1;
+  }
   sink->max_envelope_bytes =
       sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
   sink->adapter_name = tstr_dup(config->adapter_name);
