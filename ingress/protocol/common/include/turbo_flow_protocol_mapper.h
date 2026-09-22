@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_PROTOCOL_MAPPER_H
 #define TURBO_FLOW_PROTOCOL_MAPPER_H
 
+#include "turbo_flow.h"
 #include "turbo_flow_protocol.h"
 
 #ifdef __cplusplus
@@ -10,18 +11,65 @@ extern "C" {
 #define TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION 1u
 #define TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX 63u
 #define TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX 63u
-#define TURBO_FLOW_PROTOCOL_MAPPER_SCHEMA_ID_MAX 127u
-#define TURBO_FLOW_PROTOCOL_MAPPER_TYPE_NAME_MAX 127u
-#define TURBO_FLOW_PROTOCOL_MAPPER_MEDIA_TYPE_MAX 63u
 
-typedef enum turbo_flow_protocol_mapper_encoding_e {
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_TBE = 1,
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_JSON,
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_CSV,
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_XML,
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_UTF8,
-  TURBO_FLOW_PROTOCOL_MAPPER_ENCODING_OPAQUE
-} turbo_flow_protocol_mapper_encoding_t;
+/**
+ * Generation-time request for one exact pre-durable mapping contract.
+ *
+ * The host selects a mapper/provider before the data path and asks it to bind
+ * one protocol/profile/message/semantic tuple to one canonical business
+ * descriptor. No raw frame is exposed at this boundary.
+ */
+typedef struct turbo_flow_protocol_mapper_preflight_request_s {
+  size_t size;
+  uint32_t abi_version;
+  turbo_flow_protocol_kind_t protocol;
+  const char *profile;
+  uint32_t message_type;
+  uint32_t semantic_type;
+  const char *semantic_media_type;
+  size_t max_semantic_bytes;
+  size_t max_output_bytes;
+} turbo_flow_protocol_mapper_preflight_request_t;
+
+#define TURBO_FLOW_PROTOCOL_MAPPER_PREFLIGHT_REQUEST_INIT                                         \
+  {sizeof(turbo_flow_protocol_mapper_preflight_request_t),                                        \
+   TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION,                                                        \
+   TURBO_FLOW_PROTOCOL_MQTT_SN,                                                                   \
+   NULL,                                                                                          \
+   0u,                                                                                            \
+   TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE,                                                        \
+   NULL,                                                                                          \
+   0u,                                                                                            \
+   0u}
+
+/**
+ * Exact immutable business contract compiled during preflight.
+ *
+ * content must be a DATA-domain declared schema descriptor. The bounds are the
+ * admitted maxima for this compiled mapper; the data path may only narrow them.
+ */
+typedef struct turbo_flow_protocol_mapper_contract_s {
+  size_t size;
+  uint32_t abi_version;
+  turbo_flow_protocol_kind_t protocol;
+  uint32_t message_type;
+  uint32_t semantic_type;
+  char profile[TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX + 1u];
+  size_t max_semantic_bytes;
+  size_t max_output_bytes;
+  turbo_flow_content_descriptor_t content;
+} turbo_flow_protocol_mapper_contract_t;
+
+#define TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT                                                  \
+  {sizeof(turbo_flow_protocol_mapper_contract_t),                                                  \
+   TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION,                                                        \
+   TURBO_FLOW_PROTOCOL_MQTT_SN,                                                                   \
+   0u,                                                                                            \
+   TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE,                                                        \
+   {0},                                                                                           \
+   0u,                                                                                            \
+   0u,                                                                                            \
+   TURBO_FLOW_CONTENT_DESCRIPTOR_INIT}
 
 /**
  * Borrowed pre-durable mapper input.
@@ -44,7 +92,7 @@ typedef struct turbo_flow_protocol_mapper_request_s {
 } turbo_flow_protocol_mapper_request_t;
 
 #define TURBO_FLOW_PROTOCOL_MAPPER_REQUEST_INIT                                                   \
-  {sizeof(turbo_flow_protocol_mapper_request_t),                                                  \
+  {sizeof(turbo_flow_protocol_mapper_request_t),                                                   \
    TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION,                                                        \
    TURBO_FLOW_PROTOCOL_MQTT_SN,                                                                   \
    NULL,                                                                                          \
@@ -58,9 +106,9 @@ typedef struct turbo_flow_protocol_mapper_request_s {
  * Caller-owned canonical business output.
  *
  * payload is supplied by the caller and must not be replaced or retained.
- * A successful mapper call publishes exact schema/type/version/encoding/media
- * identity together with payload_size. On failure payload_size must remain
- * zero and no partial business object is admitted.
+ * content must exactly match the compiled mapper contract before durable
+ * admission. On failure payload_size remains zero and no partial business
+ * object is admitted.
  */
 typedef struct turbo_flow_protocol_mapper_output_s {
   size_t size;
@@ -68,11 +116,7 @@ typedef struct turbo_flow_protocol_mapper_output_s {
   uint8_t *payload;
   size_t payload_capacity;
   size_t payload_size;
-  char schema_id[TURBO_FLOW_PROTOCOL_MAPPER_SCHEMA_ID_MAX + 1u];
-  char type_name[TURBO_FLOW_PROTOCOL_MAPPER_TYPE_NAME_MAX + 1u];
-  uint32_t schema_version;
-  turbo_flow_protocol_mapper_encoding_t encoding;
-  char media_type[TURBO_FLOW_PROTOCOL_MAPPER_MEDIA_TYPE_MAX + 1u];
+  turbo_flow_content_descriptor_t content;
 } turbo_flow_protocol_mapper_output_t;
 
 #define TURBO_FLOW_PROTOCOL_MAPPER_OUTPUT_INIT                                                    \
@@ -81,11 +125,11 @@ typedef struct turbo_flow_protocol_mapper_output_s {
    NULL,                                                                                          \
    0u,                                                                                            \
    0u,                                                                                            \
-   {0},                                                                                           \
-   {0},                                                                                           \
-   0u,                                                                                            \
-   0,                                                                                             \
-   {0}}
+   TURBO_FLOW_CONTENT_DESCRIPTOR_INIT}
+
+typedef int (*turbo_flow_protocol_mapper_preflight_fn)(
+    void *ctx, const turbo_flow_protocol_mapper_preflight_request_t *request,
+    turbo_flow_protocol_mapper_contract_t *contract);
 
 typedef int (*turbo_flow_protocol_mapper_map_fn)(
     void *ctx, const turbo_flow_protocol_mapper_request_t *request,
@@ -94,9 +138,11 @@ typedef int (*turbo_flow_protocol_mapper_map_fn)(
 /**
  * Versioned pre-durable mapper capability.
  *
- * A mapper is selected and retained during generation/session assembly. The
- * data path calls this compiled vtable directly; it performs no registry,
- * symbol, schema-kind, protocol fallback, or alternate-mapper lookup.
+ * A mapper is selected and retained during generation/session assembly.
+ * preflight freezes the exact canonical business descriptor and bounds; the
+ * data path calls map directly through this compiled vtable. Neither callback
+ * performs registry, symbol, schema-kind, protocol fallback, or
+ * alternate-mapper lookup.
  */
 typedef struct turbo_flow_protocol_mapper_v1_s {
   size_t size;
@@ -107,6 +153,7 @@ typedef struct turbo_flow_protocol_mapper_v1_s {
   size_t max_semantic_bytes;
   size_t max_output_bytes;
   void *ctx;
+  turbo_flow_protocol_mapper_preflight_fn preflight;
   turbo_flow_protocol_mapper_map_fn map;
 } turbo_flow_protocol_mapper_v1_t;
 
@@ -118,6 +165,7 @@ typedef struct turbo_flow_protocol_mapper_v1_s {
    NULL,                                                                                          \
    0u,                                                                                            \
    0u,                                                                                            \
+   NULL,                                                                                          \
    NULL,                                                                                          \
    NULL}
 
