@@ -233,6 +233,23 @@ if(TARGET tf_rulesforge_provider)
   target_compile_definitions(test_flow_rulesforge_plugin PRIVATE
     FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")
   add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)
+
+  if(TARGET tf_cnet_plugin AND TARGET tf_durable_memory_plugin)
+    cmake_add_test(
+      test_flow_rulesforge_durable_network
+      SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_rulesforge_durable_network.c
+      LIBS TurboFlow::PluginHost Salts::TinyTest Salts::CNet
+      INCLUDES ${PROJECT_SOURCE_DIR}/plugins/rulesforge/include
+      FOLDER "turbo_flow/tests")
+    target_compile_definitions(test_flow_rulesforge_durable_network PRIVATE
+      FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>"
+      TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"
+      TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>")
+    add_dependencies(test_flow_rulesforge_durable_network
+      tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin)
+    set_tests_properties(test_flow_rulesforge_durable_network PROPERTIES
+      LABELS "graph;plugin;abi3;materializer;durable;cnet" TIMEOUT 30)
+  endif()
 endif()
 
 cmake_add_test(
