@@ -3,6 +3,7 @@
 #include "flow_protocol_network_intake_internal.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
+#include "turbo_flow_plugin_protocol_mapper.h"
 
 #include <stdio.h>
 #include <stdlib.h>
