@@ -29,16 +29,34 @@ typedef int (*turbo_flow_protocol_encode_fn)(
     const turbo_flow_protocol_command_view_t *command,
     turbo_flow_protocol_frame_output_t *output);
 
+
+/**
+ * Optional single-pass ingress decoder.
+ *
+ * The codec fully validates the frame, fills protocol-specific metadata fields,
+ * and writes semantic/application bytes into the caller-owned output buffer.
+ * The host finalizes protocol/direction/version/device identity exactly as it
+ * does for inspect. The callback must not replace output->data or change
+ * output->capacity and must not retain any input/output pointer.
+ */
+typedef int (*turbo_flow_protocol_decode_semantic_fn)(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata,
+    turbo_flow_protocol_semantic_output_t *output);
+
 typedef struct turbo_flow_protocol_codec_ops_s {
   size_t size;
   uint32_t abi_version;
   turbo_flow_protocol_inspect_fn inspect;
   turbo_flow_protocol_reply_fn reply;
   turbo_flow_protocol_encode_fn encode;
+  /** Optional append-only ABI1 extension for semantic ingress. */
+  turbo_flow_protocol_decode_semantic_fn decode_semantic;
 } turbo_flow_protocol_codec_ops_t;
 
 #define TURBO_FLOW_PROTOCOL_CODEC_OPS_INIT                                                      \
-  {sizeof(turbo_flow_protocol_codec_ops_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, NULL, NULL}
+  {sizeof(turbo_flow_protocol_codec_ops_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, NULL, NULL, NULL}
 
 /**
  * Create/destroy the opaque provider-neutral service used by plugin open/close.
