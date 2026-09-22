@@ -31,7 +31,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VCPKG_COMMIT: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
@@ -85,15 +84,6 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout pinned vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_COMMIT }}
-          path: vcpkg
-          fetch-depth: 0
-          persist-credentials: false
-
 
       - name: Prepare Linux toolchain
         shell: bash
@@ -101,9 +91,9 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          test -x "$VCPKG_ROOT/vcpkg"
           sudo mkdir -p /opt
-          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+          sudo ln -sfn "$VCPKG_ROOT" /opt/vcpkg
 
 
       - name: Build standalone host Lemon
@@ -118,7 +108,6 @@ jobs:
         working-directory: .ci/deps/salts
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
           configured=0
@@ -168,7 +157,7 @@ jobs:
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BENCHMARKS=OFF \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"
 
