@@ -171,6 +171,12 @@ int turbo_flow_protocol_create(
       TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE;
   turbo_flow_protocol_t *protocol;
   const char *version;
+  const int semantic_callback =
+      ops && ops->size >= offsetof(turbo_flow_protocol_codec_ops_t, decode_semantic) +
+                              sizeof(ops->decode_semantic) &&
+      ops->decode_semantic != NULL;
+  const int semantic_capability =
+      (capabilities & TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE) != 0u;
   int rc;
   if (out) *out = NULL;
   if (!request || request->size < sizeof(*request) ||
@@ -180,7 +186,7 @@ int turbo_flow_protocol_create(
       request->max_frame_size == 0u || (capabilities & required) != required ||
       !ops || ops->size < offsetof(turbo_flow_protocol_codec_ops_t, reply) ||
       ops->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION || !ops->inspect ||
-      !out)
+      semantic_callback != semantic_capability || !out)
     return SALTS_EINVAL;
   if (!flow_protocol_cstr_segment_valid(name,
                                        TURBO_FLOW_PROTOCOL_OPERATION_MAX))
