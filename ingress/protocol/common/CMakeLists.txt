@@ -9,6 +9,7 @@ add_library(
   include/turbo_flow_protocol_business.h
   include/turbo_flow_protocol_business_plugin.h
   include/turbo_flow_protocol_source.h
+  include/turbo_flow_protocol_mapper.h
   include/turbo_flow_protocol_plugin.h)
 
 cmake_config_target(
@@ -31,5 +32,6 @@ install(
         include/turbo_flow_protocol_business.h
         include/turbo_flow_protocol_business_plugin.h
         include/turbo_flow_protocol_source.h
+        include/turbo_flow_protocol_mapper.h
         include/turbo_flow_protocol_plugin.h
   DESTINATION include)
