@@ -162,18 +162,6 @@ jobs:
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
-      - name: Install pinned DataBind package separately
-        shell: bash
-        working-directory: .ci/deps/salts-utils
-        run: |
-          set -euxo pipefail
-          cmake --install build/linux-gcc-debug \
-            --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
-          test -f "$RUNNER_TEMP/sdk/databind-debug/lib/cmake/DataBind/DataBindConfig.cmake"
-          test -x "$RUNNER_TEMP/sdk/databind-debug/bin/tbe_compiler"
-          sudo mkdir -p /opt/databind
-          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
-
       - name: Configure public compile contract
         shell: bash
         env:
@@ -246,13 +234,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          trap 'git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt' EXIT
           cmake --build build/protocol-network-runtime \
             --target test_protocol_network_intake_config test_protocol_network_intake_core -j2 \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
           ctest --test-dir build/protocol-network-runtime \
-            -R '^test_protocol_network_intake_(config|core)
-      - name: Verify sanitizer instrumentation flags
+            -R '^test_protocol_network_intake_(config|core)      - name: Verify sanitizer instrumentation flags
         shell: bash
         run: |
           set -euxo pipefail
@@ -289,6 +275,12 @@ jobs:
             --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
 
+      - name: Restore focused runtime assembly
+        if: always()
+        shell: bash
+        run: |
+          git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
       - name: Verify sanitizer instrumentation flags
         shell: bash
         run: |
@@ -321,4 +313,3 @@ jobs:
           path: |
             ${{ runner.temp }}/protocol-intake-evidence/
             build/protocol-network-compile/CMakeCache.txt
-            build/protocol-network-runtime/CMakeCache.txt
