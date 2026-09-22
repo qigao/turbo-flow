@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: protocol-network-intake-${{ github.head_ref || github.ref_name }}
@@ -79,6 +80,14 @@ jobs:
           path: .ci/deps/salts-utils
           persist-credentials: false
 
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
       - name: Checkout pinned vcpkg
         uses: actions/checkout@v4
         with:
@@ -101,11 +110,6 @@ jobs:
             printf 'vcpkg %s\n' "$VCPKG_COMMIT"
           } | tee "$RUNNER_TEMP/protocol-intake-evidence/dependencies.txt"
 
-      - name: Cache vcpkg binary archives
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vcpkg/archives
-          key: turbo-flow-protocol-intake-public-${{ env.VCPKG_COMMIT }}-v1
 
       - name: Prepare Linux toolchain
         shell: bash
@@ -117,9 +121,6 @@ jobs:
           sudo mkdir -p /opt
           sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
 
-      - name: Install pinned re2c 4.6 with Unicode tables
-        shell: bash
-        run: bash .ci/deps/salts-utils/cmake/ci/install-re2c.sh
 
       - name: Build standalone host Lemon
         shell: bash
