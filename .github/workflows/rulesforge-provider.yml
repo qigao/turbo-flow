@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: rulesforge-provider-${{ github.ref_name }}
@@ -77,6 +78,14 @@ jobs:
           path: .ci/deps/rulesforge
           persist-credentials: false
 
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
       - name: Checkout pinned vcpkg
         uses: actions/checkout@v4
         with:
@@ -86,11 +95,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Cache vcpkg binary archives
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vcpkg/archives
-          key: turbo-flow-rulesforge-${{ env.VCPKG_COMMIT }}-v1
 
       - name: Prepare Linux toolchain
         shell: bash
@@ -102,9 +106,6 @@ jobs:
           sudo mkdir -p /opt
           sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
 
-      - name: Install pinned re2c 4.6 with Unicode tables
-        shell: bash
-        run: bash .ci/deps/salts-utils/cmake/ci/install-re2c.sh
 
       - name: Build standalone host Lemon
         shell: bash
