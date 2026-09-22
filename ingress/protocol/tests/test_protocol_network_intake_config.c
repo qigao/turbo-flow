@@ -49,6 +49,37 @@ static const char packet_yaml[] =
     "      max_pending_claims: 64\n"
     "      max_pending_bytes: 65536\n";
 
+static const char packet_mapper_yaml[] =
+    "version: 1\n"
+    "adapters:\n"
+    "  udp.input:\n"
+    "    kind: cnet.packet_source\n"
+    "    config:\n"
+    "      packet_mode: udp\n"
+    "      session_capacity: 4\n"
+    "      max_message_bytes: 1024\n"
+    "      scheduler_max_steps_per_poll: 32\n"
+    "  protocol.decode:\n"
+    "    kind: protocol.decode\n"
+    "    config:\n"
+    "      schema_version: 3\n"
+    "      protocol_provider: coap\n"
+    "      protocol_kind: coap\n"
+    "      protocol_version: RFC7252\n"
+    "      source_id: coap.business\n"
+    "      max_sessions: 4\n"
+    "      max_frame_size: 1024\n"
+    "      max_pending_claims: 64\n"
+    "      max_pending_bytes: 65536\n"
+    "      mapper_plugin: fixture.protocol-mapper.good\n"
+    "      mapper_name: fixture.mapper\n"
+    "      mapper_profile: applicant-json\n"
+    "      mapper_message_type: 2\n"
+    "      mapper_semantic_type: 50\n"
+    "      mapper_semantic_media_type: application/json\n"
+    "      mapper_max_semantic_bytes: 256\n"
+    "      mapper_max_output_bytes: 512\n";
+
 static const char listener_graph[] =
     "source wire adapter tcp.input\n"
     "stage decode adapter protocol.decode\n"
@@ -134,6 +165,55 @@ spec("protocol network intake configuration") {
     check_equal(settings.transport_kind, FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP);
     check_equal(strcmp(settings.protocol_provider, "coap"), 0);
     check_equal(strcmp(settings.protocol_version, "RFC7252"), 0);
+  }
+
+  it("accepts exact v3 mapper configuration and freezes every mapping selector") {
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    memset(&settings, 0, sizeof(settings));
+    check_equal(run_preflight(packet_mapper_yaml, packet_graph, "udp.input", &settings, &error),
+                SALTS_OK);
+    check_equal(settings.schema_version, 3u);
+    check_equal(settings.protocol_kind, TURBO_FLOW_PROTOCOL_COAP);
+    check_equal(strcmp(settings.mapper_plugin, "fixture.protocol-mapper.good"), 0);
+    check_equal(strcmp(settings.mapper_name, "fixture.mapper"), 0);
+    check_equal(strcmp(settings.mapper_profile, "applicant-json"), 0);
+    check_equal(settings.mapper_message_type, 2u);
+    check_equal(settings.mapper_semantic_type, 50u);
+    check_equal(strcmp(settings.mapper_semantic_media_type, "application/json"), 0);
+    check_equal(settings.mapper_max_semantic_bytes, (size_t)256u);
+    check_equal(settings.mapper_max_output_bytes, (size_t)512u);
+  }
+
+  it("rejects incomplete and over-bounded v3 mapper configuration before owner creation") {
+    char yaml[4096];
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    check_equal(replace_once(packet_mapper_yaml,
+                             "      mapper_name: fixture.mapper\n", "",
+                             yaml, sizeof(yaml)),
+                SALTS_OK);
+    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_EINVAL);
+
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(replace_once(packet_mapper_yaml,
+                             "      mapper_max_semantic_bytes: 256\n",
+                             "      mapper_max_semantic_bytes: 2048\n",
+                             yaml, sizeof(yaml)),
+                SALTS_OK);
+    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "mapper_max_semantic_bytes");
+
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(replace_once(packet_mapper_yaml,
+                             "      mapper_semantic_type: 50\n",
+                             "      mapper_semantic_type: 0\n",
+                             yaml, sizeof(yaml)),
+                SALTS_OK);
+    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_OK);
+    check_equal(settings.mapper_semantic_type, 0u);
   }
 
   it("rejects unknown and missing intake fields") {
