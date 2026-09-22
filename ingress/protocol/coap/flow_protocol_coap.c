@@ -14,6 +14,16 @@ static int flow_coap_inspect(void *ctx, const char *configured_version,
   return flow_protocol_coap_inspect(frame, metadata, 0);
 }
 
+static int flow_coap_decode_semantic(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata,
+    turbo_flow_protocol_semantic_output_t *output) {
+  (void)ctx;
+  (void)configured_version;
+  return flow_protocol_coap_decode_semantic(frame, metadata, 0, output);
+}
+
 static int flow_coap_reply(void *ctx, const char *configured_version,
                            const turbo_flow_protocol_frame_view_t *request, int status,
                            turbo_flow_protocol_frame_output_t *output) {
@@ -44,7 +54,8 @@ static const flow_protocol_plugin_descriptor_t FLOW_COAP_DESCRIPTOR = {
     flow_coap_inspect,
     flow_coap_reply,
     flow_coap_encode,
-    &FLOW_COAP_NEXT_MESSAGE_ID};
+    &FLOW_COAP_NEXT_MESSAGE_ID,
+    flow_coap_decode_semantic};
 
 static const turbo_flow_protocol_plugin_api_t FLOW_COAP_API = {
     sizeof(turbo_flow_protocol_plugin_api_t),
@@ -54,7 +65,7 @@ static const turbo_flow_protocol_plugin_api_t FLOW_COAP_API = {
     TURBO_FLOW_PROTOCOL_COAP,
     TURBO_FLOW_PROTOCOL_CAP_INGRESS | TURBO_FLOW_PROTOCOL_CAP_EGRESS |
         TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE | TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY |
-        TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE,
+        TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE | TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE,
     (void *)&FLOW_COAP_DESCRIPTOR,
     flow_protocol_plugin_open,
     flow_protocol_plugin_close};
