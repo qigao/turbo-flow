@@ -85,6 +85,17 @@ set_tests_properties(test_protocol_source
                      PROPERTIES LABELS "protocol-ingress;protocol-source")
 
 cmake_add_test(
+  test_protocol_semantic_mapper
+  SOURCES test_protocol_semantic_mapper.c protocol_semantic_mapper_header_cpp.cpp
+  LIBS TurboFlow::ProtocolIngress Salts::TinyTest
+  FOLDER "ingress/protocol/tests")
+set_target_properties(test_protocol_semantic_mapper PROPERTIES
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+set_tests_properties(test_protocol_semantic_mapper
+                     PROPERTIES LABELS "protocol-ingress;protocol-mapper;abi")
+
+
+cmake_add_test(
   test_protocol_network_intake_config
   SOURCES test_protocol_network_intake_config.c
   LIBS tf_protocol_network_intake_core Salts::TinyTest
