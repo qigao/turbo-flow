@@ -6,6 +6,10 @@
 
 static_assert(std::is_standard_layout<turbo_flow_protocol_semantic_output_t>::value,
               "semantic output must remain standard-layout C ABI");
+static_assert(std::is_standard_layout<turbo_flow_protocol_mapper_preflight_request_t>::value,
+              "mapper preflight request must remain standard-layout C ABI");
+static_assert(std::is_standard_layout<turbo_flow_protocol_mapper_contract_t>::value,
+              "mapper contract must remain standard-layout C ABI");
 static_assert(std::is_standard_layout<turbo_flow_protocol_mapper_request_t>::value,
               "mapper request must remain standard-layout C ABI");
 static_assert(std::is_standard_layout<turbo_flow_protocol_mapper_output_t>::value,
