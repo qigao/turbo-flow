@@ -86,7 +86,7 @@ static int intake_identity_resolve(
   int count;
   if (!sink || !message || !identity ||
       identity->size != sizeof(*identity) ||
-      identity->version != TURBO_FLOW_DURABLE_BUFFER_API_VERSION)
+      identity->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION)
     return SALTS_EINVAL;
   metadata = &message->metadata;
   protocol_name = turbo_flow_protocol_kind_name(metadata->protocol);
