@@ -131,15 +131,46 @@ set_target_properties(
              VISIBILITY_INLINES_HIDDEN YES
              FOLDER "ingress/protocol/tests/plugin-fixtures")
 
+add_library(test_protocol_network_packet_source_fixture SHARED
+            protocol_network_source_fixture.c)
+target_link_libraries(test_protocol_network_packet_source_fixture PRIVATE TurboFlow::PluginHost)
+target_compile_definitions(test_protocol_network_packet_source_fixture PRIVATE
+  TURBO_FLOW_PLUGIN_BUILD
+  FLOW_PROTOCOL_NETWORK_SOURCE_KIND="cnet.packet_source"
+  FLOW_PROTOCOL_NETWORK_SOURCE_SCHEME="udp")
+set_target_properties(
+  test_protocol_network_packet_source_fixture
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "ingress/protocol/tests/plugin-fixtures")
+
+add_library(test_protocol_semantic_coap_fixture SHARED
+            plugin_semantic_coap_fixture.c)
+target_link_libraries(test_protocol_semantic_coap_fixture PRIVATE TurboFlow::PluginHost)
+target_compile_definitions(test_protocol_semantic_coap_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+set_target_properties(
+  test_protocol_semantic_coap_fixture
+  PROPERTIES C_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN YES
+             FOLDER "ingress/protocol/tests/plugin-fixtures")
+
 cmake_add_test(
   test_protocol_network_intake
   SOURCES test_protocol_network_intake.c protocol_network_intake_header_cpp.cpp
   LIBS TurboFlow::ProtocolNetworkIntake Salts::TinyTest
   DEFS
     FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE="$<TARGET_FILE:test_protocol_network_source_fixture>"
+    FLOW_PROTOCOL_NETWORK_PACKET_SOURCE_FIXTURE="$<TARGET_FILE:test_protocol_network_packet_source_fixture>"
+    FLOW_PROTOCOL_SEMANTIC_COAP_FIXTURE="$<TARGET_FILE:test_protocol_semantic_coap_fixture>"
+    FLOW_PROTOCOL_MAPPER_GOOD="$<TARGET_FILE:test_flow_protocol_mapper_fixture_good>"
     FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_intake test_protocol_network_source_fixture tf_protocol_jtt808)
+add_dependencies(test_protocol_network_intake
+  test_protocol_network_source_fixture
+  test_protocol_network_packet_source_fixture
+  test_protocol_semantic_coap_fixture
+  test_flow_protocol_mapper_fixture_good
+  tf_protocol_jtt808)
 set_tests_properties(test_protocol_network_intake
                      PROPERTIES LABELS "protocol-ingress;network-intake;plugin")
 
