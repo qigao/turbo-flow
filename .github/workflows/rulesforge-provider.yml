@@ -9,7 +9,11 @@ on:
       - 'turbo_flow/CMakeLists.txt'
       - 'turbo_flow/tests/CMakeLists.txt'
       - 'turbo_flow/tests/test_flow_rulesforge_plugin.c'
+      - 'turbo_flow/tests/test_flow_rulesforge_durable_network.c'
+      - 'io/cnet/**'
+      - 'io/durable/**'
       - 'plugins/rulesforge/**'
+      - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/rulesforge-provider.yml'
   workflow_dispatch:
 
@@ -167,11 +171,11 @@ jobs:
           sudo mkdir -p /opt/rulesforge
           sudo ln -sfn "$RUNNER_TEMP/sdk/rulesforge-debug" /opt/rulesforge/debug
 
-      - name: Apply RulesForge provider validation-only CMake assembly
+      - name: Apply durable RulesForge E2E validation-only CMake assembly
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py --rulesforge
+          python3 .github/ci/task4_runtime_assembly.py --rulesforge-e2e
           git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/rulesforge-focused-cmake.patch"
 
       - name: Configure provider-focused TurboFlow build
@@ -198,24 +202,39 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"
 
-      - name: Build and run real RulesForge provider test
+      - name: Build and run RulesForge provider and durable network composition
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/rulesforge-provider --target test_flow_rulesforge_plugin -j2
-          ctest --test-dir build/rulesforge-provider -R '^test_flow_rulesforge_plugin$' --output-on-failure
+          cmake --build build/rulesforge-provider \
+            --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network -j2
+          ctest --test-dir build/rulesforge-provider \
+            -R '^test_flow_rulesforge_(plugin|durable_network)$' --output-on-failure
 
-      - name: Install and load RulesForge provider from install tree
+      - name: Install and load composed providers from install tree
         shell: bash
         run: |
           set -euxo pipefail
           prefix="$RUNNER_TEMP/turboflow-rulesforge-install"
           cmake --install build/rulesforge-provider --prefix "$prefix"
           provider="$(find "$prefix" -type f \( -name 'libtf_rulesforge_provider.so' -o -name 'tf_rulesforge_provider.dll' \) | head -n1)"
+          cnet_provider="$(find "$prefix" -type f \( -name 'libtf_cnet_plugin.so' -o -name 'tf_cnet_plugin.dll' \) | head -n1)"
+          durable_provider="$(find "$prefix" -type f \( -name 'libtf_durable_memory_plugin.so' -o -name 'tf_durable_memory_plugin.dll' \) | head -n1)"
           test_bin="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_plugin*' -perm -111 | head -n1)"
+          composition_test="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_durable_network*' -perm -111 | head -n1)"
           test -n "$provider"
+          test -n "$cnet_provider"
+          test -n "$durable_provider"
           test -n "$test_bin"
-          FLOW_RULESFORGE_PLUGIN_PATH="$provider" "$test_bin"
+          test -n "$composition_test"
+          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
+            FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
+            "$test_bin"
+          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
+            FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
+            FLOW_CNET_PLUGIN_PATH="$cnet_provider" \
+            TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH="$durable_provider" \
+            "$composition_test"
 
       - name: Verify core unlink and canonical provider export
         shell: bash
