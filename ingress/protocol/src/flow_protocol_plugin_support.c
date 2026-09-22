@@ -88,26 +88,50 @@ int flow_protocol_metadata_format(char *out, size_t capacity,
                                                    : SALTS_EMSGSIZE;
 }
 
-int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
-                              turbo_flow_protocol_metadata_t *metadata,
-                              int lwm2m) {
+static int flow_protocol_coap_option_uint(const uint8_t *data, size_t size,
+                                          uint32_t *out) {
+  uint32_t value = 0u;
+  if (!out || (!data && size != 0u) || size > sizeof(value)) return SALTS_EPROTO;
+  for (size_t i = 0u; i < size; ++i)
+    value = (value << 8u) | data[i];
+  *out = value;
+  return SALTS_OK;
+}
+
+static int flow_protocol_coap_decode(
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata, int lwm2m,
+    turbo_flow_protocol_semantic_output_t *semantic) {
   size_t offset;
+  size_t payload_offset;
+  uint32_t option_number = 0u;
+  uint32_t content_format = TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE;
+  int content_format_seen = 0;
   uint8_t token_length;
   uint8_t code;
   const char *operation;
-  if (!frame || !metadata || frame->data_size < 4u) return SALTS_EPROTO;
+  int rc;
+
+  if (!frame || !frame->data || !metadata || frame->data_size < 4u) return SALTS_EPROTO;
+  if (semantic &&
+      (semantic->size < sizeof(*semantic) ||
+       semantic->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+       (!semantic->data && semantic->capacity != 0u)))
+    return SALTS_EINVAL;
   if ((frame->data[0] >> 6u) != 1u) return SALTS_EPROTO;
   token_length = frame->data[0] & 0x0fu;
   if (token_length > 8u || frame->data_size < 4u + token_length)
     return SALTS_EPROTO;
+
   offset = 4u + token_length;
+  payload_offset = frame->data_size;
   while (offset < frame->data_size) {
     const uint8_t header = frame->data[offset++];
     size_t delta = header >> 4u;
     size_t length = header & 0x0fu;
     if (header == 0xffu) {
       if (offset >= frame->data_size) return SALTS_EPROTO;
-      offset = frame->data_size;
+      payload_offset = offset;
       break;
     }
     if (delta == 15u || length == 15u) return SALTS_EPROTO;
@@ -129,10 +153,19 @@ int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
                frame->data[offset + 1u];
       offset += 2u;
     }
-    if (delta > UINT16_MAX || length > frame->data_size - offset)
+    if (delta > UINT16_MAX || option_number > UINT16_MAX - delta ||
+        length > frame->data_size - offset)
       return SALTS_EPROTO;
+    option_number += (uint32_t)delta;
+    if (option_number == 12u) {
+      if (content_format_seen) return SALTS_EPROTO;
+      rc = flow_protocol_coap_option_uint(frame->data + offset, length, &content_format);
+      if (rc != SALTS_OK) return rc;
+      content_format_seen = 1;
+    }
     offset += length;
   }
+
   code = frame->data[1];
   if (code == 0u)
     operation = "empty";
@@ -157,6 +190,7 @@ int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
   } else {
     operation = "response";
   }
+
   metadata->message_type = code;
   metadata->sequence =
       ((uint64_t)frame->data[2] << 8u) | (uint64_t)frame->data[3];
@@ -172,13 +206,43 @@ int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
     }
     metadata->correlation_id[(size_t)token_length * 2u] = '\0';
   }
+
+  if (semantic) {
+    const size_t payload_size =
+        payload_offset < frame->data_size ? frame->data_size - payload_offset : 0u;
+    semantic->semantic_type =
+        content_format_seen ? content_format : TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE;
+    semantic->media_type[0] = '\0';
+    if (content_format == 50u)
+      memcpy(semantic->media_type, "application/json", sizeof("application/json"));
+    if (payload_size > semantic->capacity) return SALTS_EMSGSIZE;
+    if (payload_size > 0u) {
+      if (!semantic->data) return SALTS_EINVAL;
+      memmove(semantic->data, frame->data + payload_offset, payload_size);
+    }
+    semantic->data_size = payload_size;
+  }
+
   return operation
              ? flow_protocol_metadata_text(metadata->operation,
-                                          sizeof(metadata->operation),
-                                          operation)
+                                           sizeof(metadata->operation),
+                                           operation)
              : flow_protocol_metadata_format(metadata->operation,
-                                            sizeof(metadata->operation),
-                                            "code-%02x", code);
+                                             sizeof(metadata->operation),
+                                             "code-%02x", code);
+}
+
+int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
+                               turbo_flow_protocol_metadata_t *metadata,
+                               int lwm2m) {
+  return flow_protocol_coap_decode(frame, metadata, lwm2m, NULL);
+}
+
+int flow_protocol_coap_decode_semantic(
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata, int lwm2m,
+    turbo_flow_protocol_semantic_output_t *semantic) {
+  return flow_protocol_coap_decode(frame, metadata, lwm2m, semantic);
 }
 
 static uint8_t flow_protocol_coap_response_code(uint8_t request_code,
