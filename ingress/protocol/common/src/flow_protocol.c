@@ -270,7 +270,9 @@ int turbo_flow_protocol_decode_semantic(
                                      protocol->protocol_version, frame,
                                      &inspected, &semantic);
   if (rc != SALTS_OK) return rc;
-  if (semantic.data != semantic_data || semantic.capacity != semantic_capacity ||
+  if (semantic.size < sizeof(semantic) ||
+      semantic.abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+      semantic.data != semantic_data || semantic.capacity != semantic_capacity ||
       semantic.data_size > semantic.capacity ||
       memchr(semantic.media_type, '\0', sizeof(semantic.media_type)) == NULL)
     return SALTS_EPROTO;
