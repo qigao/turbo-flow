@@ -3,6 +3,7 @@
 #include "flow_protocol_network_intake_internal.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
+#include "turbo_flow_plugin_protocol_mapper.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,9 @@ struct turbo_flow_protocol_network_intake_s {
   turbo_flow_plugin_product_owner_v1_t source_owner;
   flow_protocol_network_intake_sink_t *sink;
   flow_protocol_network_intake_settings_t settings;
+  turbo_flow_protocol_mapper_v1_t mapper;
+  turbo_flow_protocol_mapper_contract_t mapper_contract;
+  int mapper_bound;
   uint64_t source_polls;
   char source_endpoint[TURBO_FLOW_ENDPOINT_MAX + 1u];
 };
@@ -75,6 +79,86 @@ static int intake_owner_product_catalog(
       (catalog->adapter_provider_count != 0u && !catalog->adapter_providers))
     return intake_owner_error(error, SALTS_EPROTO, "$.providers",
                               "transactional provider catalog is malformed");
+  return SALTS_OK;
+}
+
+
+static int intake_owner_mapper_bind(
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    const flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_protocol_mapper_v1_t *mapper_out,
+    turbo_flow_protocol_mapper_contract_t *contract_out,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_plugin_protocol_mapper_catalog_v1_t catalog =
+      TURBO_FLOW_PLUGIN_PROTOCOL_MAPPER_CATALOG_V1_INIT;
+  turbo_flow_protocol_mapper_preflight_request_t request =
+      TURBO_FLOW_PROTOCOL_MAPPER_PREFLIGHT_REQUEST_INIT;
+  const turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t *selected = NULL;
+  turbo_flow_protocol_mapper_contract_t contract = TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT;
+  size_t matches = 0u;
+  int rc;
+  if (!snapshot || !settings || !mapper_out || !contract_out)
+    return intake_owner_error(error, SALTS_EINVAL, "$.protocol_mapper",
+                              "invalid protocol mapper binding arguments");
+  memset(mapper_out, 0, sizeof(*mapper_out));
+  *contract_out = (turbo_flow_protocol_mapper_contract_t)
+      TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT;
+  if (settings->schema_version != 3u) return SALTS_OK;
+
+  rc = turbo_flow_plugin_catalog_snapshot_protocol_mapper_catalog(snapshot, &catalog);
+  if (rc != SALTS_OK)
+    return intake_owner_error(error, rc, "$.protocol_mapper",
+                              "failed to project protocol mapper catalog");
+  for (size_t i = 0u; i < catalog.count; ++i) {
+    const turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t *entry = &catalog.entries[i];
+    if (!entry->plugin_id || strcmp(entry->plugin_id, settings->mapper_plugin) != 0 ||
+        entry->mapper.protocol != settings->protocol_kind ||
+        !entry->mapper.name || strcmp(entry->mapper.name, settings->mapper_name) != 0 ||
+        !entry->mapper.profile || strcmp(entry->mapper.profile, settings->mapper_profile) != 0)
+      continue;
+    selected = entry;
+    ++matches;
+  }
+  if (matches != 1u || !selected)
+    return intake_owner_error(error, matches ? SALTS_EALREADY : SALTS_ENOENT,
+                              "$.protocol_mapper",
+                              matches ? "configured protocol mapper is ambiguous"
+                                      : "configured protocol mapper is missing");
+  if (settings->mapper_max_semantic_bytes > selected->mapper.max_semantic_bytes ||
+      settings->mapper_max_output_bytes > selected->mapper.max_output_bytes)
+    return intake_owner_error(error, SALTS_ENOSPC, "$.protocol_mapper",
+                              "configured mapper bounds exceed provider limits");
+
+  request.protocol = settings->protocol_kind;
+  request.profile = settings->mapper_profile;
+  request.message_type = settings->mapper_message_type;
+  request.semantic_type = settings->mapper_semantic_type;
+  request.semantic_media_type = settings->mapper_semantic_media_type;
+  request.max_semantic_bytes = settings->mapper_max_semantic_bytes;
+  request.max_output_bytes = settings->mapper_max_output_bytes;
+  rc = selected->mapper.preflight(selected->mapper.ctx, &request, &contract);
+  if (rc != SALTS_OK)
+    return intake_owner_error(error, rc, "$.protocol_mapper.preflight",
+                              "protocol mapper preflight failed");
+  if (contract.size != sizeof(contract) ||
+      contract.abi_version != TURBO_FLOW_PROTOCOL_MAPPER_ABI_VERSION ||
+      contract.protocol != request.protocol ||
+      contract.message_type != request.message_type ||
+      contract.semantic_type != request.semantic_type ||
+      memchr(contract.profile, '\0', sizeof(contract.profile)) == NULL ||
+      strcmp(contract.profile, request.profile) != 0 ||
+      !contract.max_semantic_bytes ||
+      contract.max_semantic_bytes > request.max_semantic_bytes ||
+      !contract.max_output_bytes ||
+      contract.max_output_bytes > request.max_output_bytes ||
+      turbo_flow_content_descriptor_check(&contract.content) != SALTS_OK ||
+      contract.content.domain != TURBO_FLOW_DOMAIN_DATA ||
+      (contract.content.flags & TURBO_FLOW_CONTENT_SCHEMA_DECLARED) == 0u)
+    return intake_owner_error(error, SALTS_EPROTO, "$.protocol_mapper.preflight",
+                              "protocol mapper returned an invalid compiled contract");
+
+  *mapper_out = selected->mapper;
+  *contract_out = contract;
   return SALTS_OK;
 }
 
@@ -342,6 +426,13 @@ int turbo_flow_protocol_network_intake_create(
     return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_EPROTO, "$.protocol",
                               "configured protocol owner returned no matching instance");
   }
+  rc = intake_owner_mapper_bind(intake->catalog, &intake->settings, &intake->mapper,
+                                &intake->mapper_contract, error);
+  if (rc != SALTS_OK) {
+    intake_owner_pretransfer_cleanup(intake);
+    return rc;
+  }
+  intake->mapper_bound = intake->settings.schema_version == 3u;
 
   memset(&sink_config, 0, sizeof(sink_config));
   sink_config.flow = *intake_flow_io;
@@ -350,6 +441,8 @@ int turbo_flow_protocol_network_intake_create(
   sink_config.downstream_flow = config->downstream_flow;
   sink_config.decoded_source_name = config->decoded_source_name;
   sink_config.settings = &intake->settings;
+  sink_config.mapper = intake->mapper_bound ? &intake->mapper : NULL;
+  sink_config.mapper_contract = intake->mapper_bound ? &intake->mapper_contract : NULL;
   rc = flow_protocol_network_intake_sink_create(&sink_config, &intake->sink);
   if (rc != SALTS_OK) {
     intake_owner_pretransfer_cleanup(intake);

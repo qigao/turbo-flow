@@ -49,6 +49,37 @@ static const char packet_yaml[] =
     "      max_pending_claims: 64\n"
     "      max_pending_bytes: 65536\n";
 
+static const char packet_v3_yaml[] =
+    "version: 1\n"
+    "adapters:\n"
+    "  udp.input:\n"
+    "    kind: cnet.packet_source\n"
+    "    config:\n"
+    "      packet_mode: udp\n"
+    "      session_capacity: 4\n"
+    "      max_message_bytes: 1024\n"
+    "      scheduler_max_steps_per_poll: 32\n"
+    "  protocol.decode:\n"
+    "    kind: protocol.decode\n"
+    "    config:\n"
+    "      schema_version: 3\n"
+    "      protocol_provider: coap\n"
+    "      protocol_kind: coap\n"
+    "      protocol_version: RFC7252\n"
+    "      source_id: coap.primary\n"
+    "      max_sessions: 4\n"
+    "      max_frame_size: 1024\n"
+    "      max_pending_claims: 64\n"
+    "      max_pending_bytes: 65536\n"
+    "      mapper_plugin: applicant.mapper\n"
+    "      mapper_name: applicant\n"
+    "      mapper_profile: applicant-json\n"
+    "      mapper_message_type: 2\n"
+    "      mapper_semantic_type: 50\n"
+    "      mapper_semantic_media_type: application/json\n"
+    "      mapper_max_semantic_bytes: 1024\n"
+    "      mapper_max_output_bytes: 2048\n";
+
 static const char listener_graph[] =
     "source wire adapter tcp.input\n"
     "stage decode adapter protocol.decode\n"
@@ -134,6 +165,41 @@ spec("protocol network intake configuration") {
     check_equal(settings.transport_kind, FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP);
     check_equal(strcmp(settings.protocol_provider, "coap"), 0);
     check_equal(strcmp(settings.protocol_version, "RFC7252"), 0);
+  }
+
+  it("accepts exact v3 mapper fields and rejects incomplete or oversized semantic bounds") {
+    char yaml[4096];
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    memset(&settings, 0, sizeof(settings));
+    check_equal(run_preflight(packet_v3_yaml, packet_graph, "udp.input", &settings, &error),
+                SALTS_OK);
+    check_equal(settings.schema_version, 3u);
+    check_equal(strcmp(settings.mapper_plugin, "applicant.mapper"), 0);
+    check_equal(strcmp(settings.mapper_name, "applicant"), 0);
+    check_equal(strcmp(settings.mapper_profile, "applicant-json"), 0);
+    check_equal(settings.mapper_message_type, 2u);
+    check_equal(settings.mapper_semantic_type, 50u);
+    check_equal(strcmp(settings.mapper_semantic_media_type, "application/json"), 0);
+    check_equal(settings.mapper_max_semantic_bytes, (size_t)1024u);
+    check_equal(settings.mapper_max_output_bytes, (size_t)2048u);
+
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(replace_once(packet_v3_yaml,
+                             "      mapper_profile: applicant-json\n", "",
+                             yaml, sizeof(yaml)),
+                SALTS_OK);
+    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_EINVAL);
+
+    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(replace_once(packet_v3_yaml,
+                             "      mapper_max_semantic_bytes: 1024\n",
+                             "      mapper_max_semantic_bytes: 1025\n",
+                             yaml, sizeof(yaml)),
+                SALTS_OK);
+    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "mapper_max_semantic_bytes");
   }
 
   it("rejects unknown and missing intake fields") {

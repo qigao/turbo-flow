@@ -39,6 +39,7 @@ env:
   SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib
 
 jobs:
   linux-public-compile:
@@ -161,6 +162,18 @@ jobs:
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
+      - name: Install pinned DataBind package separately
+        shell: bash
+        working-directory: .ci/deps/salts-utils
+        run: |
+          set -euxo pipefail
+          cmake --install build/linux-gcc-debug \
+            --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
+          test -f "$RUNNER_TEMP/sdk/databind-debug/lib/cmake/DataBind/DataBindConfig.cmake"
+          test -x "$RUNNER_TEMP/sdk/databind-debug/bin/tbe_compiler"
+          sudo mkdir -p /opt/databind
+          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
+
       - name: Configure public compile contract
         shell: bash
         env:
@@ -196,6 +209,57 @@ jobs:
           ./build/protocol-network-compile/protocol_semantic_mapper_contract \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/semantic-mapper.log"
 
+      - name: Assemble focused protocol intake runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 .github/ci/task4_runtime_assembly.py --protocol-intake
+          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt \
+            | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-assembly.patch"
+
+      - name: Configure focused protocol intake runtime
+        shell: bash
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          DATABIND_ROOT: /opt/databind/debug
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/protocol-network-runtime -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DBUILD_TESTING=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-configure.log"
+
+      - name: Build and run focused protocol intake runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/protocol-network-runtime \
+            --target test_protocol_network_intake_config test_protocol_network_intake_core -j2 \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
+          ctest --test-dir build/protocol-network-runtime \
+            -R '^test_protocol_network_intake_(config|core)$' \
+            --output-on-failure \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
+
+      - name: Restore focused runtime assembly
+        if: always()
+        shell: bash
+        run: |
+          git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
       - name: Verify sanitizer instrumentation flags
         shell: bash
         run: |
@@ -228,3 +292,4 @@ jobs:
           path: |
             ${{ runner.temp }}/protocol-intake-evidence/
             build/protocol-network-compile/CMakeCache.txt
+            build/protocol-network-runtime/CMakeCache.txt
