@@ -4,10 +4,11 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--turbodb", action="store_true")
 parser.add_argument("--rulesforge", action="store_true")
+parser.add_argument("--rulesforge-e2e", action="store_true")
 parser.add_argument("--materializer", action="store_true")
 args = parser.parse_args()
-if sum((args.turbodb, args.rulesforge, args.materializer)) > 1:
-    parser.error("--turbodb, --rulesforge and --materializer are mutually exclusive")
+if sum((args.turbodb, args.rulesforge, args.rulesforge_e2e, args.materializer)) > 1:
+    parser.error("--turbodb, --rulesforge, --rulesforge-e2e and --materializer are mutually exclusive")
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
@@ -31,6 +32,37 @@ if args.rulesforge:
         "target_compile_definitions(test_flow_rulesforge_plugin PRIVATE\n"
         '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
         "add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)\n"
+    )
+elif args.rulesforge_e2e:
+    children = (
+        "add_subdirectory(ingress/protocol/common)\n"
+        "add_subdirectory(turbo_flow)\n"
+        "add_subdirectory(io/cnet)\n"
+        "add_subdirectory(io/durable)\n"
+        "add_subdirectory(plugins/rulesforge)\n"
+        "\n"
+        "cmake_add_test(\n"
+        "  test_flow_rulesforge_plugin\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_plugin.c\n"
+        "  LIBS TurboFlow::PluginHost Salts::TinyTest\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/plugins/rulesforge/include\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_rulesforge_plugin PRIVATE\n"
+        '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")\n'
+        "add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)\n"
+        "\n"
+        "cmake_add_test(\n"
+        "  test_flow_rulesforge_durable_network\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_durable_network.c\n"
+        "  LIBS TurboFlow::PluginHost Salts::TinyTest Salts::CNet\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/plugins/rulesforge/include\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "target_compile_definitions(test_flow_rulesforge_durable_network PRIVATE\n"
+        '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>"\n'
+        '  TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"\n'
+        '  TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>")\n'
+        "add_dependencies(test_flow_rulesforge_durable_network\n"
+        "  tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin)\n"
     )
 elif args.materializer:
     children = (
@@ -116,7 +148,7 @@ text = graph.read_text()
 assert "RulesForge::RulesForge" not in text
 assert "find_package(RulesForge" not in text
 
-if args.rulesforge or args.materializer:
+if args.rulesforge or args.rulesforge_e2e or args.materializer:
     full_tests = """if(BUILD_TESTING)
   add_subdirectory(tests)
   add_subdirectory(benchmarks)
