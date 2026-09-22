@@ -12,6 +12,15 @@
 #ifndef FLOW_PROTOCOL_JTT808_MODULE
   #error FLOW_PROTOCOL_JTT808_MODULE is required
 #endif
+#ifndef FLOW_PROTOCOL_NETWORK_PACKET_SOURCE_FIXTURE
+  #error FLOW_PROTOCOL_NETWORK_PACKET_SOURCE_FIXTURE is required
+#endif
+#ifndef FLOW_PROTOCOL_SEMANTIC_COAP_FIXTURE
+  #error FLOW_PROTOCOL_SEMANTIC_COAP_FIXTURE is required
+#endif
+#ifndef FLOW_PROTOCOL_MAPPER_GOOD
+  #error FLOW_PROTOCOL_MAPPER_GOOD is required
+#endif
 
 extern int protocol_network_intake_header_cpp_probe(void);
 
@@ -49,6 +58,39 @@ static void intake_owner_yaml(char *out, size_t capacity, const char *source_nam
                       "      max_pending_claims: 4\n"
                       "      max_pending_bytes: 256\n",
                       source_name, protocol_version) > 0);
+}
+
+static void intake_owner_mapper_yaml(char *out, size_t capacity) {
+  check_true(snprintf(out, capacity,
+                      "version: 1\n"
+                      "adapters:\n"
+                      "  udp.input:\n"
+                      "    kind: cnet.packet_source\n"
+                      "    config:\n"
+                      "      packet_mode: udp\n"
+                      "      session_capacity: 1\n"
+                      "      max_message_bytes: 64\n"
+                      "      scheduler_max_steps_per_poll: 2\n"
+                      "  protocol.decode:\n"
+                      "    kind: protocol.decode\n"
+                      "    config:\n"
+                      "      schema_version: 3\n"
+                      "      protocol_provider: coap-semantic-fixture\n"
+                      "      protocol_kind: coap\n"
+                      "      protocol_version: RFC7252\n"
+                      "      source_id: fixture.semantic\n"
+                      "      max_sessions: 1\n"
+                      "      max_frame_size: 64\n"
+                      "      max_pending_claims: 4\n"
+                      "      max_pending_bytes: 256\n"
+                      "      mapper_plugin: fixture.protocol-mapper.good\n"
+                      "      mapper_name: fixture.mapper\n"
+                      "      mapper_profile: applicant-json\n"
+                      "      mapper_message_type: 2\n"
+                      "      mapper_semantic_type: 50\n"
+                      "      mapper_semantic_media_type: application/json\n"
+                      "      mapper_max_semantic_bytes: 64\n"
+                      "      mapper_max_output_bytes: 64\n") > 0);
 }
 
 static void intake_owner_graph(char *out, size_t capacity, const char *source_name) {
@@ -125,6 +167,60 @@ static intake_owner_fixture_t intake_owner_fixture(const char *source_name,
   fixture.flow = turbo_flow_create();
   check_not_null(fixture.flow);
   intake_owner_graph(graph, sizeof(graph), source_name);
+  check_equal(turbo_flow_parse_string(fixture.flow, graph, strlen(graph)), SALTS_OK);
+  return fixture;
+}
+
+static intake_owner_fixture_t intake_owner_mapper_fixture(int load_mapper) {
+  turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
+  turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_inbox_memory_config_t inbox_config = turbo_flow_inbox_memory_config_default();
+  intake_owner_fixture_t fixture;
+  char yaml[4096];
+  char graph[512];
+
+  memset(&fixture, 0, sizeof(fixture));
+  fixture.inbox = (turbo_flow_inbox_t)TURBO_FLOW_INBOX_INIT;
+  host_config.module_capacity = 3u;
+  host_config.adapter_provider_capacity = 0u;
+  host_config.resource_provider_capacity = 0u;
+  host_config.protocol_provider_capacity = 1u;
+  host_config.business_provider_capacity = 0u;
+  host_config.transactional_adapter_provider_capacity = 1u;
+  host_config.transactional_resource_provider_capacity = 0u;
+  host_config.schema_capacity = 0u;
+  host_config.operation_capacity = 0u;
+  host_config.materializer_capacity = 0u;
+  host_config.protocol_mapper_capacity = 1u;
+
+  check_equal(turbo_flow_plugin_host_create(&host_config, &fixture.host, &plugin_error), SALTS_OK);
+  check_equal(turbo_flow_plugin_host_load(fixture.host, FLOW_PROTOCOL_NETWORK_PACKET_SOURCE_FIXTURE,
+                                          &plugin_error),
+              SALTS_OK);
+  check_equal(turbo_flow_plugin_host_load(fixture.host, FLOW_PROTOCOL_SEMANTIC_COAP_FIXTURE,
+                                          &plugin_error),
+              SALTS_OK);
+  if (load_mapper)
+    check_equal(turbo_flow_plugin_host_load(fixture.host, FLOW_PROTOCOL_MAPPER_GOOD,
+                                            &plugin_error),
+                SALTS_OK);
+  check_equal(turbo_flow_plugin_catalog_snapshot_create(fixture.host, &fixture.catalog,
+                                                        &plugin_error),
+              SALTS_OK);
+
+  intake_owner_mapper_yaml(yaml, sizeof(yaml));
+  check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture.resolved, &config_error),
+              SALTS_OK);
+  inbox_config.max_records = 8u;
+  inbox_config.max_total_bytes = 8192u;
+  inbox_config.max_record_bytes = 4096u;
+  inbox_config.max_claims = 8u;
+  check_equal(turbo_flow_inbox_memory_create(&inbox_config, &fixture.inbox), SALTS_OK);
+  check_equal(intake_owner_downstream_open(&fixture), SALTS_OK);
+  fixture.flow = turbo_flow_create();
+  check_not_null(fixture.flow);
+  intake_owner_graph(graph, sizeof(graph), "udp.input");
   check_equal(turbo_flow_parse_string(fixture.flow, graph, strlen(graph)), SALTS_OK);
   return fixture;
 }
@@ -225,6 +321,44 @@ spec("ProtocolNetworkIntake owner") {
     check_equal(snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED);
     check_equal(turbo_flow_protocol_network_intake_destroy(intake), SALTS_OK);
 
+    intake_owner_fixture_release_inputs(&fixture);
+    intake_owner_host_destroy(&fixture, SALTS_OK);
+  }
+
+  it("binds one exact mapper from the retained PluginHost catalog before Flow transfer") {
+    intake_owner_fixture_t fixture = intake_owner_mapper_fixture(1);
+    turbo_flow_protocol_network_intake_config_t config =
+        intake_owner_config(&fixture, "udp.input");
+    turbo_flow_protocol_network_intake_t *intake = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    check_equal(turbo_flow_protocol_network_intake_create(&config, &fixture.flow, &intake, &error),
+                SALTS_OK);
+    check_null(fixture.flow);
+    check_not_null(intake);
+
+    turbo_flow_plugin_catalog_snapshot_destroy(fixture.catalog);
+    fixture.catalog = NULL;
+    intake_owner_host_destroy(&fixture, SALTS_EBUSY);
+
+    check_equal(turbo_flow_protocol_network_intake_stop(intake, 1000u), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_destroy(intake), SALTS_OK);
+    intake_owner_fixture_release_inputs(&fixture);
+    intake_owner_host_destroy(&fixture, SALTS_OK);
+  }
+
+  it("rejects a missing configured mapper before transferring Flow or admitting bytes") {
+    intake_owner_fixture_t fixture = intake_owner_mapper_fixture(0);
+    turbo_flow_protocol_network_intake_config_t config =
+        intake_owner_config(&fixture, "udp.input");
+    turbo_flow_protocol_network_intake_t *intake = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+
+    check_equal(turbo_flow_protocol_network_intake_create(&config, &fixture.flow, &intake, &error),
+                SALTS_ENOENT);
+    check_not_null(fixture.flow);
+    check_null(intake);
+    check_contains(error.path, "protocol_mapper");
     intake_owner_fixture_release_inputs(&fixture);
     intake_owner_host_destroy(&fixture, SALTS_OK);
   }
