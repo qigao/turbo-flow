@@ -162,6 +162,18 @@ jobs:
           sudo mkdir -p /opt/salts-utils
           sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
 
+      - name: Install pinned DataBind package separately
+        shell: bash
+        working-directory: .ci/deps/salts-utils
+        run: |
+          set -euxo pipefail
+          cmake --install build/linux-gcc-debug \
+            --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
+          test -f "$RUNNER_TEMP/sdk/databind-debug/lib/cmake/DataBind/DataBindConfig.cmake"
+          test -x "$RUNNER_TEMP/sdk/databind-debug/bin/tbe_compiler"
+          sudo mkdir -p /opt/databind
+          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
+
       - name: Configure public compile contract
         shell: bash
         env:
