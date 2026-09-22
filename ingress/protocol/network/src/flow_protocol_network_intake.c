@@ -145,6 +145,7 @@ static int intake_owner_mapper_bind(
       contract.protocol != request.protocol ||
       contract.message_type != request.message_type ||
       contract.semantic_type != request.semantic_type ||
+      memchr(contract.profile, '\0', sizeof(contract.profile)) == NULL ||
       strcmp(contract.profile, request.profile) != 0 ||
       !contract.max_semantic_bytes ||
       contract.max_semantic_bytes > request.max_semantic_bytes ||
