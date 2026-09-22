@@ -21,6 +21,8 @@ extern "C" {
 #define TURBO_FLOW_PROTOCOL_RESOURCE_MAX 255u
 #define TURBO_FLOW_PROTOCOL_VERSION_MAX 15u
 #define TURBO_FLOW_PROTOCOL_CORRELATION_MAX 63u
+#define TURBO_FLOW_PROTOCOL_SEMANTIC_MEDIA_TYPE_MAX 63u
+#define TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE UINT32_MAX
 #define TURBO_FLOW_PROTOCOL_DEFAULT_MAX_FRAME_SIZE (1024u * 1024u)
 
 typedef enum turbo_flow_protocol_kind_e {
@@ -144,6 +146,36 @@ typedef struct turbo_flow_protocol_message_output_s {
    0u,                                                                                             \
    TURBO_FLOW_PROTOCOL_METADATA_INIT}
 
+
+/**
+ * Caller-owned semantic/application content produced by a codec.
+ *
+ * data points to caller storage and must not be replaced or retained by the
+ * codec. data_size is published only after a successful semantic decode.
+ * semantic_type is protocol-defined (for example CoAP Content-Format or a
+ * JT/T 808 transparent-data subtype); UINT32_MAX means no discriminator.
+ * media_type is protocol-derived and may be empty when the wire protocol does
+ * not declare one.
+ */
+typedef struct turbo_flow_protocol_semantic_output_s {
+  size_t size;
+  uint32_t abi_version;
+  uint8_t *data;
+  size_t capacity;
+  size_t data_size;
+  uint32_t semantic_type;
+  char media_type[TURBO_FLOW_PROTOCOL_SEMANTIC_MEDIA_TYPE_MAX + 1u];
+} turbo_flow_protocol_semantic_output_t;
+
+#define TURBO_FLOW_PROTOCOL_SEMANTIC_OUTPUT_INIT                                                   \
+  {sizeof(turbo_flow_protocol_semantic_output_t),                                                  \
+   TURBO_FLOW_PROTOCOL_ABI_VERSION,                                                                \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u,                                                                                             \
+   TURBO_FLOW_PROTOCOL_SEMANTIC_TYPE_NONE,                                                         \
+   {0}}
+
 /** Caller-owned frame buffer receiving one protocol frame. */
 typedef struct turbo_flow_protocol_frame_output_s {
   size_t size;
@@ -225,6 +257,24 @@ TURBO_FLOW_C_API int turbo_flow_protocol_encode(turbo_flow_protocol_t *protocol,
 TURBO_FLOW_C_API int turbo_flow_protocol_decode(turbo_flow_protocol_t *protocol,
                                                 const turbo_flow_protocol_frame_view_t *frame,
                                                 turbo_flow_protocol_message_output_t *output);
+
+
+/**
+ * Decode one ingress frame through a codec-owned single-pass semantic path.
+ *
+ * raw_output receives the complete original frame exactly as
+ * turbo_flow_protocol_decode() does. semantic_output receives only decoded
+ * application/semantic content. The codec is the sole wire parser: this API
+ * never falls back to host parsing or calls inspect in addition to the semantic
+ * callback. Codecs without the optional semantic callback return SALTS_ENOTSUP.
+ *
+ * Both output buffers are caller-owned and synchronous. On failure both
+ * published sizes are zero; buffer bytes are unspecified.
+ */
+TURBO_FLOW_C_API int turbo_flow_protocol_decode_semantic(
+    turbo_flow_protocol_t *protocol, const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_message_output_t *raw_output,
+    turbo_flow_protocol_semantic_output_t *semantic_output);
 
 /** Return the stable lowercase name of a protocol kind, or NULL if invalid. */
 TURBO_FLOW_C_API const char *turbo_flow_protocol_kind_name(turbo_flow_protocol_kind_t protocol);
