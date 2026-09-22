@@ -41,6 +41,7 @@ int flow_protocol_plugin_open(
   ops.decode_semantic = descriptor->decode_semantic;
   if (ops.reply) capabilities |= TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY;
   if (ops.encode) capabilities |= TURBO_FLOW_PROTOCOL_CAP_COMMAND_ENCODE;
+  if (ops.decode_semantic) capabilities |= TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE;
   rc = turbo_flow_protocol_create(
       request, descriptor->name, descriptor->default_version,
       capabilities, &ops, descriptor->inspect_ctx,
