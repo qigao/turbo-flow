@@ -35,6 +35,8 @@ enum {
   COMPOSITION_PAYLOAD_CAPACITY = 16
 };
 
+#define COMPOSITION_RULE_RESOURCE_TYPE "RulesForgeKnowledgeBase"
+
 #define COMPOSITION_CLIENT_YAML                                                                  \
   "      backend: " COMPOSITION_BACKEND "\n"                                                   \
   "      connection_capacity: 4\n"                                                              \
@@ -262,6 +264,10 @@ static turbo_flow_operation_descriptor_t rulesforge_operation_metadata(void) {
   descriptor.input_type = "Message";
   descriptor.output_domain = TURBO_FLOW_DOMAIN_DATA;
   descriptor.output_type = "Message";
+  descriptor.resource_domain = TURBO_FLOW_DOMAIN_RULES;
+  descriptor.resource_type = COMPOSITION_RULE_RESOURCE_TYPE;
+  descriptor.resource_min_version = 1u;
+  descriptor.resource_max_version = 1u;
   descriptor.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   descriptor.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
   descriptor.flags = TURBO_FLOW_OPERATION_STAGE;
@@ -490,6 +496,16 @@ spec("RulesForge real network composition") {
                 SALTS_OK);
     check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &error), SALTS_OK);
     check_equal(turbo_flow_parse_string(flow, graph_text, sizeof(graph_text) - 1u), SALTS_OK);
+    {
+      const turbo_flow_primitive_descriptor_t rules_resource = {
+          sizeof(turbo_flow_primitive_descriptor_t),
+          "rules.adult",
+          COMPOSITION_RULE_RESOURCE_TYPE,
+          1u,
+          TURBO_FLOW_DOMAIN_RULES,
+          TURBO_FLOW_PRIMITIVE_RESOURCE};
+      check_equal(turbo_flow_register_primitive(flow, &rules_resource), SALTS_OK);
+    }
     turbo_flow_operation_descriptor_t rulesforge_metadata = rulesforge_operation_metadata();
     check_equal(turbo_flow_register_operation(flow, &rulesforge_metadata), SALTS_OK);
     flow_test_operation_t verify =
