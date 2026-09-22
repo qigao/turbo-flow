@@ -2,11 +2,18 @@
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_operation.h"
 #include "../src/flow_projection_owner_internal.h"
+#include "../../tests/flow_operation_fixture.h"
 
 #include <cmeta/type_select.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tinytest.h>
+
+static int materializer_noop_stage(turbo_flow_msg_t *msg, void *ctx) {
+  (void)msg;
+  (void)ctx;
+  return SALTS_OK;
+}
 
 static const char yaml_good[] =
     "version: 1\n"
@@ -238,6 +245,35 @@ static void yaml_max_inflight(char *out, size_t capacity, uint32_t max_inflight)
 }
 
 spec("generation materializer preflight") {
+  it("allows an exact provider-private operation resource without a Graph primitive") {
+    static const char graph[] =
+        "source input\n"
+        "stage decide operation fixture.private resource rules.private\n"
+        "stage main {\n"
+        "  input -> decide\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    flow_test_operation_t operation =
+        flow_test_operation_init("fixture.private", materializer_noop_stage, NULL);
+
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    operation.provider.resource_name = "rules.private";
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_null(turbo_flow_find_primitive(flow, "rules.private"));
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+
+    flow = turbo_flow_create();
+    operation = flow_test_operation_init("fixture.private", materializer_noop_stage, NULL);
+    operation.provider.resource_name = "rules.other";
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_not_equal(turbo_flow_compile(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
   it("compiles one exact materializer binding before Graph start") {
     materializer_generation_test_t t;
     check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
