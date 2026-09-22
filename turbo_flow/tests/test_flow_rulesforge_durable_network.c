@@ -498,10 +498,14 @@ spec("RulesForge real network composition") {
     verify.descriptor.scope.lifetime = TURBO_FLOW_LIFETIME_RUNTIME_GENERATION;
     check_equal(flow_test_operation_register(flow, &verify), SALTS_OK);
     generation_config.owner_capacity = 4u;
-    check_equal(turbo_flow_plugin_generation_create(
-                    snapshot, resolved, &flow, &generation_config, result_domain, &generation,
-                    &cleanup_generation, &error),
-                SALTS_OK);
+    {
+      const int generation_status = turbo_flow_plugin_generation_create(
+          snapshot, resolved, &flow, &generation_config, result_domain, &generation,
+          &cleanup_generation, &error);
+      info("generation status=%d path=%s message=%s", generation_status,
+           error.path, error.message);
+      check_equal(generation_status, SALTS_OK);
+    }
     check_null(flow);
     check_not_null(generation);
     turbo_flow_resolved_config_destroy(resolved);
