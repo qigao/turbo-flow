@@ -78,9 +78,11 @@ set_tests_properties(test_protocol_plugin_abi PROPERTIES LABELS "protocol-ingres
 
 cmake_add_test(
   test_protocol_source
-  SOURCES test_protocol_source.c
+  SOURCES test_protocol_source.c protocol_source_header_cpp.cpp
   LIBS TurboFlow::ProtocolIngress Salts::TinyTest
   FOLDER "ingress/protocol/tests")
+set_target_properties(test_protocol_source PROPERTIES
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 set_tests_properties(test_protocol_source
                      PROPERTIES LABELS "protocol-ingress;protocol-source")
 
