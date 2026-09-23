@@ -1,4 +1,5 @@
 name: Protocol network intake
+# Applicant mapper focused gate reuses this workflow's dependency bootstrap.
 
 on:
   push:
