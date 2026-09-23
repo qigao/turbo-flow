@@ -20,6 +20,8 @@ option(TURBO_FLOW_BUILD_TURBODB_ADAPTER
        "Build the TurboDb ORM Publisher adapter" OFF)
 option(TURBO_FLOW_BUILD_RULESFORGE_PLUGIN
        "Build the separately loaded RulesForge typed-operation plugin" OFF)
+option(TURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN
+       "Build the separately loaded Applicant JSON protocol-mapper plugin" OFF)
 
 option(TURBO_FLOW_REDIS_LIVE_TESTS
        "Enable Redis integration tests against 127.0.0.1:6379" OFF)
