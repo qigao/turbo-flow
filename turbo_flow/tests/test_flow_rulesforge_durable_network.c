@@ -677,20 +677,27 @@ spec("RulesForge real network composition") {
     if (!durable_plugin || !durable_plugin[0])
       durable_plugin = TURBO_FLOW_DURABLE_MEMORY_PLUGIN;
     if (!rulesforge_plugin || !rulesforge_plugin[0]) rulesforge_plugin = FLOW_RULESFORGE_PLUGIN;
-    host_config.module_capacity = 3u;
+    if (!jtt808_plugin || !jtt808_plugin[0]) jtt808_plugin = FLOW_PROTOCOL_JTT808_PLUGIN;
+    if (!coap_plugin || !coap_plugin[0]) coap_plugin = FLOW_PROTOCOL_COAP_PLUGIN;
+    if (!mapper_plugin || !mapper_plugin[0]) mapper_plugin = FLOW_APPLICANT_MAPPER_PLUGIN;
+    host_config.module_capacity = 6u;
     host_config.adapter_provider_capacity = 0u;
     host_config.resource_provider_capacity = 0u;
-    host_config.protocol_provider_capacity = 0u;
+    host_config.protocol_provider_capacity = 2u;
     host_config.business_provider_capacity = 0u;
     host_config.transactional_adapter_provider_capacity = 6u;
     host_config.transactional_resource_provider_capacity = 1u;
     host_config.schema_capacity = 2u;
     host_config.operation_capacity = 1u;
     host_config.materializer_capacity = 1u;
+    host_config.protocol_mapper_capacity = 2u;
     check_equal(turbo_flow_plugin_host_create(&host_config, &host, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, cnet_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, durable_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, rulesforge_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, jtt808_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, coap_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, mapper_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_result_domain_create(snapshot, COMPOSITION_MESSAGE_CAPACITY,
                                                        &result_domain, &plugin_error),
@@ -725,22 +732,28 @@ spec("RulesForge real network composition") {
     }
     check_null(flow);
     check_not_null(generation);
-    turbo_flow_resolved_config_destroy(resolved);
-    resolved = NULL;
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
 
-    for (size_t i = 0u; i < turbo_flow_adapter_count(turbo_flow_plugin_generation_flow(generation));
-         ++i) {
-      turbo_flow_connection_snapshot_t connection;
-      memset(&connection, 0, sizeof(connection));
-      if (turbo_flow_adapter_connection_snapshot_at(turbo_flow_plugin_generation_flow(generation),
-                                                    i, &connection) != SALTS_OK)
-        continue;
-      if (connection.adapter_name && strcmp(connection.adapter_name, "listener.source") == 0)
-        tcp_port = endpoint_port(connection.endpoint, "tcp://");
-      if (connection.adapter_name && strcmp(connection.adapter_name, "packet.source") == 0)
-        udp_port = endpoint_port(connection.endpoint, "udp://");
-    }
+    check_equal(composition_intake_create(
+                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation),
+                    "listener.source", "jtt.decode", "jtt_decoded",
+                    jtt_intake_graph, &jtt_intake),
+                SALTS_OK);
+    check_equal(composition_intake_create(
+                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation),
+                    "packet.source", "coap.decode", "coap_decoded",
+                    coap_intake_graph, &coap_intake),
+                SALTS_OK);
+    check_not_null(jtt_intake);
+    check_not_null(coap_intake);
+    check_equal(turbo_flow_protocol_network_intake_start(jtt_intake), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_start(coap_intake), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_snapshot(jtt_intake, &jtt_snapshot), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_snapshot(coap_intake, &coap_snapshot), SALTS_OK);
+    check_equal(jtt_snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
+    check_equal(coap_snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
+    tcp_port = endpoint_port(jtt_snapshot.source_endpoint, "tcp://");
+    udp_port = endpoint_port(coap_snapshot.source_endpoint, "udp://");
     check_true(tcp_port != 0u);
     check_true(udp_port != 0u);
 
