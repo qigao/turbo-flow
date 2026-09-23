@@ -237,6 +237,118 @@ spec("CNet listener source owner") {
     turbo_flow_destroy(flow);
   }
 
+  it("sends one bounded reply to the exact accepted TCP generation") {
+    enum { TEST_TIMEOUT_MS = 5000 };
+    cnet_client_config server_client = listener_source_test_client_config();
+    cnet_client_config client_config = listener_source_test_client_config();
+    cnet_listener_config listener = {
+        .backend = listener_source_test_backend(), .host = "127.0.0.1", .port = 0u, .backlog = 1u};
+    listener_source_graph_probe_t graph_probe = {0};
+    listener_source_client_probe_t client_probe = {0};
+    turbo_flow_t *flow = listener_source_started_flow(&graph_probe);
+    turbo_flow_cnet_listener_source_t *source = NULL;
+    turbo_flow_cnet_listener_source_snapshot_t snapshot =
+        TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_listener_source_config_t config =
+        listener_source_test_config(flow, &listener, &server_client);
+    turbo_flow_cnet_listener_reply_request_t reply =
+        TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+    turbo_flow_cnet_listener_reply_terminal_t terminal =
+        TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
+    cnet_client client = {0};
+    cnet_connection connection = {0};
+    cnet_connect_options connect = {0};
+    cnet_connection stale;
+    char uri[96];
+    uint64_t deadline;
+    int terminal_status = SALTS_EAGAIN;
+
+    check_not_null(flow);
+    config.max_connections = 1u;
+    config.first_message_id = 51u;
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(cnet_client_init(&client, &client_config), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)snapshot.bound_port), 0);
+    connect.uri = uri;
+    connect.observer = (cnet_observer){.on_state = listener_source_client_state,
+                                       .on_receive = listener_source_client_receive,
+                                       .user = &client_probe,
+                                       .on_send = listener_source_client_send};
+    check_equal(cnet_connect(&client, &connect, &connection), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
+
+    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    while ((client_probe.connected == 0u || snapshot.active_connections == 0u) &&
+           salts_monotonic_ms() < deadline) {
+      check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
+      check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
+    }
+    check_equal(client_probe.connected, (size_t)1u);
+    check_equal(snapshot.active_connections, (size_t)1u);
+
+    check_equal(cnet_send(&client, connection, "req", 3u), SALTS_OK);
+    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
+      check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
+      check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
+    }
+    check_equal(graph_probe.count, (size_t)1u);
+    check_true(graph_probe.connections[0].generation != 0u);
+
+    reply.connection = graph_probe.connections[0];
+    reply.data = "x";
+    reply.data_size = server_client.max_send_bytes + 1u;
+    reply.tag = 70u;
+    check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_EMSGSIZE);
+
+    stale = graph_probe.connections[0];
+    stale.generation++;
+    reply.connection = stale;
+    reply.data = "stale";
+    reply.data_size = 5u;
+    reply.tag = 71u;
+    check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_ENOENT);
+
+    check_equal(cnet_receive(&client, connection, 1u), SALTS_OK);
+    reply.connection = graph_probe.connections[0];
+    reply.data = "reply";
+    reply.data_size = 5u;
+    reply.tag = 72u;
+    check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_OK);
+    reply.tag = 73u;
+    check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_EBUSY);
+
+    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    while ((client_probe.received == 0u || terminal_status == SALTS_EAGAIN) &&
+           salts_monotonic_ms() < deadline) {
+      check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
+      check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
+      terminal_status = turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+    }
+    check_equal(client_probe.received, (size_t)1u);
+    check_equal(client_probe.received_payloads[0], "reply");
+    check_equal(terminal_status, SALTS_OK);
+    check_equal(terminal.connection.slot, graph_probe.connections[0].slot);
+    check_equal(terminal.connection.generation, graph_probe.connections[0].generation);
+    check_equal(terminal.kind, TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT);
+    check_equal(terminal.data_size, (size_t)5u);
+    check_equal(terminal.status, SALTS_OK);
+    check_equal(terminal.tag, (uint64_t)72u);
+    terminal = (turbo_flow_cnet_listener_reply_terminal_t)
+        TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
+    check_equal(turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal),
+                SALTS_EAGAIN);
+
+    check_equal(turbo_flow_cnet_listener_source_stop(source, TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
+    check_equal(cnet_client_stop(&client, TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(cnet_client_destroy(&client), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
   it("fails closed when TLS server credentials cannot be loaded") {
     cnet_client_config client = listener_source_test_client_config();
     cnet_listener_config listener = {
@@ -402,6 +514,32 @@ spec("CNet listener source owner") {
     check_equal(graph_probe.count, 1u);
     check_equal(graph_probe.ids[0], 301u);
     check_equal(graph_probe.payloads[0], "tls");
+    {
+      turbo_flow_cnet_listener_reply_request_t reply =
+          TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+      turbo_flow_cnet_listener_reply_terminal_t terminal =
+          TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
+      int terminal_status = SALTS_EAGAIN;
+      check_equal(cnet_receive(&client, connection, 1u), SALTS_OK);
+      reply.connection = graph_probe.connections[0];
+      reply.data = "tls-reply";
+      reply.data_size = sizeof("tls-reply") - 1u;
+      reply.tag = 301u;
+      check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_OK);
+      deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+      while ((client_probe.received == 0u || terminal_status == SALTS_EAGAIN) &&
+             salts_monotonic_ms() < deadline) {
+        check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
+        check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
+        terminal_status =
+            turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+      }
+      check_equal(client_probe.received, (size_t)1u);
+      check_equal(client_probe.received_payloads[0], "tls-reply");
+      check_equal(terminal_status, SALTS_OK);
+      check_equal(terminal.kind, TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT);
+      check_equal(terminal.tag, (uint64_t)301u);
+    }
 
     check_equal(turbo_flow_cnet_listener_source_stop(source, TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
