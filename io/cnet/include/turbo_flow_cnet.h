@@ -291,11 +291,20 @@ typedef struct turbo_flow_cnet_listener_reply_request_s {
    0u,                                                                                             \
    0u}
 
+typedef enum turbo_flow_cnet_listener_reply_terminal_kind_e {
+  TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_NONE = 0,
+  TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT,
+  TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_CLOSED,
+  TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_FAILED,
+  TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_STOPPED
+} turbo_flow_cnet_listener_reply_terminal_kind_t;
+
 /** One consumed authoritative terminal for a previously admitted listener reply. */
 typedef struct turbo_flow_cnet_listener_reply_terminal_s {
   size_t size;
   uint32_t version;
   cnet_connection connection;
+  turbo_flow_cnet_listener_reply_terminal_kind_t kind;
   size_t data_size;
   int status;
   uint64_t tag;
@@ -305,6 +314,7 @@ typedef struct turbo_flow_cnet_listener_reply_terminal_s {
   {sizeof(turbo_flow_cnet_listener_reply_terminal_t),                                              \
    TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION,                                                     \
    {0u, 0u},                                                                                       \
+   TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_NONE,                                                   \
    0u,                                                                                             \
    SALTS_OK,                                                                                       \
    0u}
