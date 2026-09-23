@@ -73,6 +73,7 @@ elif args.protocol_intake:
         "add_subdirectory(io/cnet)\n"
         "add_subdirectory(ingress/protocol/inbox)\n"
         "add_subdirectory(ingress/protocol/network)\n"
+        "add_subdirectory(plugins/applicant_mapper)\n"
         "\n"
         "cmake_add_test(\n"
         "  test_protocol_network_intake_config\n"
