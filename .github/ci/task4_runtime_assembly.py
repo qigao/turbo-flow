@@ -61,6 +61,7 @@ elif args.rulesforge_e2e:
         "endfunction()\n"
         "turbo_flow_ci_add_protocol(tf_protocol_jtt808 ${CMAKE_SOURCE_DIR}/ingress/protocol/jtt808/flow_protocol_jtt808.c)\n"
         "turbo_flow_ci_add_protocol(tf_protocol_coap ${CMAKE_SOURCE_DIR}/ingress/protocol/coap/flow_protocol_coap.c)\n"
+        "install(TARGETS tf_protocol_jtt808 tf_protocol_coap RUNTIME DESTINATION bin LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)\n"
         "\n"
         "cmake_add_test(\n"
         "  test_flow_rulesforge_plugin\n"
