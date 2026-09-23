@@ -14,8 +14,15 @@ extern "C" int cnet_listener_source_header_cpp_probe(void) {
   turbo_flow_cnet_listener_source_snapshot_t snapshot =
       TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
   turbo_flow_cnet_listener_message_context_t context = {0};
+  turbo_flow_cnet_listener_reply_request_t request =
+      TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+  turbo_flow_cnet_listener_reply_terminal_t terminal =
+      TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
   return config.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
                  snapshot.version == TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION &&
+                 request.version == TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION &&
+                 terminal.version == TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION &&
+                 terminal.kind == TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_NONE &&
                  context.size == 0u
              ? 0
              : 1;
