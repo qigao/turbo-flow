@@ -411,18 +411,30 @@ spec("RulesForge real network composition") {
     static const char adult_payload[] = "{\"age\":21}";
     static const char minor_payload[] = "{\"age\":17}";
     static const char graph_text[] =
-        "source tcp adapter listener.source\n"
-        "source udp adapter packet.source\n"
+        "source jtt_decoded\n"
+        "source coap_decoded\n"
         "buffer intake resource intake.store\n"
         "stage rules operation rulesforge.apply resource rules.adult\n"
         "stage verify operation test.verify_decision\n"
         "stage output adapter datagram.sink\n"
         "stage main {\n"
-        "  tcp -> intake\n"
-        "  udp -> intake\n"
+        "  jtt_decoded -> intake\n"
+        "  coap_decoded -> intake\n"
         "  intake -> rules\n"
         "  rules -> verify\n"
         "  verify -> output\n"
+        "}\n";
+    static const char jtt_intake_graph[] =
+        "source wire adapter listener.source\n"
+        "stage decode adapter jtt.decode\n"
+        "stage main {\n"
+        "  wire -> decode\n"
+        "}\n";
+    static const char coap_intake_graph[] =
+        "source wire adapter packet.source\n"
+        "stage decode adapter coap.decode\n"
+        "stage main {\n"
+        "  wire -> decode\n"
         "}\n";
     char schema_path[512];
     char rfl_path[512];
@@ -432,6 +444,9 @@ spec("RulesForge real network composition") {
     const char *cnet_plugin = getenv("FLOW_CNET_PLUGIN_PATH");
     const char *durable_plugin = getenv("TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH");
     const char *rulesforge_plugin = getenv("FLOW_RULESFORGE_PLUGIN_PATH");
+    const char *jtt808_plugin = getenv("FLOW_PROTOCOL_JTT808_PLUGIN_PATH");
+    const char *coap_plugin = getenv("FLOW_PROTOCOL_COAP_PLUGIN_PATH");
+    const char *mapper_plugin = getenv("FLOW_APPLICANT_MAPPER_PLUGIN_PATH");
     turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -442,6 +457,12 @@ spec("RulesForge real network composition") {
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
     turbo_flow_plugin_generation_t *cleanup_generation = NULL;
+    turbo_flow_protocol_network_intake_t *jtt_intake = NULL;
+    turbo_flow_protocol_network_intake_t *coap_intake = NULL;
+    turbo_flow_protocol_network_intake_snapshot_t jtt_snapshot =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    turbo_flow_protocol_network_intake_snapshot_t coap_snapshot =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     decision_probe_t decisions = {0};
@@ -460,6 +481,10 @@ spec("RulesForge real network composition") {
     uint16_t output_port = 0u;
     uint16_t tcp_port = 0u;
     uint16_t udp_port = 0u;
+    uint8_t jtt_frame[256];
+    uint8_t coap_frame[128];
+    size_t jtt_frame_size;
+    size_t coap_frame_size;
     int count;
 
     check_equal(make_temp_path("turbo_flow_rulesforge_composition", ".schema",
