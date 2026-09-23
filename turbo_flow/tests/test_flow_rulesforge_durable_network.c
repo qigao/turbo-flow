@@ -1,7 +1,9 @@
 #include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_protocol_network_intake.h"
 #include "turbo_flow_rulesforge_plugin.h"
+#include "turbo_flow_applicant_mapper_plugin.h"
 
 #include <cnet/cnet.h>
 #include <salts/clock.h>
@@ -19,6 +21,15 @@
 #endif
 #ifndef TURBO_FLOW_DURABLE_MEMORY_PLUGIN
   #error TURBO_FLOW_DURABLE_MEMORY_PLUGIN is required
+#endif
+#ifndef FLOW_PROTOCOL_JTT808_PLUGIN
+  #error FLOW_PROTOCOL_JTT808_PLUGIN is required
+#endif
+#ifndef FLOW_PROTOCOL_COAP_PLUGIN
+  #error FLOW_PROTOCOL_COAP_PLUGIN is required
+#endif
+#ifndef FLOW_APPLICANT_MAPPER_PLUGIN
+  #error FLOW_APPLICANT_MAPPER_PLUGIN is required
 #endif
 
 #if defined(_WIN32)
@@ -111,6 +122,8 @@ typedef struct datagram_probe_s {
 typedef struct tcp_probe_s {
   size_t connected;
   size_t sent;
+  size_t received;
+  size_t received_bytes;
   int failed;
 } tcp_probe_t;
 
@@ -195,9 +208,11 @@ static void tcp_state(void *ctx, cnet_connection connection, cnet_connection_sta
 }
 
 static void tcp_receive(void *ctx, cnet_connection connection, const cnet_receive_view *view) {
-  (void)ctx;
+  tcp_probe_t *probe = (tcp_probe_t *)ctx;
   (void)connection;
-  (void)view;
+  if (!probe || !view || !view->data || view->size == 0u) return;
+  ++probe->received;
+  probe->received_bytes += view->size;
 }
 
 static void tcp_send_complete(void *ctx, cnet_connection connection, size_t size) {
@@ -220,10 +235,12 @@ static uint16_t endpoint_port(const char *endpoint, const char *scheme) {
   return (uint16_t)value;
 }
 
-static void pump_until(turbo_flow_plugin_generation_t *generation, cnet_client *tcp,
-                       cnet_packet_endpoint *udp_peer, cnet_datagram *datagram,
-                       const decision_probe_t *decision, const datagram_probe_t *output,
-                       size_t expected) {
+static void pump_until(turbo_flow_plugin_generation_t *generation,
+                       turbo_flow_protocol_network_intake_t *jtt_intake,
+                       turbo_flow_protocol_network_intake_t *coap_intake,
+                       cnet_client *tcp, cnet_packet_endpoint *udp_peer,
+                       cnet_datagram *datagram, const decision_probe_t *decision,
+                       const datagram_probe_t *output, size_t expected) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
   while ((decision->count < expected || output->count < expected) &&
@@ -232,10 +249,112 @@ static void pump_until(turbo_flow_plugin_generation_t *generation, cnet_client *
     check_equal(cnet_client_poll(tcp, 1u, &events), SALTS_OK);
     check_equal(cnet_packet_poll(udp_peer, 1u, &events), SALTS_OK);
     check_equal(cnet_datagram_poll(datagram, 1u, &events), SALTS_OK);
+    if (jtt_intake)
+      check_equal(turbo_flow_protocol_network_intake_poll(jtt_intake, 1u, NULL), SALTS_OK);
+    if (coap_intake)
+      check_equal(turbo_flow_protocol_network_intake_poll(coap_intake, 1u, NULL), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
   }
   check_equal(decision->count, expected);
   check_equal(output->count, expected);
+}
+
+static size_t composition_jtt808_frame(
+    uint8_t *out, size_t capacity, const uint8_t *json, size_t json_size,
+    uint16_t serial) {
+  uint8_t header[17] = {0x09u, 0x00u, 0x00u, 0x00u, 0x01u,
+                        0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                        0x00u, 0x00u, 0x01u, 0x23u, 0x45u,
+                        0x00u, 0x00u};
+  uint8_t checksum = 0u;
+  size_t body_size;
+  size_t written = 0u;
+  if (!out || !json || json_size == 0u || json_size > 0x03feu || serial == 0u)
+    return 0u;
+  body_size = json_size + 1u;
+  header[2] = (uint8_t)(0x40u | ((body_size >> 8u) & 0x03u));
+  header[3] = (uint8_t)body_size;
+  header[15] = (uint8_t)(serial >> 8u);
+  header[16] = (uint8_t)serial;
+  if (capacity < (sizeof(header) + body_size + 1u) * 2u + 2u) return 0u;
+  out[written++] = 0x7eu;
+  for (size_t i = 0u; i < sizeof(header) + body_size; ++i) {
+    uint8_t value = i < sizeof(header)
+                        ? header[i]
+                        : (i == sizeof(header) ? 0x01u
+                                               : json[i - sizeof(header) - 1u]);
+    checksum ^= value;
+    if (value == 0x7du) {
+      out[written++] = 0x7du;
+      out[written++] = 0x01u;
+    } else if (value == 0x7eu) {
+      out[written++] = 0x7du;
+      out[written++] = 0x02u;
+    } else {
+      out[written++] = value;
+    }
+  }
+  if (checksum == 0x7du) {
+    out[written++] = 0x7du;
+    out[written++] = 0x01u;
+  } else if (checksum == 0x7eu) {
+    out[written++] = 0x7du;
+    out[written++] = 0x02u;
+  } else {
+    out[written++] = checksum;
+  }
+  out[written++] = 0x7eu;
+  return written;
+}
+
+static size_t composition_coap_frame(
+    uint8_t *out, size_t capacity, const uint8_t *json, size_t json_size,
+    uint16_t message_id) {
+  const size_t required = 7u + json_size;
+  if (!out || !json || json_size == 0u || message_id == 0u || required > capacity)
+    return 0u;
+  out[0] = 0x40u;
+  out[1] = 0x02u;
+  out[2] = (uint8_t)(message_id >> 8u);
+  out[3] = (uint8_t)message_id;
+  out[4] = 0xc1u;
+  out[5] = 50u;
+  out[6] = 0xffu;
+  memcpy(out + 7u, json, json_size);
+  return required;
+}
+
+static int composition_intake_create(
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    const turbo_flow_resolved_config_t *resolved, turbo_flow_t *downstream,
+    const char *source_adapter, const char *decoder_adapter,
+    const char *decoded_source, const char *graph_text,
+    turbo_flow_protocol_network_intake_t **out) {
+  turbo_flow_protocol_network_intake_config_t config =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_t *flow = turbo_flow_create();
+  int rc;
+  if (out) *out = NULL;
+  if (!flow || !snapshot || !resolved || !downstream || !source_adapter ||
+      !decoder_adapter || !decoded_source || !graph_text || !out) {
+    turbo_flow_destroy(flow);
+    return SALTS_EINVAL;
+  }
+  rc = turbo_flow_parse_string(flow, graph_text, strlen(graph_text));
+  if (rc == SALTS_OK) {
+    config.catalog = snapshot;
+    config.resolved = resolved;
+    config.downstream_flow = downstream;
+    config.source_adapter_name = source_adapter;
+    config.decoder_adapter_name = decoder_adapter;
+    config.decoded_source_name = decoded_source;
+    rc = turbo_flow_protocol_network_intake_create(&config, &flow, out, &error);
+  }
+  if (rc != SALTS_OK)
+    info("protocol intake create rc=%d path=%s message=%s", rc, error.path, error.message);
+  if (flow) turbo_flow_destroy(flow);
+  return rc;
 }
 
 static void normalize_path(char *path) {
