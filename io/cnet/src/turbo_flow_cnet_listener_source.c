@@ -90,11 +90,14 @@ static listener_source_slot_t *listener_source_find_connection(
   return NULL;
 }
 
-static void listener_source_reply_publish(listener_source_slot_t *slot, int status) {
+static void listener_source_reply_publish(
+    listener_source_slot_t *slot,
+    turbo_flow_cnet_listener_reply_terminal_kind_t kind, int status) {
   turbo_flow_cnet_listener_reply_terminal_t terminal =
       TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
   if (!slot || !slot->reply_send_pending || slot->reply_terminal_ready) return;
   terminal.connection = slot->connection;
+  terminal.kind = kind;
   terminal.data_size = slot->reply_send_size;
   terminal.status = status == SALTS_OK ? SALTS_OK : status;
   terminal.tag = slot->reply_tag;
@@ -334,9 +337,13 @@ static void listener_source_on_state(void *user, cnet_connection connection,
   case CNET_CONNECTION_CLOSED:
     if (slot->reply_send_pending)
       listener_source_reply_publish(
-          slot, source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING
-                    ? SALTS_ECANCELED
-                    : SALTS_EPIPE);
+          slot,
+          source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING
+              ? TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_STOPPED
+              : TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_CLOSED,
+          source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING
+              ? SALTS_ECANCELED
+              : SALTS_EPIPE);
     if (source->connections_closed == UINT64_MAX)
       listener_source_fail(source, SALTS_ERANGE, 0, "connection_counters");
     else ++source->connections_closed;
@@ -344,7 +351,14 @@ static void listener_source_on_state(void *user, cnet_connection connection,
     break;
   case CNET_CONNECTION_FAILED:
     if (slot->reply_send_pending)
-      listener_source_reply_publish(slot, error ? error->status : SALTS_EIO);
+      listener_source_reply_publish(
+          slot,
+          source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING
+              ? TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_STOPPED
+              : TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_FAILED,
+          source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING
+              ? SALTS_ECANCELED
+              : (error ? error->status : SALTS_EIO));
     if (source->connections_failed == UINT64_MAX) {
       listener_source_fail(source, SALTS_ERANGE, 0, "connection_counters");
     } else {
@@ -374,7 +388,8 @@ static void listener_source_on_send(void *user, cnet_connection connection, size
     listener_source_fail(source, SALTS_EPROTO, 0, "reply_send_terminal");
     return;
   }
-  listener_source_reply_publish(slot, SALTS_OK);
+  listener_source_reply_publish(
+      slot, TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT, SALTS_OK);
 }
 
 static void listener_source_on_receive(void *user, cnet_connection connection,
@@ -551,6 +566,7 @@ static int listener_source_open_impl(const turbo_flow_cnet_listener_source_confi
   source->slots = (listener_source_slot_t *)calloc(config->max_connections, sizeof(*source->slots));
   source->slot_capacity = config->max_connections;
   source->max_message_bytes = config->max_message_bytes;
+  source->max_send_bytes = config->client->max_send_bytes;
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
   source->managed_run = managed_stage != NULL;
@@ -657,7 +673,7 @@ static int listener_source_accept_available(turbo_flow_cnet_listener_source_t *s
     if (status != SALTS_OK) return status;
     if (!ready) return SALTS_OK;
     slot = listener_source_find_free_slot(source);
-    if (!slot) return SALTS_EPROTO;
+    if (!slot) return SALTS_OK;
     observer = (cnet_observer){.on_state = listener_source_on_state,
                                .on_receive = listener_source_on_receive,
                                .user = slot,
@@ -688,6 +704,48 @@ static void listener_source_refresh_run(turbo_flow_cnet_listener_source_t *sourc
   if (turbo_flow_run_snapshot(source->run, &result) != SALTS_OK) return;
   if (result.state == TURBO_FLOW_RUN_FAILED || result.state == TURBO_FLOW_RUN_CANCELED)
     listener_source_fail(source, result.status, 0, "graph_run");
+}
+
+int turbo_flow_cnet_listener_source_reply_send(
+    turbo_flow_cnet_listener_source_t *source,
+    const turbo_flow_cnet_listener_reply_request_t *request) {
+  listener_source_slot_t *slot;
+  int status;
+  if (!source || !request || request->size != sizeof(*request) ||
+      request->version != TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION ||
+      request->connection.generation == 0u || !request->data ||
+      request->data_size == 0u || request->tag == 0u)
+    return SALTS_EINVAL;
+  if (source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED) return source->status;
+  if (source->state != TURBO_FLOW_CNET_LISTENER_SOURCE_LISTENING ||
+      !source->client_initialized)
+    return SALTS_ESHUTDOWN;
+  if (request->data_size > source->max_send_bytes) return SALTS_EMSGSIZE;
+  slot = listener_source_find_connection(source, request->connection);
+  if (!slot || !slot->connected || slot->closing) return SALTS_ENOENT;
+  if (slot->reply_send_pending || slot->reply_terminal_ready) return SALTS_EBUSY;
+  status = cnet_send(&source->client, slot->connection, request->data, request->data_size);
+  if (status != SALTS_OK) return status;
+  slot->reply_send_pending = true;
+  slot->reply_send_size = request->data_size;
+  slot->reply_tag = request->tag;
+  return SALTS_OK;
+}
+
+int turbo_flow_cnet_listener_source_reply_take_terminal(
+    turbo_flow_cnet_listener_source_t *source,
+    turbo_flow_cnet_listener_reply_terminal_t *terminal) {
+  if (!source || !terminal || terminal->size != sizeof(*terminal) ||
+      terminal->version != TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION)
+    return SALTS_EINVAL;
+  for (size_t i = 0u; i < source->slot_capacity; ++i) {
+    listener_source_slot_t *slot = &source->slots[i];
+    if (!slot->reply_terminal_ready) continue;
+    *terminal = slot->reply_terminal;
+    listener_source_reply_clear_terminal(slot);
+    return SALTS_OK;
+  }
+  return SALTS_EAGAIN;
 }
 
 int turbo_flow_cnet_listener_source_request(turbo_flow_cnet_listener_source_t *source,
@@ -829,6 +887,9 @@ int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listener_source_t *sour
 int turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source) {
   if (!source) return SALTS_EINVAL;
   if (source->state != TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED) return SALTS_EBUSY;
+  for (size_t i = 0u; i < source->slot_capacity; ++i)
+    if (source->slots[i].reply_send_pending || source->slots[i].reply_terminal_ready)
+      return SALTS_EBUSY;
   turbo_flow_msg_cleanup(&source->ready_message);
   free(source->slots);
   tstr_free(source->source_name);
