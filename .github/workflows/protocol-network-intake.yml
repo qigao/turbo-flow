@@ -9,6 +9,10 @@ on:
       - 'io/durable/**'
       - 'io/turbodb/**'
       - 'turbo_flow/**'
+      - 'plugins/applicant_mapper/**'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - '.github/ci/task4_runtime_assembly.py'
       - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
@@ -20,6 +24,10 @@ on:
       - 'io/durable/**'
       - 'io/turbodb/**'
       - 'turbo_flow/**'
+      - 'plugins/applicant_mapper/**'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - '.github/ci/task4_runtime_assembly.py'
       - 'tools/lemon/**'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
@@ -235,6 +243,7 @@ jobs:
             -DBUILD_BENCHMARKS=OFF \
             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
             -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=ON \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
@@ -247,10 +256,53 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/protocol-network-runtime \
-            --target test_protocol_network_intake_config test_protocol_network_intake_core -j2 \
+            --target test_protocol_network_intake_config test_protocol_network_intake_core \
+                     test_flow_applicant_mapper_plugin -j2 \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
           ctest --test-dir build/protocol-network-runtime \
-            -R '^test_protocol_network_intake_(config|core)$' \
+            -R '^(test_protocol_network_intake_(config|core)|test_flow_applicant_mapper_plugin)            --output-on-failure \
+            2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
+
+      - name: Restore focused runtime assembly
+        if: always()
+        shell: bash
+        run: |
+          git checkout -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify sanitizer instrumentation flags
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ninja -C build/protocol-network-compile -t commands > "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F -- '-fsanitize=address' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F -- '-fsanitize=undefined' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'flow_protocol_network_intake.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_network_jtt808.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_network_coap.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'test_protocol_semantic_mapper.c' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+          grep -F 'protocol_semantic_mapper_header_cpp.cpp' "$RUNNER_TEMP/protocol-intake-evidence/commands.txt"
+
+      - name: Verify committed source was not modified
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload exact-head compile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-network-intake-public-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/protocol-intake-evidence/
+            build/protocol-network-compile/CMakeCache.txt
+            build/protocol-network-runtime/CMakeCache.txt
+ \
             --output-on-failure \
             2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
 
