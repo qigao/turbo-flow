@@ -52,6 +52,7 @@ listener_source_test_config(turbo_flow_t *flow, const cnet_listener_config *list
 typedef struct listener_source_graph_probe_s {
   size_t count;
   uint64_t ids[4];
+  cnet_connection connections[4];
   char payloads[4][32];
 } listener_source_graph_probe_t;
 
@@ -59,6 +60,9 @@ typedef struct listener_source_client_probe_s {
   size_t connected;
   size_t sent;
   size_t terminal;
+  size_t received;
+  cnet_connection received_connections[4];
+  char received_payloads[4][32];
   int failed;
 } listener_source_client_probe_t;
 
@@ -69,6 +73,12 @@ static int listener_source_graph_sink(turbo_flow_msg_t *message, void *ctx) {
   copy_size = message->payload.len;
   if (copy_size >= sizeof(probe->payloads[0])) return SALTS_EMSGSIZE;
   probe->ids[probe->count] = message->id;
+  {
+    const turbo_flow_cnet_listener_message_context_t *transport =
+        turbo_flow_cnet_listener_message_context(message);
+    if (!transport) return SALTS_EPROTO;
+    probe->connections[probe->count] = transport->connection;
+  }
   if (copy_size > 0u) memcpy(probe->payloads[probe->count], message->payload.data, copy_size);
   probe->payloads[probe->count][copy_size] = '\0';
   ++probe->count;
@@ -106,9 +116,15 @@ static void listener_source_client_state(void *ctx, cnet_connection connection,
 
 static void listener_source_client_receive(void *ctx, cnet_connection connection,
                                            const cnet_receive_view *view) {
-  (void)ctx;
-  (void)connection;
-  (void)view;
+  listener_source_client_probe_t *probe = (listener_source_client_probe_t *)ctx;
+  size_t index;
+  if (!probe || !view || !view->data || view->size == 0u ||
+      probe->received >= 4u || view->size >= sizeof(probe->received_payloads[0]))
+    return;
+  index = probe->received++;
+  probe->received_connections[index] = connection;
+  memcpy(probe->received_payloads[index], view->data, view->size);
+  probe->received_payloads[index][view->size] = '\0';
 }
 
 static void listener_source_client_send(void *ctx, cnet_connection connection, size_t size) {
@@ -134,7 +150,16 @@ spec("CNet listener source owner") {
     check_equal(snapshot.size, sizeof(snapshot));
     check_equal(snapshot.version, TURBO_FLOW_CNET_LISTENER_SOURCE_API_VERSION);
     check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_NEW);
+    turbo_flow_cnet_listener_reply_request_t request =
+        TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+    turbo_flow_cnet_listener_reply_terminal_t terminal =
+        TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
     check_equal(snapshot.status, SALTS_OK);
+    check_equal(request.size, sizeof(request));
+    check_equal(request.version, TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION);
+    check_equal(terminal.size, sizeof(terminal));
+    check_equal(terminal.version, TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION);
+    check_equal(terminal.kind, TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_NONE);
     check_equal(cnet_listener_source_header_cpp_probe(), 0);
   }
 
