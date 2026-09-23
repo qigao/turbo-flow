@@ -60,6 +60,32 @@ spec("plugin protocol mapper catalog") {
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
   }
 
+  it("projects two snapshot mappers as a dense public C array") {
+    turbo_flow_plugin_host_config_t config = mapper_config(2u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_protocol_mapper_catalog_v1_t catalog =
+        TURBO_FLOW_PLUGIN_PROTOCOL_MAPPER_CATALOG_V1_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
+    turbo_flow_plugin_host_t *host = NULL;
+
+    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_PROTOCOL_MAPPER_GOOD, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, FLOW_PROTOCOL_MAPPER_SECOND, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_protocol_mapper_count(host), (size_t)2u);
+    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_catalog_snapshot_protocol_mapper_catalog(snapshot, &catalog),
+                SALTS_OK);
+    check_equal(catalog.count, (size_t)2u);
+    check_equal(strcmp(catalog.entries[0].plugin_id, "fixture.protocol-mapper.good"), 0);
+    check_equal(strcmp(catalog.entries[0].mapper.name, "fixture.mapper"), 0);
+    check_equal(strcmp(catalog.entries[1].plugin_id, "fixture.protocol-mapper.second"), 0);
+    check_equal(strcmp(catalog.entries[1].mapper.name, "fixture.mapper.second"), 0);
+    check_equal(strcmp(catalog.entries[1].mapper.profile, "applicant-json"), 0);
+
+    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
+    check_equal(turbo_flow_plugin_host_destroy(host, 0u, &error), SALTS_OK);
+  }
+
   it("enforces mapper capacity at zero and N plus one without partial registration") {
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
