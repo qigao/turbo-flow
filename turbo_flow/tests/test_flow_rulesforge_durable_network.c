@@ -801,7 +801,13 @@ spec("RulesForge real network composition") {
       uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
       while (tcp_probe.connected == 0u && salts_monotonic_ms() < deadline) {
         size_t events = 0u;
+        jtt_snapshot =
+            (turbo_flow_protocol_network_intake_snapshot_t)
+                TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
         check_equal(cnet_client_poll(&tcp, 1u, &events), SALTS_OK);
+        check_equal(turbo_flow_protocol_network_intake_poll(
+                        jtt_intake, 1u, &jtt_snapshot),
+                    SALTS_OK);
         check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
       }
     }
