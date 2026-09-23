@@ -12,7 +12,9 @@ on:
       - 'turbo_flow/tests/test_flow_rulesforge_durable_network.c'
       - 'io/cnet/**'
       - 'io/durable/**'
+      - 'ingress/protocol/**'
       - 'plugins/rulesforge/**'
+      - 'plugins/applicant_mapper/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/rulesforge-provider.yml'
   workflow_dispatch:
@@ -186,6 +188,7 @@ jobs:
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BENCHMARKS=OFF \
             -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=ON \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=ON \
             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
             -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
@@ -210,11 +213,17 @@ jobs:
           provider="$(find "$prefix" -type f \( -name 'libtf_rulesforge_provider.so' -o -name 'tf_rulesforge_provider.dll' \) | head -n1)"
           cnet_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_cnet_plugin.so' -o -name 'tf_cnet_plugin.dll' \) | head -n1)"
           durable_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_durable_memory_plugin.so' -o -name 'tf_durable_memory_plugin.dll' \) | head -n1)"
+          jtt808_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_protocol_jtt808.so' -o -name 'tf_protocol_jtt808.dll' \) | head -n1)"
+          coap_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_protocol_coap.so' -o -name 'tf_protocol_coap.dll' \) | head -n1)"
+          mapper_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_applicant_mapper_provider.so' -o -name 'tf_applicant_mapper_provider.dll' \) | head -n1)"
           test_bin="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_plugin*' -perm -111 | head -n1)"
           composition_test="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_durable_network*' -perm -111 | head -n1)"
           test -n "$provider"
           test -n "$cnet_provider"
           test -n "$durable_provider"
+          test -n "$jtt808_provider"
+          test -n "$coap_provider"
+          test -n "$mapper_provider"
           test -n "$test_bin"
           test -n "$composition_test"
           LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
@@ -224,6 +233,9 @@ jobs:
             FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
             FLOW_CNET_PLUGIN_PATH="$cnet_provider" \
             TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH="$durable_provider" \
+            FLOW_PROTOCOL_JTT808_PLUGIN_PATH="$jtt808_provider" \
+            FLOW_PROTOCOL_COAP_PLUGIN_PATH="$coap_provider" \
+            FLOW_APPLICANT_MAPPER_PLUGIN_PATH="$mapper_provider" \
             "$composition_test"
 
       - name: Verify core unlink and canonical provider export
