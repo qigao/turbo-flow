@@ -800,36 +800,53 @@ spec("RulesForge real network composition") {
     check_equal(tcp_probe.connected, (size_t)1u);
     check_equal(tcp_probe.failed, 0);
 
-    check_equal(cnet_send(&tcp, tcp_connection, adult_payload,
-                          sizeof(adult_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 1u);
+    jtt_frame_size = composition_jtt808_frame(
+        jtt_frame, sizeof(jtt_frame), (const uint8_t *)adult_payload,
+        sizeof(adult_payload) - 1u, 1u);
+    check_true(jtt_frame_size > 0u);
+    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 1u);
     check_equal(decisions.matched[0], 1);
     check_equal(decisions.fired[0], 1);
     check_equal(outputs.sizes[0], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[0], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
+    check_true(tcp_probe.received > 0u);
 
-    check_equal(cnet_packet_send(&udp_peer, udp_session, adult_payload,
-                                 sizeof(adult_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 2u);
+    coap_frame_size = composition_coap_frame(
+        coap_frame, sizeof(coap_frame), (const uint8_t *)adult_payload,
+        sizeof(adult_payload) - 1u, UINT16_C(0x1234));
+    check_true(coap_frame_size > 0u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, coap_frame, coap_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 2u);
     check_equal(decisions.matched[1], decisions.matched[0]);
     check_equal(decisions.fired[1], decisions.fired[0]);
     check_equal(outputs.sizes[1], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[1], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
 
-    check_equal(cnet_send(&tcp, tcp_connection, minor_payload,
-                          sizeof(minor_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 3u);
+    jtt_frame_size = composition_jtt808_frame(
+        jtt_frame, sizeof(jtt_frame), (const uint8_t *)minor_payload,
+        sizeof(minor_payload) - 1u, 2u);
+    check_true(jtt_frame_size > 0u);
+    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 3u);
     check_equal(decisions.matched[2], 0);
     check_equal(decisions.fired[2], 0);
     check_equal(outputs.sizes[2], sizeof(minor_payload) - 1u);
     check_equal(memcmp(outputs.payloads[2], minor_payload,
                        sizeof(minor_payload) - 1u), 0);
 
-    check_equal(cnet_packet_send(&udp_peer, udp_session, minor_payload,
-                                 sizeof(minor_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 4u);
+    coap_frame_size = composition_coap_frame(
+        coap_frame, sizeof(coap_frame), (const uint8_t *)minor_payload,
+        sizeof(minor_payload) - 1u, UINT16_C(0x1235));
+    check_true(coap_frame_size > 0u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, coap_frame, coap_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 4u);
     check_equal(decisions.matched[3], decisions.matched[2]);
     check_equal(decisions.fired[3], decisions.fired[2]);
     check_equal(outputs.sizes[3], sizeof(minor_payload) - 1u);
