@@ -7,6 +7,8 @@ on:
       - 'CMakeLists.txt'
       - 'CMakeOptions.cmake'
       - 'turbo_flow/CMakeLists.txt'
+      - 'turbo_flow/include/turbo_flow_plugin*.h'
+      - 'turbo_flow/src/flow_plugin*.c'
       - 'turbo_flow/tests/CMakeLists.txt'
       - 'turbo_flow/tests/test_flow_rulesforge_plugin.c'
       - 'turbo_flow/tests/test_flow_rulesforge_durable_network.c'

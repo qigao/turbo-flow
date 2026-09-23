@@ -1382,7 +1382,7 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
   }
   rc = turbo_flow_stl_error(vec_init_bytes(
       &snapshot->materializers, sizeof(turbo_flow_plugin_materializer_catalog_entry_v1_t),
-      _Alignof(turbo_flow_max_align_t), materializers));
+      _Alignof(turbo_flow_plugin_materializer_catalog_entry_v1_t), materializers));
   if (rc != SALTS_OK) return rc;
   if (materializers) {
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->materializers, materializers));
@@ -1390,11 +1390,11 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->adapter_providers,
                                                sizeof(turbo_flow_product_adapter_provider_t),
-                                               _Alignof(turbo_flow_max_align_t), adapters));
+                                               _Alignof(turbo_flow_product_adapter_provider_t), adapters));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->operations,
                                            sizeof(turbo_flow_plugin_operation_catalog_entry_v3_t),
-                                           _Alignof(turbo_flow_max_align_t), operations));
+                                           _Alignof(turbo_flow_plugin_operation_catalog_entry_v3_t), operations));
   if (rc != SALTS_OK) return rc;
   if (operations) {
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->operations, operations));
@@ -1402,29 +1402,29 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
   }
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->schemas,
                                            sizeof(turbo_flow_plugin_schema_v1_t),
-                                           _Alignof(turbo_flow_max_align_t), schemas));
+                                           _Alignof(turbo_flow_plugin_schema_v1_t), schemas));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->resource_providers,
                                            sizeof(turbo_flow_product_resource_provider_t),
-                                           _Alignof(turbo_flow_max_align_t), resources));
+                                           _Alignof(turbo_flow_product_resource_provider_t), resources));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->protocol_providers,
                                            sizeof(turbo_flow_protocol_plugin_api_t),
-                                           _Alignof(turbo_flow_max_align_t), protocols));
+                                           _Alignof(turbo_flow_protocol_plugin_api_t), protocols));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&snapshot->business_providers,
                                            sizeof(turbo_flow_protocol_business_plugin_api_t),
-                                           _Alignof(turbo_flow_max_align_t), businesses));
+                                           _Alignof(turbo_flow_protocol_business_plugin_api_t), businesses));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(
       vec_init_bytes(&snapshot->transactional_adapter_providers,
                      sizeof(turbo_flow_plugin_transactional_adapter_provider_v1_t),
-                     _Alignof(turbo_flow_max_align_t), transactional_adapters));
+                     _Alignof(turbo_flow_plugin_transactional_adapter_provider_v1_t), transactional_adapters));
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(
       vec_init_bytes(&snapshot->transactional_resource_providers,
                      sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t),
-                     _Alignof(turbo_flow_max_align_t), transactional_resources));
+                     _Alignof(turbo_flow_plugin_transactional_resource_provider_v1_t), transactional_resources));
   if (rc != SALTS_OK) return rc;
   if (adapters > 0u) rc = turbo_flow_stl_error(vec_reserve(&snapshot->adapter_providers, adapters));
   if (rc == SALTS_OK && resources > 0u)
