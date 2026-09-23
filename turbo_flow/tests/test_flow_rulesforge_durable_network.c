@@ -826,6 +826,9 @@ spec("RulesForge real network composition") {
     check_equal(outputs.sizes[0], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[0], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
+    /* Business success is not an implicit protocol ACK. The explicit JT808
+     * reply codec contract is tested separately through turbo_flow_protocol_reply(). */
+    check_equal(tcp_probe.received, (size_t)0u);
     coap_frame_size = composition_coap_frame(
         coap_frame, sizeof(coap_frame), (const uint8_t *)adult_payload,
         sizeof(adult_payload) - 1u, UINT16_C(0x1234));
