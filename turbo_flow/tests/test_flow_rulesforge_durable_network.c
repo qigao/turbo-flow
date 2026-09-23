@@ -752,6 +752,8 @@ spec("RulesForge real network composition") {
                 SALTS_OK);
     check_not_null(jtt_intake);
     check_not_null(coap_intake);
+    turbo_flow_resolved_config_destroy(resolved);
+    resolved = NULL;
     check_equal(turbo_flow_protocol_network_intake_start(jtt_intake), SALTS_OK);
     check_equal(turbo_flow_protocol_network_intake_start(coap_intake), SALTS_OK);
     check_equal(turbo_flow_protocol_network_intake_snapshot(jtt_intake, &jtt_snapshot), SALTS_OK);
@@ -860,6 +862,14 @@ spec("RulesForge real network composition") {
                        sizeof(minor_payload) - 1u), 0);
 
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &plugin_error), SALTS_EBUSY);
+    check_equal(turbo_flow_protocol_network_intake_stop(jtt_intake, COMPOSITION_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_stop(coap_intake, COMPOSITION_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_destroy(jtt_intake), SALTS_OK);
+    jtt_intake = NULL;
+    check_equal(turbo_flow_protocol_network_intake_destroy(coap_intake), SALTS_OK);
+    coap_intake = NULL;
     check_equal(cnet_client_stop(&tcp, COMPOSITION_TIMEOUT_MS), SALTS_OK);
     check_equal(cnet_client_destroy(&tcp), SALTS_OK);
     check_equal(cnet_packet_endpoint_stop(&udp_peer, COMPOSITION_TIMEOUT_MS), SALTS_OK);
