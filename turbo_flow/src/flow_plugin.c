@@ -1373,7 +1373,8 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
   int rc = turbo_flow_stl_error(vec_init_bytes(
       &snapshot->protocol_mappers,
       sizeof(turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t),
-      _Alignof(turbo_flow_max_align_t), protocol_mappers));
+      _Alignof(turbo_flow_plugin_protocol_mapper_catalog_entry_v1_t),
+      protocol_mappers));
   if (rc != SALTS_OK) return rc;
   if (protocol_mappers) {
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->protocol_mappers, protocol_mappers));

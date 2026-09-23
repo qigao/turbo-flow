@@ -1,7 +1,9 @@
 #include "../../tests/flow_operation_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_protocol_network_intake.h"
 #include "turbo_flow_rulesforge_plugin.h"
+#include "turbo_flow_applicant_mapper_plugin.h"
 
 #include <cnet/cnet.h>
 #include <salts/clock.h>
@@ -19,6 +21,15 @@
 #endif
 #ifndef TURBO_FLOW_DURABLE_MEMORY_PLUGIN
   #error TURBO_FLOW_DURABLE_MEMORY_PLUGIN is required
+#endif
+#ifndef FLOW_PROTOCOL_JTT808_PLUGIN
+  #error FLOW_PROTOCOL_JTT808_PLUGIN is required
+#endif
+#ifndef FLOW_PROTOCOL_COAP_PLUGIN
+  #error FLOW_PROTOCOL_COAP_PLUGIN is required
+#endif
+#ifndef FLOW_APPLICANT_MAPPER_PLUGIN
+  #error FLOW_APPLICANT_MAPPER_PLUGIN is required
 #endif
 
 #if defined(_WIN32)
@@ -111,6 +122,8 @@ typedef struct datagram_probe_s {
 typedef struct tcp_probe_s {
   size_t connected;
   size_t sent;
+  size_t received;
+  size_t received_bytes;
   int failed;
 } tcp_probe_t;
 
@@ -195,9 +208,11 @@ static void tcp_state(void *ctx, cnet_connection connection, cnet_connection_sta
 }
 
 static void tcp_receive(void *ctx, cnet_connection connection, const cnet_receive_view *view) {
-  (void)ctx;
+  tcp_probe_t *probe = (tcp_probe_t *)ctx;
   (void)connection;
-  (void)view;
+  if (!probe || !view || !view->data || view->size == 0u) return;
+  ++probe->received;
+  probe->received_bytes += view->size;
 }
 
 static void tcp_send_complete(void *ctx, cnet_connection connection, size_t size) {
@@ -220,11 +235,17 @@ static uint16_t endpoint_port(const char *endpoint, const char *scheme) {
   return (uint16_t)value;
 }
 
-static void pump_until(turbo_flow_plugin_generation_t *generation, cnet_client *tcp,
-                       cnet_packet_endpoint *udp_peer, cnet_datagram *datagram,
-                       const decision_probe_t *decision, const datagram_probe_t *output,
-                       size_t expected) {
+static void pump_until(turbo_flow_plugin_generation_t *generation,
+                       turbo_flow_protocol_network_intake_t *jtt_intake,
+                       turbo_flow_protocol_network_intake_t *coap_intake,
+                       cnet_client *tcp, cnet_packet_endpoint *udp_peer,
+                       cnet_datagram *datagram, const decision_probe_t *decision,
+                       const datagram_probe_t *output, size_t expected) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_protocol_network_intake_snapshot_t jtt_snapshot =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+  turbo_flow_protocol_network_intake_snapshot_t coap_snapshot =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
   uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
   while ((decision->count < expected || output->count < expected) &&
          salts_monotonic_ms() < deadline) {
@@ -232,10 +253,114 @@ static void pump_until(turbo_flow_plugin_generation_t *generation, cnet_client *
     check_equal(cnet_client_poll(tcp, 1u, &events), SALTS_OK);
     check_equal(cnet_packet_poll(udp_peer, 1u, &events), SALTS_OK);
     check_equal(cnet_datagram_poll(datagram, 1u, &events), SALTS_OK);
+    if (jtt_intake)
+      check_equal(turbo_flow_protocol_network_intake_poll(jtt_intake, 1u, &jtt_snapshot),
+                  SALTS_OK);
+    if (coap_intake)
+      check_equal(turbo_flow_protocol_network_intake_poll(coap_intake, 1u, &coap_snapshot),
+                  SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
   }
   check_equal(decision->count, expected);
   check_equal(output->count, expected);
+}
+
+static size_t composition_jtt808_frame(
+    uint8_t *out, size_t capacity, const uint8_t *json, size_t json_size,
+    uint16_t serial) {
+  uint8_t header[17] = {0x09u, 0x00u, 0x00u, 0x00u, 0x01u,
+                        0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                        0x00u, 0x00u, 0x01u, 0x23u, 0x45u,
+                        0x00u, 0x00u};
+  uint8_t checksum = 0u;
+  size_t body_size;
+  size_t written = 0u;
+  if (!out || !json || json_size == 0u || json_size > 0x03feu || serial == 0u)
+    return 0u;
+  body_size = json_size + 1u;
+  header[2] = (uint8_t)(0x40u | ((body_size >> 8u) & 0x03u));
+  header[3] = (uint8_t)body_size;
+  header[15] = (uint8_t)(serial >> 8u);
+  header[16] = (uint8_t)serial;
+  if (capacity < (sizeof(header) + body_size + 1u) * 2u + 2u) return 0u;
+  out[written++] = 0x7eu;
+  for (size_t i = 0u; i < sizeof(header) + body_size; ++i) {
+    uint8_t value = i < sizeof(header)
+                        ? header[i]
+                        : (i == sizeof(header) ? 0x01u
+                                               : json[i - sizeof(header) - 1u]);
+    checksum ^= value;
+    if (value == 0x7du) {
+      out[written++] = 0x7du;
+      out[written++] = 0x01u;
+    } else if (value == 0x7eu) {
+      out[written++] = 0x7du;
+      out[written++] = 0x02u;
+    } else {
+      out[written++] = value;
+    }
+  }
+  if (checksum == 0x7du) {
+    out[written++] = 0x7du;
+    out[written++] = 0x01u;
+  } else if (checksum == 0x7eu) {
+    out[written++] = 0x7du;
+    out[written++] = 0x02u;
+  } else {
+    out[written++] = checksum;
+  }
+  out[written++] = 0x7eu;
+  return written;
+}
+
+static size_t composition_coap_frame(
+    uint8_t *out, size_t capacity, const uint8_t *json, size_t json_size,
+    uint16_t message_id) {
+  const size_t required = 7u + json_size;
+  if (!out || !json || json_size == 0u || message_id == 0u || required > capacity)
+    return 0u;
+  out[0] = 0x40u;
+  out[1] = 0x02u;
+  out[2] = (uint8_t)(message_id >> 8u);
+  out[3] = (uint8_t)message_id;
+  out[4] = 0xc1u;
+  out[5] = 50u;
+  out[6] = 0xffu;
+  memcpy(out + 7u, json, json_size);
+  return required;
+}
+
+static int composition_intake_create(
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    const turbo_flow_resolved_config_t *resolved, turbo_flow_t *downstream,
+    const char *source_adapter, const char *decoder_adapter,
+    const char *decoded_source, const char *graph_text,
+    turbo_flow_protocol_network_intake_t **out) {
+  turbo_flow_protocol_network_intake_config_t config =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
+  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_t *flow = turbo_flow_create();
+  int rc;
+  if (out) *out = NULL;
+  if (!flow || !snapshot || !resolved || !downstream || !source_adapter ||
+      !decoder_adapter || !decoded_source || !graph_text || !out) {
+    turbo_flow_destroy(flow);
+    return SALTS_EINVAL;
+  }
+  rc = turbo_flow_parse_string(flow, graph_text, strlen(graph_text));
+  if (rc == SALTS_OK) {
+    config.catalog = snapshot;
+    config.resolved = resolved;
+    config.downstream_flow = downstream;
+    config.source_adapter_name = source_adapter;
+    config.decoder_adapter_name = decoder_adapter;
+    config.decoded_source_name = decoded_source;
+    rc = turbo_flow_protocol_network_intake_create(&config, &flow, out, &error);
+  }
+  if (rc != SALTS_OK)
+    info("protocol intake create rc=%d path=%s message=%s", rc, error.path, error.message);
+  if (flow) turbo_flow_destroy(flow);
+  return rc;
 }
 
 static void normalize_path(char *path) {
@@ -292,18 +417,30 @@ spec("RulesForge real network composition") {
     static const char adult_payload[] = "{\"age\":21}";
     static const char minor_payload[] = "{\"age\":17}";
     static const char graph_text[] =
-        "source tcp adapter listener.source\n"
-        "source udp adapter packet.source\n"
+        "source jtt_decoded\n"
+        "source coap_decoded\n"
         "buffer intake resource intake.store\n"
         "stage rules operation rulesforge.apply resource rules.adult\n"
         "stage verify operation test.verify_decision\n"
         "stage output adapter datagram.sink\n"
         "stage main {\n"
-        "  tcp -> intake\n"
-        "  udp -> intake\n"
+        "  jtt_decoded -> intake\n"
+        "  coap_decoded -> intake\n"
         "  intake -> rules\n"
         "  rules -> verify\n"
         "  verify -> output\n"
+        "}\n";
+    static const char jtt_intake_graph[] =
+        "source wire adapter listener.source\n"
+        "stage decode adapter jtt.decode\n"
+        "stage main {\n"
+        "  wire -> decode\n"
+        "}\n";
+    static const char coap_intake_graph[] =
+        "source wire adapter packet.source\n"
+        "stage decode adapter coap.decode\n"
+        "stage main {\n"
+        "  wire -> decode\n"
         "}\n";
     char schema_path[512];
     char rfl_path[512];
@@ -313,6 +450,9 @@ spec("RulesForge real network composition") {
     const char *cnet_plugin = getenv("FLOW_CNET_PLUGIN_PATH");
     const char *durable_plugin = getenv("TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH");
     const char *rulesforge_plugin = getenv("FLOW_RULESFORGE_PLUGIN_PATH");
+    const char *jtt808_plugin = getenv("FLOW_PROTOCOL_JTT808_PLUGIN_PATH");
+    const char *coap_plugin = getenv("FLOW_PROTOCOL_COAP_PLUGIN_PATH");
+    const char *mapper_plugin = getenv("FLOW_APPLICANT_MAPPER_PLUGIN_PATH");
     turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -323,6 +463,12 @@ spec("RulesForge real network composition") {
         TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_plugin_generation_t *generation = NULL;
     turbo_flow_plugin_generation_t *cleanup_generation = NULL;
+    turbo_flow_protocol_network_intake_t *jtt_intake = NULL;
+    turbo_flow_protocol_network_intake_t *coap_intake = NULL;
+    turbo_flow_protocol_network_intake_snapshot_t jtt_snapshot =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    turbo_flow_protocol_network_intake_snapshot_t coap_snapshot =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
     turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     decision_probe_t decisions = {0};
@@ -341,6 +487,10 @@ spec("RulesForge real network composition") {
     uint16_t output_port = 0u;
     uint16_t tcp_port = 0u;
     uint16_t udp_port = 0u;
+    uint8_t jtt_frame[256];
+    uint8_t coap_frame[128];
+    size_t jtt_frame_size;
+    size_t coap_frame_size;
     int count;
 
     check_equal(make_temp_path("turbo_flow_rulesforge_composition", ".schema",
@@ -388,7 +538,7 @@ spec("RulesForge real network composition") {
         "  listener.source:\n"
         "    kind: cnet.listener_source\n"
         "    config:\n"
-        "      schema_version: 1\n" COMPOSITION_CANONICAL_SOURCE_YAML COMPOSITION_CLIENT_YAML
+        "      schema_version: 1\n" COMPOSITION_CLIENT_YAML
         "      bind_host: \"127.0.0.1\"\n"
         "      bind_port: 0\n"
         "      backlog: 4\n"
@@ -402,10 +552,30 @@ spec("RulesForge real network composition") {
         "      tls_client_auth: none\n"
         "      tls_alpn: []\n"
         "      max_connections: 4\n" COMPOSITION_SOURCE_TAIL_YAML
+        "  jtt.decode:\n"
+        "    kind: protocol.decode\n"
+        "    config:\n"
+        "      schema_version: 3\n"
+        "      protocol_provider: jtt808\n"
+        "      protocol_kind: jtt808\n"
+        "      protocol_version: 2019-A1\n"
+        "      source_id: fleet.primary\n"
+        "      max_sessions: 4\n"
+        "      max_frame_size: 1024\n"
+        "      max_pending_claims: 128\n"
+        "      max_pending_bytes: 131072\n"
+        "      mapper_plugin: %s\n"
+        "      mapper_name: %s\n"
+        "      mapper_profile: %s\n"
+        "      mapper_message_type: %u\n"
+        "      mapper_semantic_type: %u\n"
+        "      mapper_semantic_media_type: application/json\n"
+        "      mapper_max_semantic_bytes: 256\n"
+        "      mapper_max_output_bytes: 256\n"
         "  packet.source:\n"
         "    kind: cnet.packet_source\n"
         "    config:\n"
-        "      schema_version: 1\n" COMPOSITION_CANONICAL_SOURCE_YAML COMPOSITION_DATAGRAM_YAML
+        "      schema_version: 1\n" COMPOSITION_DATAGRAM_YAML
         "      packet_mode: udp\n"
         "      session_capacity: 4\n"
         "      kcp_mtu: 0\n"
@@ -426,6 +596,26 @@ spec("RulesForge real network composition") {
         "      fec_max_payload_bytes: 0\n"
         "      fec_receive_group_count: 0\n"
         "      queue_capacity: 8\n" COMPOSITION_SOURCE_TAIL_YAML
+        "  coap.decode:\n"
+        "    kind: protocol.decode\n"
+        "    config:\n"
+        "      schema_version: 3\n"
+        "      protocol_provider: coap\n"
+        "      protocol_kind: coap\n"
+        "      protocol_version: RFC7252\n"
+        "      source_id: coap.primary\n"
+        "      max_sessions: 4\n"
+        "      max_frame_size: 1024\n"
+        "      max_pending_claims: 128\n"
+        "      max_pending_bytes: 131072\n"
+        "      mapper_plugin: %s\n"
+        "      mapper_name: %s\n"
+        "      mapper_profile: %s\n"
+        "      mapper_message_type: %u\n"
+        "      mapper_semantic_type: %u\n"
+        "      mapper_semantic_media_type: application/json\n"
+        "      mapper_max_semantic_bytes: 256\n"
+        "      mapper_max_output_bytes: 256\n"
         "  datagram.sink:\n"
         "    kind: cnet.datagram_sink\n"
         "    config:\n"
@@ -438,7 +628,7 @@ spec("RulesForge real network composition") {
         "    kind: flow.durable.memory\n"
         "    config:\n"
         "      schema_version: 1\n"
-        "      identity_mode: generated\n"
+        "      identity_mode: stable_required\n"
         "      max_message_bytes: 1024\n"
         "      max_records: 16\n"
         "      max_total_bytes: 16384\n"
@@ -473,6 +663,14 @@ spec("RulesForge real network composition") {
         "    schema: %s\n"
         "    schema_version: 1\n"
         "    encoding: json\n",
+        TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID, TURBO_FLOW_APPLICANT_MAPPER_NAME,
+        TURBO_FLOW_APPLICANT_MAPPER_PROFILE,
+        (unsigned)TURBO_FLOW_APPLICANT_JTT808_MESSAGE_TYPE,
+        (unsigned)TURBO_FLOW_APPLICANT_JTT808_SEMANTIC_TYPE,
+        TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID, TURBO_FLOW_APPLICANT_MAPPER_NAME,
+        TURBO_FLOW_APPLICANT_MAPPER_PROFILE,
+        (unsigned)TURBO_FLOW_APPLICANT_COAP_MESSAGE_TYPE,
+        (unsigned)TURBO_FLOW_APPLICANT_COAP_SEMANTIC_TYPE,
         (unsigned)output_port, TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path,
         TURBO_FLOW_RULESFORGE_OPERATION, TURBO_FLOW_RULESFORGE_PLUGIN_ID,
         TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID, TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID,
@@ -485,20 +683,27 @@ spec("RulesForge real network composition") {
     if (!durable_plugin || !durable_plugin[0])
       durable_plugin = TURBO_FLOW_DURABLE_MEMORY_PLUGIN;
     if (!rulesforge_plugin || !rulesforge_plugin[0]) rulesforge_plugin = FLOW_RULESFORGE_PLUGIN;
-    host_config.module_capacity = 3u;
+    if (!jtt808_plugin || !jtt808_plugin[0]) jtt808_plugin = FLOW_PROTOCOL_JTT808_PLUGIN;
+    if (!coap_plugin || !coap_plugin[0]) coap_plugin = FLOW_PROTOCOL_COAP_PLUGIN;
+    if (!mapper_plugin || !mapper_plugin[0]) mapper_plugin = FLOW_APPLICANT_MAPPER_PLUGIN;
+    host_config.module_capacity = 6u;
     host_config.adapter_provider_capacity = 0u;
     host_config.resource_provider_capacity = 0u;
-    host_config.protocol_provider_capacity = 0u;
+    host_config.protocol_provider_capacity = 2u;
     host_config.business_provider_capacity = 0u;
     host_config.transactional_adapter_provider_capacity = 6u;
     host_config.transactional_resource_provider_capacity = 1u;
     host_config.schema_capacity = 2u;
     host_config.operation_capacity = 1u;
     host_config.materializer_capacity = 1u;
+    host_config.protocol_mapper_capacity = 2u;
     check_equal(turbo_flow_plugin_host_create(&host_config, &host, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, cnet_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, durable_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_host_load(host, rulesforge_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, jtt808_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, coap_plugin, &plugin_error), SALTS_OK);
+    check_equal(turbo_flow_plugin_host_load(host, mapper_plugin, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error), SALTS_OK);
     check_equal(turbo_flow_plugin_result_domain_create(snapshot, COMPOSITION_MESSAGE_CAPACITY,
                                                        &result_domain, &plugin_error),
@@ -533,22 +738,30 @@ spec("RulesForge real network composition") {
     }
     check_null(flow);
     check_not_null(generation);
-    turbo_flow_resolved_config_destroy(resolved);
-    resolved = NULL;
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
 
-    for (size_t i = 0u; i < turbo_flow_adapter_count(turbo_flow_plugin_generation_flow(generation));
-         ++i) {
-      turbo_flow_connection_snapshot_t connection;
-      memset(&connection, 0, sizeof(connection));
-      if (turbo_flow_adapter_connection_snapshot_at(turbo_flow_plugin_generation_flow(generation),
-                                                    i, &connection) != SALTS_OK)
-        continue;
-      if (connection.adapter_name && strcmp(connection.adapter_name, "listener.source") == 0)
-        tcp_port = endpoint_port(connection.endpoint, "tcp://");
-      if (connection.adapter_name && strcmp(connection.adapter_name, "packet.source") == 0)
-        udp_port = endpoint_port(connection.endpoint, "udp://");
-    }
+    check_equal(composition_intake_create(
+                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation),
+                    "listener.source", "jtt.decode", "jtt_decoded",
+                    jtt_intake_graph, &jtt_intake),
+                SALTS_OK);
+    check_equal(composition_intake_create(
+                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation),
+                    "packet.source", "coap.decode", "coap_decoded",
+                    coap_intake_graph, &coap_intake),
+                SALTS_OK);
+    check_not_null(jtt_intake);
+    check_not_null(coap_intake);
+    turbo_flow_resolved_config_destroy(resolved);
+    resolved = NULL;
+    check_equal(turbo_flow_protocol_network_intake_start(jtt_intake), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_start(coap_intake), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_snapshot(jtt_intake, &jtt_snapshot), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_snapshot(coap_intake, &coap_snapshot), SALTS_OK);
+    check_equal(jtt_snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
+    check_equal(coap_snapshot.state, TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_RUNNING);
+    tcp_port = endpoint_port(jtt_snapshot.source_endpoint, "tcp://");
+    udp_port = endpoint_port(coap_snapshot.source_endpoint, "udp://");
     check_true(tcp_port != 0u);
     check_true(udp_port != 0u);
 
@@ -588,43 +801,67 @@ spec("RulesForge real network composition") {
       uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
       while (tcp_probe.connected == 0u && salts_monotonic_ms() < deadline) {
         size_t events = 0u;
+        jtt_snapshot =
+            (turbo_flow_protocol_network_intake_snapshot_t)
+                TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
         check_equal(cnet_client_poll(&tcp, 1u, &events), SALTS_OK);
+        check_equal(turbo_flow_protocol_network_intake_poll(
+                        jtt_intake, 1u, &jtt_snapshot),
+                    SALTS_OK);
         check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
       }
     }
     check_equal(tcp_probe.connected, (size_t)1u);
     check_equal(tcp_probe.failed, 0);
 
-    check_equal(cnet_send(&tcp, tcp_connection, adult_payload,
-                          sizeof(adult_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 1u);
+    jtt_frame_size = composition_jtt808_frame(
+        jtt_frame, sizeof(jtt_frame), (const uint8_t *)adult_payload,
+        sizeof(adult_payload) - 1u, 1u);
+    check_true(jtt_frame_size > 0u);
+    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 1u);
     check_equal(decisions.matched[0], 1);
     check_equal(decisions.fired[0], 1);
     check_equal(outputs.sizes[0], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[0], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
-
-    check_equal(cnet_packet_send(&udp_peer, udp_session, adult_payload,
-                                 sizeof(adult_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 2u);
+    /* Business success is not an implicit protocol ACK. The explicit JT808
+     * reply codec contract is tested separately through turbo_flow_protocol_reply(). */
+    check_equal(tcp_probe.received, (size_t)0u);
+    coap_frame_size = composition_coap_frame(
+        coap_frame, sizeof(coap_frame), (const uint8_t *)adult_payload,
+        sizeof(adult_payload) - 1u, UINT16_C(0x1234));
+    check_true(coap_frame_size > 0u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, coap_frame, coap_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 2u);
     check_equal(decisions.matched[1], decisions.matched[0]);
     check_equal(decisions.fired[1], decisions.fired[0]);
     check_equal(outputs.sizes[1], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[1], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
 
-    check_equal(cnet_send(&tcp, tcp_connection, minor_payload,
-                          sizeof(minor_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 3u);
+    jtt_frame_size = composition_jtt808_frame(
+        jtt_frame, sizeof(jtt_frame), (const uint8_t *)minor_payload,
+        sizeof(minor_payload) - 1u, 2u);
+    check_true(jtt_frame_size > 0u);
+    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 3u);
     check_equal(decisions.matched[2], 0);
     check_equal(decisions.fired[2], 0);
     check_equal(outputs.sizes[2], sizeof(minor_payload) - 1u);
     check_equal(memcmp(outputs.payloads[2], minor_payload,
                        sizeof(minor_payload) - 1u), 0);
 
-    check_equal(cnet_packet_send(&udp_peer, udp_session, minor_payload,
-                                 sizeof(minor_payload) - 1u), SALTS_OK);
-    pump_until(generation, &tcp, &udp_peer, &datagram, &decisions, &outputs, 4u);
+    coap_frame_size = composition_coap_frame(
+        coap_frame, sizeof(coap_frame), (const uint8_t *)minor_payload,
+        sizeof(minor_payload) - 1u, UINT16_C(0x1235));
+    check_true(coap_frame_size > 0u);
+    check_equal(cnet_packet_send(&udp_peer, udp_session, coap_frame, coap_frame_size), SALTS_OK);
+    pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
+               &decisions, &outputs, 4u);
     check_equal(decisions.matched[3], decisions.matched[2]);
     check_equal(decisions.fired[3], decisions.fired[2]);
     check_equal(outputs.sizes[3], sizeof(minor_payload) - 1u);
@@ -632,6 +869,14 @@ spec("RulesForge real network composition") {
                        sizeof(minor_payload) - 1u), 0);
 
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &plugin_error), SALTS_EBUSY);
+    check_equal(turbo_flow_protocol_network_intake_stop(jtt_intake, COMPOSITION_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_stop(coap_intake, COMPOSITION_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_destroy(jtt_intake), SALTS_OK);
+    jtt_intake = NULL;
+    check_equal(turbo_flow_protocol_network_intake_destroy(coap_intake), SALTS_OK);
+    coap_intake = NULL;
     check_equal(cnet_client_stop(&tcp, COMPOSITION_TIMEOUT_MS), SALTS_OK);
     check_equal(cnet_client_destroy(&tcp), SALTS_OK);
     check_equal(cnet_packet_endpoint_stop(&udp_peer, COMPOSITION_TIMEOUT_MS), SALTS_OK);
