@@ -242,6 +242,10 @@ static void pump_until(turbo_flow_plugin_generation_t *generation,
                        cnet_datagram *datagram, const decision_probe_t *decision,
                        const datagram_probe_t *output, size_t expected) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  turbo_flow_protocol_network_intake_snapshot_t jtt_snapshot =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+  turbo_flow_protocol_network_intake_snapshot_t coap_snapshot =
+      TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
   uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
   while ((decision->count < expected || output->count < expected) &&
          salts_monotonic_ms() < deadline) {
@@ -250,9 +254,11 @@ static void pump_until(turbo_flow_plugin_generation_t *generation,
     check_equal(cnet_packet_poll(udp_peer, 1u, &events), SALTS_OK);
     check_equal(cnet_datagram_poll(datagram, 1u, &events), SALTS_OK);
     if (jtt_intake)
-      check_equal(turbo_flow_protocol_network_intake_poll(jtt_intake, 1u, NULL), SALTS_OK);
+      check_equal(turbo_flow_protocol_network_intake_poll(jtt_intake, 1u, &jtt_snapshot),
+                  SALTS_OK);
     if (coap_intake)
-      check_equal(turbo_flow_protocol_network_intake_poll(coap_intake, 1u, NULL), SALTS_OK);
+      check_equal(turbo_flow_protocol_network_intake_poll(coap_intake, 1u, &coap_snapshot),
+                  SALTS_OK);
     check_equal(turbo_flow_plugin_generation_poll(generation, 1u, &error), SALTS_OK);
   }
   check_equal(decision->count, expected);
