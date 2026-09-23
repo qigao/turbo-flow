@@ -271,6 +271,65 @@ typedef struct turbo_flow_cnet_listener_message_context_s {
 #define TURBO_FLOW_CNET_LISTENER_MESSAGE_CONTEXT_V1_SIZE                                           \
   sizeof(turbo_flow_cnet_listener_message_context_t)
 
+#define TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION 1u
+
+/** Borrowed bytes admitted to the exact accepted listener connection generation. */
+typedef struct turbo_flow_cnet_listener_reply_request_s {
+  size_t size;
+  uint32_t version;
+  cnet_connection connection;
+  const void *data;
+  size_t data_size;
+  uint64_t tag;
+} turbo_flow_cnet_listener_reply_request_t;
+
+#define TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT                                                \
+  {sizeof(turbo_flow_cnet_listener_reply_request_t),                                               \
+   TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION,                                                     \
+   {0u, 0u},                                                                                       \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u}
+
+/** One consumed authoritative terminal for a previously admitted listener reply. */
+typedef struct turbo_flow_cnet_listener_reply_terminal_s {
+  size_t size;
+  uint32_t version;
+  cnet_connection connection;
+  size_t data_size;
+  int status;
+  uint64_t tag;
+} turbo_flow_cnet_listener_reply_terminal_t;
+
+#define TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT                                               \
+  {sizeof(turbo_flow_cnet_listener_reply_terminal_t),                                              \
+   TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION,                                                     \
+   {0u, 0u},                                                                                       \
+   0u,                                                                                             \
+   SALTS_OK,                                                                                       \
+   0u}
+
+/**
+ * Copy and admit one reply to an exact accepted listener connection generation.
+ *
+ * At most one native write and one unconsumed terminal are allowed per
+ * connection. The bytes are copied by CNet before SALTS_OK is returned.
+ * No reconnect, peer selection, or generation fallback is performed.
+ */
+TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_send(
+    turbo_flow_cnet_listener_source_t *source,
+    const turbo_flow_cnet_listener_reply_request_t *request);
+
+/**
+ * Consume one completed listener reply terminal.
+ *
+ * Returns SALTS_EAGAIN when no terminal is ready. A closed connection slot with
+ * an unconsumed terminal is not reused until this call consumes that terminal.
+ */
+TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_take_terminal(
+    turbo_flow_cnet_listener_source_t *source,
+    turbo_flow_cnet_listener_reply_terminal_t *terminal);
+
 /**
  * Caller-owned snapshot copied without advancing either runtime.
  *
