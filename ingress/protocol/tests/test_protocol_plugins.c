@@ -17,6 +17,16 @@ typedef struct protocol_case_s {
   size_t frame_size;
 } protocol_case_t;
 
+static int protocol_open_one(const char *module, const char *name,
+                             turbo_flow_protocol_kind_t protocol, const char *version,
+                             turbo_flow_plugin_host_t **host_out,
+                             turbo_flow_protocol_registry_t **registry_out,
+                             turbo_flow_protocol_owner_t **owner_out,
+                             turbo_flow_protocol_t **protocol_out);
+static void protocol_close_one(turbo_flow_plugin_host_t *host,
+                               turbo_flow_protocol_registry_t *registry,
+                               turbo_flow_protocol_owner_t *owner);
+
 static size_t protocol_gbt32960_frame(uint8_t *out, size_t capacity) {
   static const char vin[] = "L1234567890123456";
   uint8_t checksum = 0u;
@@ -57,6 +67,104 @@ static size_t protocol_jtt808_frame(uint8_t *out, size_t capacity) {
   }
   out[written++] = 0x7eu;
   return written;
+}
+
+static size_t protocol_jtt808_transparent_json_frame(
+    uint8_t *out, size_t capacity, const uint8_t *json, size_t json_size) {
+  uint8_t header[17] = {0x09u, 0x00u, 0x00u, 0x00u, 0x01u,
+                        0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                        0x00u, 0x00u, 0x01u, 0x23u, 0x45u,
+                        0x00u, 0x21u};
+  uint8_t checksum = 0u;
+  size_t written = 0u;
+  size_t body_size;
+  if (!out || (!json && json_size != 0u) || json_size > 0x03feu) return 0u;
+  body_size = json_size + 1u;
+  header[2] = (uint8_t)(0x40u | ((body_size >> 8u) & 0x03u));
+  header[3] = (uint8_t)body_size;
+  if (capacity < (sizeof(header) + body_size + 1u) * 2u + 2u) return 0u;
+
+  out[written++] = 0x7eu;
+  for (size_t i = 0u; i < sizeof(header) + body_size; ++i) {
+    uint8_t value;
+    if (i < sizeof(header))
+      value = header[i];
+    else if (i == sizeof(header))
+      value = 0x01u;
+    else
+      value = json[i - sizeof(header) - 1u];
+    checksum ^= value;
+    if (value == 0x7du) {
+      out[written++] = 0x7du;
+      out[written++] = 0x01u;
+    } else if (value == 0x7eu) {
+      out[written++] = 0x7du;
+      out[written++] = 0x02u;
+    } else {
+      out[written++] = value;
+    }
+  }
+  if (checksum == 0x7du) {
+    out[written++] = 0x7du;
+    out[written++] = 0x01u;
+  } else if (checksum == 0x7eu) {
+    out[written++] = 0x7du;
+    out[written++] = 0x02u;
+  } else {
+    out[written++] = checksum;
+  }
+  out[written++] = 0x7eu;
+  return written;
+}
+
+static int protocol_semantic_decode_one(
+    const char *module, const char *name, turbo_flow_protocol_kind_t protocol_kind,
+    const char *version, const char *device_id,
+    const uint8_t *frame_data, size_t frame_size,
+    uint32_t expected_message_type, uint32_t expected_semantic_type,
+    const char *expected_media_type, const uint8_t *expected_semantic,
+    size_t expected_semantic_size) {
+  turbo_flow_plugin_host_t *host = NULL;
+  turbo_flow_protocol_registry_t *registry = NULL;
+  turbo_flow_protocol_owner_t *owner = NULL;
+  turbo_flow_protocol_t *protocol = NULL;
+  turbo_flow_protocol_info_t info = TURBO_FLOW_PROTOCOL_INFO_INIT;
+  turbo_flow_protocol_frame_view_t frame = TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+  turbo_flow_protocol_message_output_t raw = TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT;
+  turbo_flow_protocol_semantic_output_t semantic = TURBO_FLOW_PROTOCOL_SEMANTIC_OUTPUT_INIT;
+  uint8_t raw_bytes[512];
+  uint8_t semantic_bytes[256];
+  int rc = protocol_open_one(module, name, protocol_kind, version,
+                             &host, &registry, &owner, &protocol);
+  if (rc != SALTS_OK) return rc;
+  rc = turbo_flow_protocol_get_info(protocol, &info);
+  if (rc != SALTS_OK) goto done;
+  if ((info.capabilities & TURBO_FLOW_PROTOCOL_CAP_SEMANTIC_DECODE) == 0u) {
+    rc = SALTS_EPROTO;
+    goto done;
+  }
+  frame.data = frame_data;
+  frame.data_size = frame_size;
+  frame.device_id = device_id;
+  frame.protocol_version = version;
+  raw.payload = raw_bytes;
+  raw.payload_capacity = sizeof(raw_bytes);
+  semantic.data = semantic_bytes;
+  semantic.capacity = sizeof(semantic_bytes);
+  rc = turbo_flow_protocol_decode_semantic(protocol, &frame, &raw, &semantic);
+  if (rc != SALTS_OK) goto done;
+  if (raw.payload_size != frame_size ||
+      memcmp(raw.payload, frame_data, frame_size) != 0 ||
+      raw.metadata.message_type != expected_message_type ||
+      semantic.semantic_type != expected_semantic_type ||
+      strcmp(semantic.media_type, expected_media_type) != 0 ||
+      semantic.data_size != expected_semantic_size ||
+      memcmp(semantic.data, expected_semantic, expected_semantic_size) != 0)
+    rc = SALTS_EPROTO;
+
+done:
+  protocol_close_one(host, registry, owner);
+  return rc;
 }
 
 static int protocol_roundtrip(turbo_flow_protocol_registry_t *registry,
@@ -432,6 +540,40 @@ spec("protocol plugin conformance") {
     check_true(output.data_size > 0u);
     check_equal(output.metadata.operation, "platform-ack");
     protocol_close_one(host, registry, owner);
+  }
+
+  it("extracts identical application JSON through real CoAP and JT/T808 codecs") {
+    static const uint8_t json[] = "{\"age\":21}";
+    uint8_t coap[64];
+    uint8_t jtt808[128];
+    size_t coap_size = 0u;
+    size_t jtt808_size;
+
+    coap[coap_size++] = 0x40u;
+    coap[coap_size++] = 0x02u;
+    coap[coap_size++] = 0x12u;
+    coap[coap_size++] = 0x34u;
+    coap[coap_size++] = 0xc1u; /* Content-Format, one-byte value */
+    coap[coap_size++] = 50u;   /* application/json */
+    coap[coap_size++] = 0xffu;
+    memcpy(coap + coap_size, json, sizeof(json) - 1u);
+    coap_size += sizeof(json) - 1u;
+
+    jtt808_size = protocol_jtt808_transparent_json_frame(
+        jtt808, sizeof(jtt808), json, sizeof(json) - 1u);
+    check_true(jtt808_size > 0u);
+
+    check_equal(protocol_semantic_decode_one(
+                    FLOW_PROTOCOL_COAP_MODULE, "coap", TURBO_FLOW_PROTOCOL_COAP,
+                    "RFC7252", "sensor-2", coap, coap_size,
+                    2u, 50u, "application/json", json, sizeof(json) - 1u),
+                SALTS_OK);
+    check_equal(protocol_semantic_decode_one(
+                    FLOW_PROTOCOL_JTT808_MODULE, "jtt808", TURBO_FLOW_PROTOCOL_JTT_808,
+                    "2019-A1", NULL, jtt808, jtt808_size,
+                    UINT32_C(0x0900), 1u, "application/json",
+                    json, sizeof(json) - 1u),
+                SALTS_OK);
   }
 
   it("encodes bounded semantic downlink commands for every plugin") {

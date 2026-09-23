@@ -110,6 +110,10 @@ int flow_protocol_metadata_text_n(char *out, size_t capacity, const char *text, 
 int flow_protocol_metadata_format(char *out, size_t capacity, const char *format, unsigned value);
 int flow_protocol_coap_inspect(const turbo_flow_protocol_frame_view_t *frame,
                                turbo_flow_protocol_metadata_t *metadata, int lwm2m);
+int flow_protocol_coap_decode_semantic(
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata, int lwm2m,
+    turbo_flow_protocol_semantic_output_t *semantic);
 int flow_protocol_coap_reply(const turbo_flow_protocol_frame_view_t *request, int status,
                              turbo_flow_protocol_frame_output_t *output, int lwm2m,
                              uint16_t separate_message_id);
