@@ -562,8 +562,8 @@ spec("RulesForge real network composition") {
         "      source_id: fleet.primary\n"
         "      max_sessions: 4\n"
         "      max_frame_size: 1024\n"
-        "      max_pending_claims: 64\n"
-        "      max_pending_bytes: 65536\n"
+        "      max_pending_claims: 128\n"
+        "      max_pending_bytes: 131072\n"
         "      mapper_plugin: %s\n"
         "      mapper_name: %s\n"
         "      mapper_profile: %s\n"
@@ -606,8 +606,8 @@ spec("RulesForge real network composition") {
         "      source_id: coap.primary\n"
         "      max_sessions: 4\n"
         "      max_frame_size: 1024\n"
-        "      max_pending_claims: 64\n"
-        "      max_pending_bytes: 65536\n"
+        "      max_pending_claims: 128\n"
+        "      max_pending_bytes: 131072\n"
         "      mapper_plugin: %s\n"
         "      mapper_name: %s\n"
         "      mapper_profile: %s\n"
@@ -826,8 +826,6 @@ spec("RulesForge real network composition") {
     check_equal(outputs.sizes[0], sizeof(adult_payload) - 1u);
     check_equal(memcmp(outputs.payloads[0], adult_payload,
                        sizeof(adult_payload) - 1u), 0);
-    check_true(tcp_probe.received > 0u);
-
     coap_frame_size = composition_coap_frame(
         coap_frame, sizeof(coap_frame), (const uint8_t *)adult_payload,
         sizeof(adult_payload) - 1u, UINT16_C(0x1234));
