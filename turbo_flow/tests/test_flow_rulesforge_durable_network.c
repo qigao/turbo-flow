@@ -532,7 +532,7 @@ spec("RulesForge real network composition") {
         "  listener.source:\n"
         "    kind: cnet.listener_source\n"
         "    config:\n"
-        "      schema_version: 1\n" COMPOSITION_CANONICAL_SOURCE_YAML COMPOSITION_CLIENT_YAML
+        "      schema_version: 1\n" COMPOSITION_CLIENT_YAML
         "      bind_host: \"127.0.0.1\"\n"
         "      bind_port: 0\n"
         "      backlog: 4\n"
@@ -546,10 +546,30 @@ spec("RulesForge real network composition") {
         "      tls_client_auth: none\n"
         "      tls_alpn: []\n"
         "      max_connections: 4\n" COMPOSITION_SOURCE_TAIL_YAML
+        "  jtt.decode:\n"
+        "    kind: protocol.decode\n"
+        "    config:\n"
+        "      schema_version: 3\n"
+        "      protocol_provider: jtt808\n"
+        "      protocol_kind: jtt808\n"
+        "      protocol_version: 2019-A1\n"
+        "      source_id: fleet.primary\n"
+        "      max_sessions: 4\n"
+        "      max_frame_size: 1024\n"
+        "      max_pending_claims: 64\n"
+        "      max_pending_bytes: 65536\n"
+        "      mapper_plugin: %s\n"
+        "      mapper_name: %s\n"
+        "      mapper_profile: %s\n"
+        "      mapper_message_type: %u\n"
+        "      mapper_semantic_type: %u\n"
+        "      mapper_semantic_media_type: application/json\n"
+        "      mapper_max_semantic_bytes: 256\n"
+        "      mapper_max_output_bytes: 256\n"
         "  packet.source:\n"
         "    kind: cnet.packet_source\n"
         "    config:\n"
-        "      schema_version: 1\n" COMPOSITION_CANONICAL_SOURCE_YAML COMPOSITION_DATAGRAM_YAML
+        "      schema_version: 1\n" COMPOSITION_DATAGRAM_YAML
         "      packet_mode: udp\n"
         "      session_capacity: 4\n"
         "      kcp_mtu: 0\n"
@@ -570,6 +590,26 @@ spec("RulesForge real network composition") {
         "      fec_max_payload_bytes: 0\n"
         "      fec_receive_group_count: 0\n"
         "      queue_capacity: 8\n" COMPOSITION_SOURCE_TAIL_YAML
+        "  coap.decode:\n"
+        "    kind: protocol.decode\n"
+        "    config:\n"
+        "      schema_version: 3\n"
+        "      protocol_provider: coap\n"
+        "      protocol_kind: coap\n"
+        "      protocol_version: RFC7252\n"
+        "      source_id: coap.primary\n"
+        "      max_sessions: 4\n"
+        "      max_frame_size: 1024\n"
+        "      max_pending_claims: 64\n"
+        "      max_pending_bytes: 65536\n"
+        "      mapper_plugin: %s\n"
+        "      mapper_name: %s\n"
+        "      mapper_profile: %s\n"
+        "      mapper_message_type: %u\n"
+        "      mapper_semantic_type: %u\n"
+        "      mapper_semantic_media_type: application/json\n"
+        "      mapper_max_semantic_bytes: 256\n"
+        "      mapper_max_output_bytes: 256\n"
         "  datagram.sink:\n"
         "    kind: cnet.datagram_sink\n"
         "    config:\n"
@@ -582,7 +622,7 @@ spec("RulesForge real network composition") {
         "    kind: flow.durable.memory\n"
         "    config:\n"
         "      schema_version: 1\n"
-        "      identity_mode: generated\n"
+        "      identity_mode: stable_required\n"
         "      max_message_bytes: 1024\n"
         "      max_records: 16\n"
         "      max_total_bytes: 16384\n"
@@ -617,6 +657,14 @@ spec("RulesForge real network composition") {
         "    schema: %s\n"
         "    schema_version: 1\n"
         "    encoding: json\n",
+        TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID, TURBO_FLOW_APPLICANT_MAPPER_NAME,
+        TURBO_FLOW_APPLICANT_MAPPER_PROFILE,
+        (unsigned)TURBO_FLOW_APPLICANT_JTT808_MESSAGE_TYPE,
+        (unsigned)TURBO_FLOW_APPLICANT_JTT808_SEMANTIC_TYPE,
+        TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID, TURBO_FLOW_APPLICANT_MAPPER_NAME,
+        TURBO_FLOW_APPLICANT_MAPPER_PROFILE,
+        (unsigned)TURBO_FLOW_APPLICANT_COAP_MESSAGE_TYPE,
+        (unsigned)TURBO_FLOW_APPLICANT_COAP_SEMANTIC_TYPE,
         (unsigned)output_port, TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path,
         TURBO_FLOW_RULESFORGE_OPERATION, TURBO_FLOW_RULESFORGE_PLUGIN_ID,
         TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID, TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID,
