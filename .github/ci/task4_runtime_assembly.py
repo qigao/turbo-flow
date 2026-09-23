@@ -41,7 +41,26 @@ elif args.rulesforge_e2e:
         "add_subdirectory(turbo_flow)\n"
         "add_subdirectory(io/cnet)\n"
         "add_subdirectory(io/durable)\n"
+        "add_subdirectory(ingress/protocol/inbox)\n"
+        "add_subdirectory(ingress/protocol/network)\n"
         "add_subdirectory(plugins/rulesforge)\n"
+        "add_subdirectory(plugins/applicant_mapper)\n"
+        "\n"
+        "add_library(tf_protocol_plugin_support STATIC\n"
+        "  ${CMAKE_SOURCE_DIR}/ingress/protocol/src/flow_protocol_plugin_support.c\n"
+        "  ${CMAKE_SOURCE_DIR}/ingress/protocol/src/flow_protocol_plugin_support.h)\n"
+        "set_target_properties(tf_protocol_plugin_support PROPERTIES POSITION_INDEPENDENT_CODE ON)\n"
+        "target_include_directories(tf_protocol_plugin_support PUBLIC ${CMAKE_SOURCE_DIR}/ingress/protocol/src)\n"
+        "target_link_libraries(tf_protocol_plugin_support PUBLIC TurboFlow::ProtocolIngress)\n"
+        "function(turbo_flow_ci_add_protocol target_name source_file)\n"
+        "  add_library(${target_name} SHARED ${source_file})\n"
+        "  target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_PLUGIN_BUILD)\n"
+        "  target_include_directories(${target_name} PRIVATE ${CMAKE_SOURCE_DIR}/ingress/protocol/src)\n"
+        "  target_link_libraries(${target_name} PRIVATE tf_protocol_plugin_support TurboFlow::ProtocolIngress)\n"
+        "  set_target_properties(${target_name} PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
+        "endfunction()\n"
+        "turbo_flow_ci_add_protocol(tf_protocol_jtt808 ${CMAKE_SOURCE_DIR}/ingress/protocol/jtt808/flow_protocol_jtt808.c)\n"
+        "turbo_flow_ci_add_protocol(tf_protocol_coap ${CMAKE_SOURCE_DIR}/ingress/protocol/coap/flow_protocol_coap.c)\n"
         "\n"
         "cmake_add_test(\n"
         "  test_flow_rulesforge_plugin\n"
@@ -56,15 +75,20 @@ elif args.rulesforge_e2e:
         "cmake_add_test(\n"
         "  test_flow_rulesforge_durable_network\n"
         "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_durable_network.c\n"
-        "  LIBS TurboFlow::PluginHost Salts::TinyTest Salts::CNet\n"
+        "  LIBS TurboFlow::PluginHost TurboFlow::ProtocolNetworkIntake Salts::TinyTest Salts::CNet\n"
         "  INCLUDES ${CMAKE_SOURCE_DIR}/plugins/rulesforge/include\n"
+        "           ${CMAKE_SOURCE_DIR}/plugins/applicant_mapper/include\n"
         '  FOLDER "turbo_flow/tests")\n'
         "target_compile_definitions(test_flow_rulesforge_durable_network PRIVATE\n"
         '  FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>"\n'
         '  TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"\n'
-        '  TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>")\n'
+        '  TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>"\n'
+        '  FLOW_PROTOCOL_JTT808_PLUGIN="$<TARGET_FILE:tf_protocol_jtt808>"\n'
+        '  FLOW_PROTOCOL_COAP_PLUGIN="$<TARGET_FILE:tf_protocol_coap>"\n'
+        '  FLOW_APPLICANT_MAPPER_PLUGIN="$<TARGET_FILE:tf_applicant_mapper_provider>")\n'
         "add_dependencies(test_flow_rulesforge_durable_network\n"
-        "  tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin)\n"
+        "  tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin\n"
+        "  tf_protocol_jtt808 tf_protocol_coap tf_applicant_mapper_provider)\n"
     )
 elif args.protocol_intake:
     children = (
