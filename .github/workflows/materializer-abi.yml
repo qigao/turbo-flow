@@ -31,8 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   SALTS_ROOT: /opt/salts/debug
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
-          ref: ${{ env.SALTS_COMMIT }}
+          ref: ${{ env.SALTS_REF }}
           path: .ci/deps/salts
           persist-credentials: false
 
@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_COMMIT }}
+          ref: ${{ env.SALTS_UTILS_REF }}
           path: .ci/deps/salts-utils
           persist-credentials: false
 
