@@ -313,12 +313,15 @@ static int flow_reflected_port_matches(
       !flow_domain_valid(port->domain) ||
       (port->direction != TURBO_FLOW_OPERATION_PORT_INPUT &&
        port->direction != TURBO_FLOW_OPERATION_PORT_OUTPUT) ||
+      (port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT &&
+       port->storage != TURBO_FLOW_OPERATION_STORAGE_POINTEE) ||
       !cmeta_data_desc_valid(port->data)) {
     return 0;
   }
 
   if (port->value_kind == TURBO_FLOW_OPERATION_VALUE_RETURN) {
     if (port->direction != TURBO_FLOW_OPERATION_PORT_OUTPUT ||
+        port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT ||
         port->parameter_index != SIZE_MAX ||
         !function || function->return_type->kind == CMETA_T_VOID) {
       return 0;
@@ -338,7 +341,15 @@ static int flow_reflected_port_matches(
         (direction & CMETA_PARAM_OUT) == 0u) {
       return 0;
     }
-    expected_type = param->type;
+    if (port->storage == TURBO_FLOW_OPERATION_STORAGE_DIRECT) {
+      expected_type = param->type;
+    } else {
+      if (!param->type || param->type->kind != CMETA_T_POINTER ||
+          !param->type->pointee) {
+        return 0;
+      }
+      expected_type = param->type->pointee;
+    }
   } else {
     return 0;
   }
@@ -426,8 +437,10 @@ static int flow_reflected_unary_ports(
   }
   if (!input || !output ||
       input->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER ||
+      input->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT ||
       input->parameter_index != 0u ||
-      output->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN) {
+      output->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN ||
+      output->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT) {
     return 0;
   }
   if (input_out) *input_out = input;
