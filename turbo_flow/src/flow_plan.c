@@ -183,7 +183,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           (!!semantics->typed !=
            (semantics->canonical_input_type != NULL &&
             semantics->canonical_output_type != NULL)) ||
-          !cmeta_callable_contract_valid(semantics->callable))) ||
+          (semantics->typed &&
+           !cmeta_callable_contract_valid(semantics->callable)))) ||
         (!semantics->reflected &&
          (semantics->canonical_input_type != NULL ||
           semantics->canonical_output_type != NULL ||
