@@ -173,6 +173,23 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
          semantics->input_type_index >= vec_size(&plan->semantic_types)) ||
         (semantics->output_type_index != FLOW_PLAN_INDEX_NONE &&
          semantics->output_type_index >= vec_size(&plan->semantic_types)) ||
+        (semantics->reflected &&
+         (semantics->input_type_index != FLOW_PLAN_INDEX_NONE ||
+          semantics->output_type_index != FLOW_PLAN_INDEX_NONE ||
+          (semantics->canonical_input_type &&
+           !cmeta_type_desc_valid(semantics->canonical_input_type)) ||
+          (semantics->canonical_output_type &&
+           !cmeta_type_desc_valid(semantics->canonical_output_type)) ||
+          (!!semantics->typed !=
+           (semantics->canonical_input_type != NULL &&
+            semantics->canonical_output_type != NULL)) ||
+          !cmeta_callable_contract_valid(semantics->callable))) ||
+        (!semantics->reflected &&
+         (semantics->canonical_input_type != NULL ||
+          semantics->canonical_output_type != NULL ||
+          (!!semantics->typed !=
+           (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
+            semantics->output_type_index != FLOW_PLAN_INDEX_NONE)))) ||
         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE &&
          semantics->candidate_region >= plan->candidate_region_count) ||
         (!!semantics->lowering_candidate !=
