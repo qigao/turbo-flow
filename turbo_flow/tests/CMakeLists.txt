@@ -105,6 +105,23 @@ set_tests_properties(test_flow_projection_owner test_flow_projection_owner_fault
   PROPERTIES LABELS "graph;core" TIMEOUT 30)
 
 cmake_add_test(
+  test_flow_reflected_operation
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_reflected_operation.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/reflected_operation_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+set_target_properties(test_flow_reflected_operation PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON)
+set_tests_properties(test_flow_reflected_operation
+  PROPERTIES LABELS "graph;core" TIMEOUT 30)
+
+cmake_add_test(
   test_turbo_flow
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow.c
           ${CMAKE_CURRENT_SOURCE_DIR}/flow_plan_type_probe.c
