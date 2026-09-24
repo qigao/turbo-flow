@@ -570,8 +570,10 @@ int turbo_flow_reflected_operation(
 
   out->function = operation->function;
   out->abi = operation->abi;
-  out->ports = (const turbo_flow_operation_port_binding_t *)
-      vec_data_const(&operation->reflected_ports);
+  out->ports = operation->reflected_ports.size
+                   ? (const turbo_flow_operation_port_binding_t *)
+                         vec_at_const(&operation->reflected_ports, 0u)
+                   : NULL;
   out->port_count = vec_size(&operation->reflected_ports);
   out->lowering = operation->reflected_lowering;
   return SALTS_OK;
