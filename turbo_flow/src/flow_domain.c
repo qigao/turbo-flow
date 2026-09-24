@@ -468,9 +468,6 @@ int turbo_flow_register_reflected_operation(
       !cmeta_function_abi_desc_valid(registration->abi) ||
       !cmeta_function_desc_equal(registration->abi->function,
                                  registration->function) ||
-      !cmeta_callable_contract_valid(registration->adapter) ||
-      registration->adapter.meta.effects != registration->function->effects ||
-      registration->adapter.meta.properties != registration->function->properties ||
       !flow_reflected_ports_valid(registration) ||
       (registration->lowering != TURBO_FLOW_REFLECTED_LOWERING_NONE &&
        registration->lowering != TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP)) {
@@ -543,6 +540,12 @@ int turbo_flow_register_reflected_operation(
   }
 
   if (registration->lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP) {
+    if (!cmeta_callable_contract_valid(registration->adapter) ||
+        registration->adapter.meta.effects != registration->function->effects ||
+        registration->adapter.meta.properties != registration->function->properties) {
+      flow_operation_registration_destroy(&operation);
+      return SALTS_EINVAL;
+    }
     if (!input_port || !output_port) {
       flow_operation_registration_destroy(&operation);
       return SALTS_EINVAL;
