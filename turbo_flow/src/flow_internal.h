@@ -264,7 +264,11 @@ typedef enum flow_lowering_barrier_e {
   FLOW_LOWERING_BARRIER_EXTERNAL_IO = 1u << 7,
   FLOW_LOWERING_BARRIER_ORDERING = 1u << 8,
   FLOW_LOWERING_BARRIER_RELATION = 1u << 9,
-  FLOW_LOWERING_BARRIER_MESSAGE_MUTATION = 1u << 10
+  FLOW_LOWERING_BARRIER_MESSAGE_MUTATION = 1u << 10,
+  /* Reflected FunctionDesc carries UNKNOWN effects: never fuse/speculate. */
+  FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN = 1u << 11,
+  /* Reflected OUT/INOUT parameters cross a native mutation/alias boundary. */
+  FLOW_LOWERING_BARRIER_NATIVE_MUTATION = 1u << 12
 } flow_lowering_barrier_t;
 
 typedef struct flow_semantic_type_plan_s {
