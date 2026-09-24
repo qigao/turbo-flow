@@ -277,6 +277,9 @@ typedef struct flow_semantic_type_plan_s {
   cmeta_type_desc descriptor;
 } flow_semantic_type_plan_t;
 
+uint32_t flow_function_semantic_barriers(
+    const cmeta_function_desc *function);
+
 typedef struct flow_stage_semantic_plan_s {
   uint32_t input_type_index;
   uint32_t output_type_index;
