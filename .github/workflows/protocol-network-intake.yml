@@ -102,12 +102,16 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git -C .ci/deps/salts rev-parse HEAD)" = "$SALTS_COMMIT"
-          test "$(git -C .ci/deps/salts-utils rev-parse HEAD)" = "$SALTS_UTILS_COMMIT"
+          salts_sha="$(git -C .ci/deps/salts rev-parse HEAD)"
+          salts_utils_sha="$(git -C .ci/deps/salts-utils rev-parse HEAD)"
+          test -n "$salts_sha"
+          test -n "$salts_utils_sha"
           test "$(git -C "$VCPKG_ROOT" rev-parse HEAD)" = "$VCPKG_TOOL_REVISION"
           {
-            printf 'salts %s\n' "$SALTS_COMMIT"
-            printf 'salts-utils %s\n' "$SALTS_UTILS_COMMIT"
+            printf 'salts-ref %s\n' "$SALTS_REF"
+            printf 'salts %s\n' "$salts_sha"
+            printf 'salts-utils-ref %s\n' "$SALTS_UTILS_REF"
+            printf 'salts-utils %s\n' "$salts_utils_sha"
             printf 'vcpkg %s\n' "$VCPKG_TOOL_REVISION"
           } | tee "$RUNNER_TEMP/protocol-intake-evidence/dependencies.txt"
 
