@@ -570,7 +570,7 @@ int turbo_flow_reflected_operation(
 
   out->function = operation->function;
   out->abi = operation->abi;
-  out->ports = operation->reflected_ports.size
+  out->ports = vec_size(&operation->reflected_ports) != 0u
                    ? (const turbo_flow_operation_port_binding_t *)
                          vec_at_const(&operation->reflected_ports, 0u)
                    : NULL;
