@@ -13,6 +13,7 @@
 #include "salts_thread.h"
 
 #include <cflow/cflow.h>
+#include <cflow/function_projection.h>
 
 #include <stdbool.h>
 #include <stdint.h>
