@@ -4,6 +4,9 @@
 #include "turbo_flow_export.h"
 #include "platform.h"
 
+#include <cmeta/data.h>
+#include <cmeta/function.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -199,6 +202,85 @@ typedef struct turbo_flow_operation_descriptor_s {
   uint32_t resource_max_version;
 } turbo_flow_operation_descriptor_t;
 
+/*
+ * Reflected-operation port mapping.
+ *
+ * Native parameter/result type, direction, effects and properties remain
+ * authoritative in cmeta_function_desc. TurboFlow adds only graph-port and
+ * domain/lifecycle binding. `data` is canonical CMeta data identity for the
+ * graph payload and its storage_type must equal the mapped FunctionDesc type.
+ */
+typedef enum turbo_flow_operation_port_direction_e {
+  TURBO_FLOW_OPERATION_PORT_INPUT = 1,
+  TURBO_FLOW_OPERATION_PORT_OUTPUT
+} turbo_flow_operation_port_direction_t;
+
+typedef enum turbo_flow_operation_value_kind_e {
+  TURBO_FLOW_OPERATION_VALUE_PARAMETER = 1,
+  TURBO_FLOW_OPERATION_VALUE_RETURN
+} turbo_flow_operation_value_kind_t;
+
+typedef struct turbo_flow_operation_port_binding_s {
+  size_t size;
+  uint32_t port_index;
+  turbo_flow_operation_port_direction_t direction;
+  turbo_flow_operation_value_kind_t value_kind;
+  /* SIZE_MAX for RETURN; exact FunctionDesc parameter index otherwise. */
+  size_t parameter_index;
+  const cmeta_data_desc *data;
+} turbo_flow_operation_port_binding_t;
+
+#define TURBO_FLOW_OPERATION_PORT_BINDING_INIT \
+  {sizeof(turbo_flow_operation_port_binding_t), 0u, TURBO_FLOW_OPERATION_PORT_INPUT, \
+   TURBO_FLOW_OPERATION_VALUE_PARAMETER, SIZE_MAX, NULL}
+
+typedef enum turbo_flow_reflected_lowering_e {
+  /* Canonical semantics only; Graph execution through this operation is rejected. */
+  TURBO_FLOW_REFLECTED_LOWERING_NONE = 0,
+  /* Explicit semantic intent: one IN parameter -> return value CFlow MAP. */
+  TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP
+} turbo_flow_reflected_lowering_t;
+
+/*
+ * Canonical reflected operation registration.
+ *
+ * `operation` owns only TurboFlow domain/lifecycle policy. To avoid a second
+ * native type registry its input/output type fields and domains must be empty;
+ * TurboFlow derives its internal graph type keys from `ports[].data`.
+ *
+ * FunctionDesc/FunctionAbi and adapter are borrowed for the Flow registry
+ * lifetime. A module/Plugin provider must retain their code/descriptors for at
+ * least that lifetime. The compiled plan copies already-admitted concrete
+ * CMeta types/effects/callable state and performs no runtime reflection lookup.
+ */
+typedef struct turbo_flow_reflected_operation_registration_s {
+  size_t size;
+  const turbo_flow_operation_descriptor_t *operation;
+  const cmeta_function_desc *function;
+  const cmeta_function_abi_desc *abi;
+  cmeta_callable adapter;
+  const turbo_flow_operation_port_binding_t *ports;
+  size_t port_count;
+  turbo_flow_reflected_lowering_t lowering;
+} turbo_flow_reflected_operation_registration_t;
+
+#define TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT \
+  {sizeof(turbo_flow_reflected_operation_registration_t), NULL, NULL, NULL, {0}, NULL, 0u, \
+   TURBO_FLOW_REFLECTED_LOWERING_NONE}
+
+typedef struct turbo_flow_reflected_operation_view_s {
+  size_t size;
+  const cmeta_function_desc *function;
+  const cmeta_function_abi_desc *abi;
+  const turbo_flow_operation_port_binding_t *ports;
+  size_t port_count;
+  turbo_flow_reflected_lowering_t lowering;
+} turbo_flow_reflected_operation_view_t;
+
+#define TURBO_FLOW_REFLECTED_OPERATION_VIEW_INIT \
+  {sizeof(turbo_flow_reflected_operation_view_t), NULL, NULL, NULL, 0u, \
+   TURBO_FLOW_REFLECTED_LOWERING_NONE}
+
 /** Stable module boundary advertised to the graph compiler and management code. */
 typedef enum turbo_flow_module_capability_flags_e {
   /** The module exports typed operations that may be referenced by Graph DSL nodes. */
@@ -262,6 +344,22 @@ TURBO_FLOW_C_API int turbo_flow_register_primitive(turbo_flow_t *flow,
  */
 TURBO_FLOW_C_API int turbo_flow_register_operation(turbo_flow_t *flow,
                                             const turbo_flow_operation_descriptor_t *descriptor);
+
+/*
+ * Register canonical native function semantics for one TurboFlow operation.
+ *
+ * This is control-plane only. A CFLOW_MAP lowering is admitted immediately
+ * through CFlow's reflected-function admission. NONE keeps valid canonical
+ * semantics/port mapping but is not executable as a graph stage.
+ */
+TURBO_FLOW_C_API int turbo_flow_register_reflected_operation(
+    turbo_flow_t *flow,
+    const turbo_flow_reflected_operation_registration_t *registration);
+
+/* Borrow canonical reflected semantics from the immutable Flow registry. */
+TURBO_FLOW_C_API int turbo_flow_reflected_operation(
+    const turbo_flow_t *flow, const char *operation_name,
+    turbo_flow_reflected_operation_view_t *out);
 
 /**
  * Register one immutable module catalog entry before compile.
