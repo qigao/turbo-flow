@@ -220,12 +220,20 @@ typedef enum turbo_flow_operation_value_kind_e {
   TURBO_FLOW_OPERATION_VALUE_RETURN
 } turbo_flow_operation_value_kind_t;
 
+typedef enum turbo_flow_operation_storage_e {
+  /* Graph value storage exactly equals FunctionDesc parameter/return type. */
+  TURBO_FLOW_OPERATION_STORAGE_DIRECT = 1,
+  /* Graph value storage equals the pointee of one pointer parameter. */
+  TURBO_FLOW_OPERATION_STORAGE_POINTEE
+} turbo_flow_operation_storage_t;
+
 typedef struct turbo_flow_operation_port_binding_s {
   size_t size;
   uint32_t port_index;
   turbo_flow_domain_t domain;
   turbo_flow_operation_port_direction_t direction;
   turbo_flow_operation_value_kind_t value_kind;
+  turbo_flow_operation_storage_t storage;
   /* SIZE_MAX for RETURN; exact FunctionDesc parameter index otherwise. */
   size_t parameter_index;
   const cmeta_data_desc *data;
@@ -233,7 +241,8 @@ typedef struct turbo_flow_operation_port_binding_s {
 
 #define TURBO_FLOW_OPERATION_PORT_BINDING_INIT \
   {sizeof(turbo_flow_operation_port_binding_t), 0u, TURBO_FLOW_DOMAIN_NONE, \
-   TURBO_FLOW_OPERATION_PORT_INPUT, TURBO_FLOW_OPERATION_VALUE_PARAMETER, SIZE_MAX, NULL}
+   TURBO_FLOW_OPERATION_PORT_INPUT, TURBO_FLOW_OPERATION_VALUE_PARAMETER, \
+   TURBO_FLOW_OPERATION_STORAGE_DIRECT, SIZE_MAX, NULL}
 
 typedef enum turbo_flow_reflected_lowering_e {
   /* Canonical semantics only; Graph execution through this operation is rejected. */
