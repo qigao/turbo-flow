@@ -533,10 +533,6 @@ int turbo_flow_register_reflected_operation(
       flow_operation_registration_destroy(&operation);
       return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     }
-    operation.descriptor.input_type = operation.input_type;
-    operation.descriptor.output_type = operation.output_type;
-    operation.descriptor.input_domain = input_port->domain;
-    operation.descriptor.output_domain = output_port->domain;
   }
 
   if (registration->lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP) {
