@@ -122,6 +122,15 @@ typedef struct flow_operation_registration_s {
   tstr input_type;
   tstr output_type;
   tstr resource_type;
+
+  /* Canonical reflected native semantics; NULL for legacy operations. */
+  const cmeta_function_desc *function;
+  const cmeta_function_abi_desc *abi;
+  cmeta_callable callable;
+  cflow_function_projection projection;
+  vec_t reflected_ports; /* turbo_flow_operation_port_binding_t */
+  turbo_flow_reflected_lowering_t reflected_lowering;
+  int reflected;
 } flow_operation_registration_t;
 
 typedef struct flow_module_registration_s {
@@ -272,6 +281,12 @@ typedef struct flow_stage_semantic_plan_s {
   cflow_op cflow_operator;
   int typed;
   int lowering_candidate;
+
+  /* Canonical reflected semantics copied/bound during compile. */
+  const cmeta_type_desc *canonical_input_type;
+  const cmeta_type_desc *canonical_output_type;
+  cmeta_callable callable;
+  int reflected;
 } flow_stage_semantic_plan_t;
 
 /**
@@ -690,6 +705,8 @@ int flow_native_resource_command(turbo_flow_t *flow, size_t index,
 void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_plan_t *view);
 int flow_find_primitive_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_index(const turbo_flow_t *flow, const char *name);
+const flow_operation_registration_t *
+flow_find_operation_registration(const turbo_flow_t *flow, const char *name);
 int flow_find_module_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_export_module(const turbo_flow_t *flow, const char *operation_name);
 void flow_expr_projection_clear(turbo_flow_t *flow);
