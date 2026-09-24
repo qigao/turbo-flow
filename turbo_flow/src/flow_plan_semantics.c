@@ -78,6 +78,18 @@ static int flow_semantic_type_add(flow_compiled_plan_t *plan, turbo_flow_domain_
   return SALTS_OK;
 }
 
+static int flow_function_has_native_mutation(
+    const cmeta_function_desc *function) {
+  size_t i;
+  if (!function) return 0;
+  for (i = 0u; i < function->param_count; ++i) {
+    const cmeta_param_desc *param = cmeta_function_param(function, i);
+    if (!param) return 1;
+    if ((param->flags & CMETA_PARAM_OUT) != 0u) return 1;
+  }
+  return 0;
+}
+
 static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
                                     const flow_runtime_node_plan_t *node,
                                     const turbo_flow_operation_descriptor_t *operation,
@@ -87,6 +99,19 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
       operation ? &operation->runtime : NULL;
   uint32_t barriers = FLOW_LOWERING_BARRIER_NONE;
   cmeta_effects effects = function ? function->effects : CMETA_EFFECT_PURE;
+
+  if (function) {
+    if ((effects & CMETA_EFFECT_STATEFUL) != 0u)
+      barriers |= FLOW_LOWERING_BARRIER_STATEFUL;
+    if ((effects & CMETA_EFFECT_ASYNC) != 0u)
+      barriers |= FLOW_LOWERING_BARRIER_ASYNC;
+    if ((effects & CMETA_EFFECT_IO) != 0u)
+      barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
+    if ((effects & CMETA_EFFECT_UNKNOWN) != 0u)
+      barriers |= FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN;
+    if (flow_function_has_native_mutation(function))
+      barriers |= FLOW_LOWERING_BARRIER_NATIVE_MUTATION;
+  }
 
   if (!stage || !node || !operation) {
     if (effects_out) *effects_out = CMETA_EFFECT_UNKNOWN;
