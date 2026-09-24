@@ -19,7 +19,14 @@ void flow_operation_registration_destroy(flow_operation_registration_t *operatio
   tstr_freep(&operation->input_type);
   tstr_freep(&operation->output_type);
   tstr_freep(&operation->resource_type);
+  vec_destroy(&operation->reflected_ports);
   memset(&operation->descriptor, 0, sizeof(operation->descriptor));
+  operation->function = NULL;
+  operation->abi = NULL;
+  memset(&operation->callable, 0, sizeof(operation->callable));
+  memset(&operation->projection, 0, sizeof(operation->projection));
+  operation->reflected_lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
+  operation->reflected = 0;
 }
 
 void flow_module_registration_destroy(flow_module_registration_t *module) {
@@ -69,6 +76,14 @@ int flow_find_operation_index(const turbo_flow_t *flow, const char *name) {
     if (operation && operation->name && strcmp(operation->name, name) == 0) return (int)i;
   }
   return -1;
+}
+
+const flow_operation_registration_t *
+flow_find_operation_registration(const turbo_flow_t *flow, const char *name) {
+  int index = flow_find_operation_index(flow, name);
+  if (index < 0) return NULL;
+  return (const flow_operation_registration_t *)vec_at_const(
+      &flow->operations, (size_t)index);
 }
 
 int flow_find_module_index(const turbo_flow_t *flow, const char *name) {
@@ -287,6 +302,281 @@ int turbo_flow_register_operation(turbo_flow_t *flow,
   }
   return SALTS_OK;
 }
+
+static int flow_reflected_port_matches(
+    const turbo_flow_operation_port_binding_t *port,
+    const cmeta_function_desc *function) {
+  const cmeta_type_desc *expected_type = NULL;
+  cmeta_param_flags direction = CMETA_PARAM_UNKNOWN;
+
+  if (!port || port->size != sizeof(*port) ||
+      !flow_domain_valid(port->domain) ||
+      (port->direction != TURBO_FLOW_OPERATION_PORT_INPUT &&
+       port->direction != TURBO_FLOW_OPERATION_PORT_OUTPUT) ||
+      !cmeta_data_desc_valid(port->data)) {
+    return 0;
+  }
+
+  if (port->value_kind == TURBO_FLOW_OPERATION_VALUE_RETURN) {
+    if (port->direction != TURBO_FLOW_OPERATION_PORT_OUTPUT ||
+        port->parameter_index != SIZE_MAX ||
+        !function || function->return_type->kind == CMETA_T_VOID) {
+      return 0;
+    }
+    expected_type = function->return_type;
+  } else if (port->value_kind == TURBO_FLOW_OPERATION_VALUE_PARAMETER) {
+    const cmeta_param_desc *param;
+    if (!function || port->parameter_index >= function->param_count) return 0;
+    param = cmeta_function_param(function, port->parameter_index);
+    if (!param || !cmeta_param_direction_known(param)) return 0;
+    direction = param->flags & CMETA_PARAM_DIRECTION_MASK;
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT &&
+        (direction & CMETA_PARAM_IN) == 0u) {
+      return 0;
+    }
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT &&
+        (direction & CMETA_PARAM_OUT) == 0u) {
+      return 0;
+    }
+    expected_type = param->type;
+  } else {
+    return 0;
+  }
+
+  return expected_type &&
+         cmeta_type_equal(port->data->storage_type, expected_type);
+}
+
+static int flow_reflected_ports_valid(
+    const turbo_flow_reflected_operation_registration_t *registration) {
+  const cmeta_function_desc *function = registration->function;
+  size_t i;
+  size_t param_index;
+  int return_mapped = function->return_type->kind == CMETA_T_VOID;
+
+  if ((registration->port_count == 0u) != (registration->ports == NULL))
+    return 0;
+
+  for (i = 0u; i < registration->port_count; ++i) {
+    const turbo_flow_operation_port_binding_t *port = &registration->ports[i];
+    size_t j;
+    if (!flow_reflected_port_matches(port, function)) return 0;
+
+    if (port->value_kind == TURBO_FLOW_OPERATION_VALUE_RETURN)
+      return_mapped = 1;
+
+    for (j = 0u; j < i; ++j) {
+      const turbo_flow_operation_port_binding_t *previous =
+          &registration->ports[j];
+      if (previous->direction == port->direction &&
+          previous->port_index == port->port_index) {
+        return 0;
+      }
+      if (previous->direction == port->direction &&
+          previous->value_kind == port->value_kind &&
+          previous->parameter_index == port->parameter_index) {
+        return 0;
+      }
+    }
+  }
+
+  if (!return_mapped) return 0;
+
+  for (param_index = 0u; param_index < function->param_count; ++param_index) {
+    const cmeta_param_desc *param = cmeta_function_param(function, param_index);
+    cmeta_param_flags direction;
+    int has_input = 0;
+    int has_output = 0;
+    if (!param || !cmeta_param_direction_known(param)) return 0;
+    direction = param->flags & CMETA_PARAM_DIRECTION_MASK;
+    for (i = 0u; i < registration->port_count; ++i) {
+      const turbo_flow_operation_port_binding_t *port = &registration->ports[i];
+      if (port->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER ||
+          port->parameter_index != param_index) {
+        continue;
+      }
+      if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) has_input = 1;
+      if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT) has_output = 1;
+    }
+    if (((direction & CMETA_PARAM_IN) != 0u) != !!has_input ||
+        ((direction & CMETA_PARAM_OUT) != 0u) != !!has_output) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int flow_reflected_unary_ports(
+    const turbo_flow_reflected_operation_registration_t *registration,
+    const turbo_flow_operation_port_binding_t **input_out,
+    const turbo_flow_operation_port_binding_t **output_out) {
+  const turbo_flow_operation_port_binding_t *input = NULL;
+  const turbo_flow_operation_port_binding_t *output = NULL;
+  size_t i;
+
+  for (i = 0u; i < registration->port_count; ++i) {
+    const turbo_flow_operation_port_binding_t *port = &registration->ports[i];
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) {
+      if (input) return 0;
+      input = port;
+    } else {
+      if (output) return 0;
+      output = port;
+    }
+  }
+  if (!input || !output ||
+      input->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER ||
+      input->parameter_index != 0u ||
+      output->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN) {
+    return 0;
+  }
+  if (input_out) *input_out = input;
+  if (output_out) *output_out = output;
+  return 1;
+}
+
+int turbo_flow_register_reflected_operation(
+    turbo_flow_t *flow,
+    const turbo_flow_reflected_operation_registration_t *registration) {
+  flow_operation_registration_t operation;
+  const turbo_flow_operation_descriptor_t *descriptor;
+  const turbo_flow_operation_port_binding_t *input_port = NULL;
+  const turbo_flow_operation_port_binding_t *output_port = NULL;
+  cflow_function_projection_status projection_status;
+  size_t i;
+
+  if (!flow || !registration ||
+      registration->size != sizeof(*registration) ||
+      !(descriptor = registration->operation) ||
+      !flow_operation_descriptor_valid(descriptor) ||
+      !registration->function ||
+      !cmeta_function_desc_valid(registration->function) ||
+      !registration->abi ||
+      !cmeta_function_abi_desc_valid(registration->abi) ||
+      !cmeta_function_desc_equal(registration->abi->function,
+                                 registration->function) ||
+      !cmeta_callable_contract_valid(registration->adapter) ||
+      registration->adapter.meta.effects != registration->function->effects ||
+      registration->adapter.meta.properties != registration->function->properties ||
+      !flow_reflected_ports_valid(registration) ||
+      (registration->lowering != TURBO_FLOW_REFLECTED_LOWERING_NONE &&
+       registration->lowering != TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP)) {
+    return SALTS_EINVAL;
+  }
+
+  /* Reflected function/data descriptors are the native type/effect authority. */
+  if (descriptor->input_type || descriptor->output_type ||
+      descriptor->input_domain != TURBO_FLOW_DOMAIN_NONE ||
+      descriptor->output_domain != TURBO_FLOW_DOMAIN_NONE) {
+    return SALTS_EINVAL;
+  }
+
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "cannot register reflected operation after compile");
+  }
+  if (flow_find_operation_index(flow, descriptor->name) >= 0) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EALREADY, 0, 0, "duplicate operation");
+  }
+
+  memset(&operation, 0, sizeof(operation));
+  if (turbo_flow_stl_error(vec_init_bytes(
+          &operation.reflected_ports,
+          sizeof(turbo_flow_operation_port_binding_t),
+          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
+
+  operation.name = tstr_dup(descriptor->name);
+  if (descriptor->resource_type)
+    operation.resource_type = tstr_dup(descriptor->resource_type);
+  if (!operation.name ||
+      (descriptor->resource_type && !operation.resource_type)) {
+    flow_operation_registration_destroy(&operation);
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
+
+  operation.descriptor = *descriptor;
+  operation.descriptor.name = operation.name;
+  operation.descriptor.resource_type = operation.resource_type;
+  operation.function = registration->function;
+  operation.abi = registration->abi;
+  operation.callable = registration->adapter;
+  operation.reflected_lowering = registration->lowering;
+  operation.reflected = 1;
+
+  for (i = 0u; i < registration->port_count; ++i) {
+    if (turbo_flow_stl_error(vec_push(
+            &operation.reflected_ports, &registration->ports[i])) != SALTS_OK) {
+      flow_operation_registration_destroy(&operation);
+      return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+    }
+  }
+
+  if (flow_reflected_unary_ports(registration, &input_port, &output_port)) {
+    operation.input_type = tstr_dup(input_port->data->stable_id);
+    operation.output_type = tstr_dup(output_port->data->stable_id);
+    if (!operation.input_type || !operation.output_type) {
+      flow_operation_registration_destroy(&operation);
+      return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+    }
+    operation.descriptor.input_type = operation.input_type;
+    operation.descriptor.output_type = operation.output_type;
+    operation.descriptor.input_domain = input_port->domain;
+    operation.descriptor.output_domain = output_port->domain;
+  }
+
+  if (registration->lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP) {
+    if (!input_port || !output_port) {
+      flow_operation_registration_destroy(&operation);
+      return SALTS_EINVAL;
+    }
+    projection_status = cflow_function_projection_admit(
+        registration->function, registration->abi,
+        registration->adapter, CFLOW_OP_MAP, &operation.projection);
+    if (projection_status != CFLOW_FUNCTION_PROJECTION_OK) {
+      flow_operation_registration_destroy(&operation);
+      return flow_set_error_keep_state(
+          flow, SALTS_ENOTSUP, 0, 0,
+          cflow_function_projection_status_string(projection_status));
+    }
+    if (!cmeta_type_equal(operation.projection.input_type,
+                          input_port->data->storage_type) ||
+        !cmeta_type_equal(operation.projection.output_type,
+                          output_port->data->storage_type)) {
+      flow_operation_registration_destroy(&operation);
+      return SALTS_EPROTO;
+    }
+  }
+
+  if (turbo_flow_stl_error(vec_push(&flow->operations, &operation)) != SALTS_OK) {
+    flow_operation_registration_destroy(&operation);
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
+  return SALTS_OK;
+}
+
+int turbo_flow_reflected_operation(
+    const turbo_flow_t *flow, const char *operation_name,
+    turbo_flow_reflected_operation_view_t *out) {
+  const flow_operation_registration_t *operation =
+      flow_find_operation_registration(flow, operation_name);
+  if (!out || out->size != sizeof(*out) || !operation_name)
+    return SALTS_EINVAL;
+  if (!operation || !operation->reflected) return SALTS_ENOENT;
+
+  out->function = operation->function;
+  out->abi = operation->abi;
+  out->ports = (const turbo_flow_operation_port_binding_t *)
+      vec_data_const(&operation->reflected_ports);
+  out->port_count = vec_size(&operation->reflected_ports);
+  out->lowering = operation->reflected_lowering;
+  return SALTS_OK;
+}
+
 
 static int flow_module_string_array_valid(const char *const *values, size_t count) {
   size_t i;
