@@ -176,7 +176,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_plugin_host
                       PUBLIC TurboFlow::Product TurboFlow::ProtocolIngress Salts::CMeta
-                      PRIVATE Salts::CSTL ${CMAKE_DL_LIBS})
+                      PRIVATE Salts::CSTL Salts::Plugin ${CMAKE_DL_LIBS})
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 
