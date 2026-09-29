@@ -1499,10 +1499,15 @@ suite("TurboFlow reflected operation semantics") {
   }
 
   it("transfers staged resources only into a successful sealed plan") {
+    static const char graph[] =
+        "source input\n"
+        "stage reflected operation test.reflected.plan_resource\n"
+        "stage main {\n"
+        "  input -> reflected\n"
+        "}\n";
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         reflected_operation_descriptor("test.reflected.plan_resource");
-    const flow_stage_semantic_plan_t *semantics;
     size_t releases = 0u;
 
     check_not_null(flow);
@@ -1511,12 +1516,13 @@ suite("TurboFlow reflected operation semantics") {
         FunctionMeta(reflected_increment),
         FunctionAbi(reflected_increment),
         CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u),
+                SALTS_OK);
     check_equal(flow_plan_owned_resource_stage(
                     flow, &releases, reflected_plan_resource_release),
                 SALTS_OK);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
-    semantics = compile_single_reflected_stage(flow, operation.name);
-    check_not_null(semantics);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_true(flow->compiled_plan.sealed);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(vec_size(&flow->compiled_plan.owned_resources), (size_t)1u);
