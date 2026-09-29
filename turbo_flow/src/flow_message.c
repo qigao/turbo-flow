@@ -522,6 +522,75 @@ int turbo_flow_msg_bind_typed_projection(turbo_flow_msg_t *msg,
   return rc;
 }
 
+static int flow_trivial_projection_clone(const void *value, void *ctx, void **out) {
+  const cmeta_data_desc *data = (const cmeta_data_desc *)ctx;
+  void *copy;
+  if (!out) return SALTS_EINVAL;
+  *out = NULL;
+  if (!value || !cmeta_data_desc_valid(data) || !data->storage_type ||
+      cmeta_type_require_traits(
+          data->storage_type,
+          CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK)
+    return SALTS_EINVAL;
+  copy = malloc(data->storage_type->size);
+  if (!copy) return SALTS_ENOMEM;
+  memcpy(copy, value, data->storage_type->size);
+  *out = copy;
+  return SALTS_OK;
+}
+
+static void flow_trivial_projection_destroy(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
+}
+
+int flow_msg_replace_trivial_projection(
+    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, const void *output_value) {
+  flow_msg_projection_t *projection;
+  const turbo_flow_data_schema_t *schema;
+  void *candidate;
+  const cmeta_trait_flags required =
+      CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
+
+  if (!message || !cmeta_data_desc_valid(expected_input) ||
+      !cmeta_data_desc_valid(output_data) || !output_value ||
+      !cmeta_data_desc_equal(expected_input, output_data) ||
+      !output_data->storage_type ||
+      cmeta_type_require_traits(output_data->storage_type, required) != CMETA_OK)
+    return SALTS_EINVAL;
+
+  projection = (flow_msg_projection_t *)flow_msg_projection(message);
+  if (!projection || !projection->value || !projection->schema || !projection->data)
+    return SALTS_EPROTO;
+  if (projection->owner || projection->claim_active || projection->result_value)
+    return SALTS_ENOTSUP;
+  if (!cmeta_data_desc_equal(projection->data, expected_input))
+    return SALTS_EPROTO;
+
+  candidate = malloc(output_data->storage_type->size);
+  if (!candidate) return SALTS_ENOMEM;
+  memcpy(candidate, output_value, output_data->storage_type->size);
+  schema = projection->schema;
+
+  /*
+   * Commit only after the replacement is fully allocated. Descriptor and
+   * durable identity fields remain attached to the message; only the typed
+   * projection value/lifecycle changes.
+   */
+  if (flow_msg_projection_release_value(projection) != NULL) {
+    free(candidate);
+    return SALTS_EPROTO;
+  }
+  projection->schema = schema;
+  projection->data = output_data;
+  projection->value = candidate;
+  projection->clone = flow_trivial_projection_clone;
+  projection->destroy = flow_trivial_projection_destroy;
+  projection->ctx = (void *)output_data;
+  return SALTS_OK;
+}
+
 int turbo_flow_msg_bind_retained_projection(turbo_flow_msg_t *msg,
                                             turbo_flow_projection_owner_t *owner, void *value) {
   const turbo_flow_projection_owner_config_t *config;
