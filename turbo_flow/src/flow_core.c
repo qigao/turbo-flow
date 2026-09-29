@@ -215,7 +215,6 @@ void flow_clear_plan(turbo_flow_t *flow) {
   flow_clear_reorder_states(flow);
   flow_stop_executor_adapters(flow);
   flow_clear_runtime_plan(flow);
-  flow_plan_owned_resources_clear_pending(flow);
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     flow_stage_impl_destroy(stage);
@@ -274,6 +273,12 @@ void flow_clear_registry(turbo_flow_t *flow) {
   }
   turbo_flow_stl_error(vec_clear(&flow->adapters));
   flow_expr_projection_clear(flow);
+
+  /*
+   * Plan-owned resources may borrow operation/provider descriptors. Release
+   * them only after the registry entries themselves have been destroyed.
+   */
+  flow_plan_owned_resources_clear_pending(flow);
 }
 
 int flow_find_stage_view(const turbo_flow_t *flow, vstr name) {
