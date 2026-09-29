@@ -110,12 +110,13 @@ reflected_return_port(uint32_t port_index) {
   return port;
 }
 
-static int register_unary_reflected(
+static int register_unary_reflected_mode(
     turbo_flow_t *flow,
     turbo_flow_operation_descriptor_t *operation,
     const cmeta_function_desc *function,
     const cmeta_function_abi_desc *abi,
-    cmeta_callable adapter) {
+    cmeta_callable adapter,
+    int register_provider) {
   turbo_flow_operation_port_binding_t ports[2];
   turbo_flow_reflected_operation_registration_t registration =
       TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
@@ -136,8 +137,54 @@ static int register_unary_reflected(
 
   if (turbo_flow_register_reflected_operation(flow, &registration) != SALTS_OK)
     return 0;
+  if (!register_provider) return 1;
   provider = reflected_provider(operation->name);
   return turbo_flow_register_operation_provider(flow, &provider) == SALTS_OK;
+}
+
+static int register_unary_reflected(
+    turbo_flow_t *flow,
+    turbo_flow_operation_descriptor_t *operation,
+    const cmeta_function_desc *function,
+    const cmeta_function_abi_desc *abi,
+    cmeta_callable adapter) {
+  return register_unary_reflected_mode(
+      flow, operation, function, abi, adapter, 1);
+}
+
+typedef struct reflected_runtime_sink_probe_s {
+  size_t calls;
+  int value;
+} reflected_runtime_sink_probe_t;
+
+static int reflected_runtime_sink(turbo_flow_msg_t *msg, void *ctx) {
+  reflected_runtime_sink_probe_t *probe =
+      (reflected_runtime_sink_probe_t *)ctx;
+  const cmeta_data_desc *data = turbo_flow_msg_projection_data(msg);
+  const int *value = (const int *)turbo_flow_msg_projection(msg, NULL);
+  if (!probe || !value || !data ||
+      !cmeta_data_desc_equal(data, &cmeta_data_int))
+    return SALTS_EPROTO;
+  ++probe->calls;
+  probe->value = *value;
+  return SALTS_OK;
+}
+
+static int reflected_test_clone_int(const void *value, void *ctx, void **out) {
+  int *copy;
+  (void)ctx;
+  if (!value || !out) return SALTS_EINVAL;
+  *out = NULL;
+  copy = (int *)malloc(sizeof(*copy));
+  if (!copy) return SALTS_ENOMEM;
+  *copy = *(const int *)value;
+  *out = copy;
+  return SALTS_OK;
+}
+
+static void reflected_test_destroy_int(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
 }
 
 static const flow_stage_semantic_plan_t *
@@ -300,6 +347,99 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(result.data, expected, sizeof(expected));
 
     cflow_result_destroy(&result);
+    turbo_flow_destroy(flow);
+  }
+
+  it("executes a provider-free reflected chain as one direct CFlow runtime region") {
+    static const char graph[] =
+        "source input\n"
+        "stage first operation test.reflected.runtime.first\n"
+        "stage second operation test.reflected.runtime.second\n"
+        "stage sink operation test.reflected.runtime.sink\n"
+        "stage main {\n"
+        "  input -> first -> second -> sink\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t first =
+        reflected_operation_descriptor("test.reflected.runtime.first");
+    turbo_flow_operation_descriptor_t second =
+        reflected_operation_descriptor("test.reflected.runtime.second");
+    turbo_flow_operation_descriptor_t sink =
+        reflected_operation_descriptor("test.reflected.runtime.sink");
+    turbo_flow_operation_provider_registration_t sink_provider =
+        TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+    turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    reflected_runtime_sink_probe_t probe = {0};
+    turbo_flow_msg_t message;
+    int *input = NULL;
+    int first_stage;
+    int second_stage;
+    const flow_executor_plan_t *first_executor;
+    const flow_executor_plan_t *second_executor;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &first, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &second, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+
+    sink.input_domain = TURBO_FLOW_DOMAIN_DATA;
+    sink.input_type = cmeta_data_int.stable_id;
+    check_equal(turbo_flow_register_operation(flow, &sink), SALTS_OK);
+    sink_provider.operation_name = sink.name;
+    sink_provider.fn = reflected_runtime_sink;
+    sink_provider.ctx = &probe;
+    check_equal(turbo_flow_register_operation_provider(flow, &sink_provider), SALTS_OK);
+
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    first_stage = turbo_flow_find_stage(flow, "first");
+    second_stage = turbo_flow_find_stage(flow, "second");
+    check_true(first_stage >= 0);
+    check_true(second_stage >= 0);
+    first_executor = flow_executor_plan_for_stage(flow, (uint32_t)first_stage);
+    second_executor = flow_executor_plan_for_stage(flow, (uint32_t)second_stage);
+    check_not_null(first_executor);
+    check_not_null(second_executor);
+    check_null(first_executor->fn);
+    check_null(second_executor->fn);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+    {
+      const flow_cflow_region_plan_t *region =
+          (const flow_cflow_region_plan_t *)vec_at_const(
+              &flow->compiled_plan.cflow_regions, 0u);
+      check_not_null(region);
+      check_equal(region->backend, FLOW_CFLOW_REGION_BACKEND_DIRECT);
+      check_equal(region->stage_count, (uint32_t)2u);
+      check_true(cmeta_data_desc_equal(region->input_data, &cmeta_data_int));
+      check_true(cmeta_data_desc_equal(region->output_data, &cmeta_data_int));
+    }
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    input = (int *)malloc(sizeof(*input));
+    check_not_null(input);
+    *input = 7;
+    check_equal(turbo_flow_msg_bind_typed_projection(
+                    &message, &schema, &cmeta_data_int, input,
+                    reflected_test_clone_int, reflected_test_destroy_int, NULL),
+                SALTS_OK);
+    input = NULL;
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(probe.value, 9);
+    /* Publish clones the message; the caller's source projection stays 7. */
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 7);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
 
