@@ -2,6 +2,7 @@
 #define FLOW_PLUGIN_OPERATION_INTERNAL_H
 #include "turbo_flow_plugin_generation.h"
 #include <cstl/vec.h>
+#include <salts/plugin.h>
 #include <salts/thread.h>
 #include <stdatomic.h>
 enum {
@@ -55,4 +56,23 @@ int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result
 int flow_plugin_operations_close(vec_t *bindings);
 int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *error);
 void flow_plugin_operations_free(vec_t *bindings);
+
+typedef struct flow_plugin_cflow_function_binding_s {
+  salts_plugin_registry *registry;
+  salts_plugin_ref plugin;
+  const char *export_id;
+  const turbo_flow_operation_descriptor_t *operation;
+  const cmeta_data_desc *input_data;
+  const cmeta_data_desc *output_data;
+} flow_plugin_cflow_function_binding_t;
+
+/*
+ * Internal product-composition bridge. Salts Plugin remains the loader/lease
+ * authority; TurboFlow consumes only canonical CMeta reflection and exact
+ * invoke exported by that module.
+ */
+TURBO_FLOW_API int flow_plugin_bind_cflow_function(
+    turbo_flow_t *flow,
+    const flow_plugin_cflow_function_binding_t *binding);
+
 #endif
