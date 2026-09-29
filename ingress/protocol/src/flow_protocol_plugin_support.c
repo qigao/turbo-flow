@@ -305,6 +305,114 @@ int flow_protocol_coap_reply(
   return SALTS_OK;
 }
 
+int flow_protocol_coap_reply_slices(
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output, int lwm2m,
+    uint16_t separate_message_id) {
+  mem_buffer_t *header_buffer = NULL;
+  mem_buffer_t *token_buffer = NULL;
+  mem_slice_t header = {0};
+  mem_slice_t token = {0};
+  turbo_flow_protocol_frame_view_t preview =
+      TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+  turbo_flow_protocol_metadata_t metadata =
+      TURBO_FLOW_PROTOCOL_METADATA_INIT;
+  uint8_t preview_bytes[12] = {0};
+  uint8_t type;
+  uint8_t token_length;
+  uint8_t code;
+  size_t needed_segments;
+  int rc;
+
+  if (!request || !request->data || request->data_size < 4u || !output ||
+      !output->segments || output->segment_capacity == 0u)
+    return SALTS_EINVAL;
+
+  type = (request->data[0] >> 4u) & 0x03u;
+  token_length = request->data[0] & 0x0fu;
+  code = request->data[1];
+  if (token_length > 8u || request->data_size < 4u + token_length)
+    return SALTS_EPROTO;
+  if ((code >> 5u) != 0u || type == 2u || type == 3u) {
+    output->segment_count = 0u;
+    output->data_size = 0u;
+    return SALTS_OK;
+  }
+
+  needed_segments = token_length > 0u ? 2u : 1u;
+  if (output->segment_capacity < needed_segments) return SALTS_ENOSPC;
+
+  header_buffer = mem_get_buffer(mem_global(), 4u);
+  if (!header_buffer) return SALTS_ENOMEM;
+  {
+    uint8_t *bytes = (uint8_t *)mem_buffer_data(header_buffer);
+    bytes[0] = (uint8_t)(0x40u | token_length);
+    if (type == 0u) {
+      bytes[0] |= UINT8_C(0x20);
+      bytes[2] = request->data[2];
+      bytes[3] = request->data[3];
+    } else {
+      bytes[0] |= UINT8_C(0x10);
+      if (separate_message_id == 0u) {
+        mem_buffer_release(header_buffer);
+        return SALTS_ERANGE;
+      }
+      bytes[2] = (uint8_t)(separate_message_id >> 8u);
+      bytes[3] = (uint8_t)separate_message_id;
+    }
+    bytes[1] = flow_protocol_coap_response_code(code, status);
+  }
+  mem_set_used(header_buffer, 4u);
+  header = mem_slice(header_buffer, 0u, 4u);
+  if (!header.buffer) {
+    mem_buffer_release(header_buffer);
+    return SALTS_EPROTO;
+  }
+
+  if (token_length > 0u) {
+    token_buffer = mem_get_buffer(mem_global(), token_length);
+    if (!token_buffer) {
+      mem_slice_release(&header);
+      mem_buffer_release(header_buffer);
+      return SALTS_ENOMEM;
+    }
+    memcpy(mem_buffer_data(token_buffer), request->data + 4u, token_length);
+    mem_set_used(token_buffer, token_length);
+    token = mem_slice(token_buffer, 0u, token_length);
+    if (!token.buffer) {
+      mem_slice_release(&header);
+      mem_buffer_release(header_buffer);
+      mem_buffer_release(token_buffer);
+      return SALTS_EPROTO;
+    }
+  }
+
+  memcpy(preview_bytes, header.data, 4u);
+  if (token_length > 0u) memcpy(preview_bytes + 4u, token.data, token_length);
+  preview.data = preview_bytes;
+  preview.data_size = 4u + token_length;
+  preview.device_id = request->device_id;
+  preview.protocol_version = request->protocol_version;
+  rc = flow_protocol_coap_inspect(&preview, &metadata, lwm2m);
+  if (rc != SALTS_OK) {
+    mem_slice_release(&token);
+    mem_slice_release(&header);
+    mem_buffer_release(token_buffer);
+    mem_buffer_release(header_buffer);
+    return rc;
+  }
+
+  output->segments[0] = header;
+  if (token_length > 0u) output->segments[1] = token;
+  output->segment_count = needed_segments;
+  output->data_size = 4u + token_length;
+  output->metadata = metadata;
+
+  mem_buffer_release(token_buffer);
+  mem_buffer_release(header_buffer);
+  return SALTS_OK;
+}
+
 static int flow_protocol_coap_code(const char *operation, int lwm2m,
                                   uint8_t *out) {
   if (!operation || !out) return SALTS_EINVAL;
