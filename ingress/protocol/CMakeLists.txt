@@ -1,31 +1,33 @@
-set(_turbo_flow_databind_host_root "$ENV{DATABIND_ROOT}")
-if(DEFINED ENV{DATABIND_HOST_ROOT} AND
-   NOT "$ENV{DATABIND_HOST_ROOT}" STREQUAL "")
-  set(_turbo_flow_databind_host_root "$ENV{DATABIND_HOST_ROOT}")
+set(_turbo_flow_salts_utils_host_root "$ENV{SALTS_UTILS_ROOT}")
+if(DEFINED ENV{SALTS_UTILS_HOST_ROOT} AND
+   NOT "$ENV{SALTS_UTILS_HOST_ROOT}" STREQUAL "")
+  set(_turbo_flow_salts_utils_host_root "$ENV{SALTS_UTILS_HOST_ROOT}")
 endif()
-if(NOT IS_DIRECTORY "${_turbo_flow_databind_host_root}")
+if(NOT IS_DIRECTORY "${_turbo_flow_salts_utils_host_root}")
   message(FATAL_ERROR
-          "DataBind host root is not a directory: ${_turbo_flow_databind_host_root}")
+          "SaltsUtils host root is not a directory: ${_turbo_flow_salts_utils_host_root}")
 endif()
+file(TO_CMAKE_PATH "${_turbo_flow_salts_utils_host_root}"
+     _turbo_flow_salts_utils_host_root)
 
 find_program(
-  TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE
-  NAMES tbe_compiler tbe_compiler.exe
-  PATHS "${_turbo_flow_databind_host_root}/bin"
+  TURBO_FLOW_IDLC_HOST_EXECUTABLE
+  NAMES salts-idlc salts-idlc.exe
+  PATHS "${_turbo_flow_salts_utils_host_root}/bin"
   NO_DEFAULT_PATH
   REQUIRED)
 
-file(REAL_PATH "${_turbo_flow_databind_host_root}"
-     _turbo_flow_databind_host_real_root)
-file(REAL_PATH "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
-     _turbo_flow_tbe_compiler_real_path)
-cmake_path(IS_PREFIX _turbo_flow_databind_host_real_root
-           "${_turbo_flow_tbe_compiler_real_path}" NORMALIZE
-           _turbo_flow_tbe_compiler_is_within_databind_root)
-if(NOT _turbo_flow_tbe_compiler_is_within_databind_root)
+file(REAL_PATH "${_turbo_flow_salts_utils_host_root}"
+     _turbo_flow_salts_utils_host_real_root)
+file(REAL_PATH "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
+     _turbo_flow_idlc_real_path)
+cmake_path(IS_PREFIX _turbo_flow_salts_utils_host_real_root
+           "${_turbo_flow_idlc_real_path}" NORMALIZE
+           _turbo_flow_idlc_is_within_salts_utils_root)
+if(NOT _turbo_flow_idlc_is_within_salts_utils_root)
   message(FATAL_ERROR
-          "tbe_compiler resolved outside the DataBind host root: "
-          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}")
+          "salts-idlc resolved outside the SaltsUtils host root: "
+          "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
 endif()
 
 add_subdirectory(common)
@@ -80,7 +82,7 @@ if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-unset(_turbo_flow_databind_host_real_root)
-unset(_turbo_flow_databind_host_root)
-unset(_turbo_flow_tbe_compiler_is_within_databind_root)
-unset(_turbo_flow_tbe_compiler_real_path)
+unset(_turbo_flow_idlc_is_within_salts_utils_root)
+unset(_turbo_flow_idlc_real_path)
+unset(_turbo_flow_salts_utils_host_real_root)
+unset(_turbo_flow_salts_utils_host_root)

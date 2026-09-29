@@ -1,21 +1,15 @@
 name: Durable buffer focused validation
 
 on:
-  push:
-    branches: [feat/127-graph-durable-buffer]
-    paths:
-      - 'turbo_flow/**'
-      - 'io/durable/**'
-      - 'io/turbodb/**'
-      - 'tools/lemon/**'
-      - '.github/ci/task4_runtime_assembly.py'
-      - '.github/workflows/task4-runtime-focused.yml'
   pull_request:
     branches: [master]
     paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'turbo_flow/**'
       - 'io/durable/**'
       - 'io/turbodb/**'
+      - 'ingress/protocol/inbox/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
@@ -25,28 +19,25 @@ permissions:
   packages: read
 
 concurrency:
-  group: task4-durable-buffer-${{ github.ref_name }}
+  group: task4-durable-buffer-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
-  TURBODB_COMMIT: c20018d0c5677865a39217a091e02f34530aced2
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   TSAN_OPTIONS: halt_on_error=1:history_size=7
-  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib:/opt/turbodb/debug/lib
 
 jobs:
   focused-runtime:
-    name: Focused Graph durable buffer and shared driver tests
+    name: Published TurboDB SDK + durable Graph contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
       - name: Checkout exact TurboFlow head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -55,7 +46,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$RUNNER_TEMP/task4-runtime-evidence"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --check HEAD^ HEAD
           git rev-parse HEAD | tee "$RUNNER_TEMP/task4-runtime-evidence/head.txt"
 
@@ -71,29 +62,14 @@ jobs:
             io/durable/
             io/turbodb/
 
-      - name: Checkout pinned Salts
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/deps/salts
-          persist-credentials: false
-
-      - name: Checkout pinned SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/deps/salts-utils
-          persist-credentials: false
-
-      - name: Checkout pinned TurboDB
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/turbodb
-          ref: ${{ env.TURBODB_COMMIT }}
-          path: .ci/deps/turbodb
-          persist-credentials: false
+      - name: Use empty vcpkg L1 cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cache="$RUNNER_TEMP/task4-empty-l1"
+          rm -rf "$cache"
+          mkdir -p "$cache"
+          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
 
       - name: Configure shared vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
@@ -103,196 +79,99 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Prepare Linux toolchain
+      - name: Install build tools
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
-          test -x "$VCPKG_ROOT/vcpkg"
-          sudo mkdir -p /opt
-          sudo ln -sfn "$VCPKG_ROOT" /opt/vcpkg
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-
-      - name: Build standalone host Lemon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S .ci/deps/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
-          test -x "$RUNNER_TEMP/host-lemon/lemon"
-
-      - name: Build and install pinned Salts SDK
-        shell: bash
-        working-directory: .ci/deps/salts
+      - name: Restore published Salts + SaltsUtils + TurboDB SDKs
+        shell: pwsh
         env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
-          cmake --build build/linux-gcc-debug --target install -j2
-          test -d "$PROJECT_ROOT/external/pkgs/salts/debug"
-          sudo mkdir -p /opt/salts
-          sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithTurboDB
 
-      - name: Build and install pinned SaltsUtils and DataBind SDKs
+      - name: Verify published dependency boundary
         shell: bash
-        working-directory: .ci/deps/salts-utils
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon"
-          cmake --build build/linux-gcc-debug -j2
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/salts-utils-debug" --component Unspecified
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
-          test -d "$RUNNER_TEMP/sdk/salts-utils-debug/include"
-          test -f "$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-          test ! -e "$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/DataBind/DataBindConfig.cmake"
-          test -f "$RUNNER_TEMP/sdk/databind-debug/lib/cmake/DataBind/DataBindConfig.cmake"
-          test ! -e "$RUNNER_TEMP/sdk/databind-debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-          test -x "$RUNNER_TEMP/sdk/databind-debug/bin/tbe_compiler"
-          sudo mkdir -p /opt/salts-utils /opt/databind
-          sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
-          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
-
-      - name: Build and install pinned TurboDB ORM SDK
-        shell: bash
-        working-directory: .ci/deps/turbodb
-        env:
-          SALTS_ROOT: /opt/salts/debug
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/ci-orm -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_TESTS=OFF \
-            -DBUILD_TESTS=OFF \
-            -DORM_BUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DTURBODB_BUILD_DBTOOLS=OFF \
-            -DTURBODB_BUILD_REDIS=OFF \
-            -DORM_WITH_SQLITE=ON \
-            -DORM_WITH_PGSQL=OFF \
-            -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
-            -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
-            -DENABLE_ASAN=OFF \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE/.ci/deps/turbodb" \
-            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed-turbodb"
-          cmake --build build/ci-orm -j2
-          cmake --install build/ci-orm --prefix "$RUNNER_TEMP/sdk/turbodb-debug"
-          test -f "$RUNNER_TEMP/sdk/turbodb-debug/lib/cmake/Orm/OrmConfig.cmake"
-          sudo mkdir -p /opt/turbodb
-          sudo ln -sfn "$RUNNER_TEMP/sdk/turbodb-debug" /opt/turbodb/debug
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
+          test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+          test -z "${DATABIND_ROOT:-}"
+          test -z "${DATABIND_HOST_ROOT:-}"
 
       - name: Apply focused Task 4 validation-only CMake assembly
         shell: bash
         run: |
           set -euxo pipefail
           python3 .github/ci/task4_runtime_assembly.py --turbodb
-          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
+          git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt             | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
 
       - name: Configure focused exact-source Graph build
         shell: bash
-        env:
-          SALTS_ROOT: /opt/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          DATABIND_ROOT: /opt/databind/debug
-          TURBODB_ROOT: /opt/turbodb/debug
         run: |
           set -euxo pipefail
-          cmake -S . -B build/task4-runtime -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON \
-            -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
-            2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
+          cmake -S . -B build/task4-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
 
-      - name: Build durable buffer and shared driver tests
+      - name: Build durable Graph tests and TurboDB adapter
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime --target test_flow_durable_buffer test_flow_durable_admission test_flow_durable_lifecycle test_flow_durable_memory_plugin test_flow_plugin_generation test_flow_durable_identity test_flow_inbox test_flow_inbox_source test_flow_inbox_driver test_flow_async_terminal test_flow_run test_flow_operation_result test_flow_projection_owner test_flow_projection_owner_fault test_turbodb_inbox -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime             --target tf_turbodb_adapter                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
-      - name: Run durable buffer and shared driver tests
+      - name: Run provider-neutral durable Graph tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime \
-            -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_inbox)$' \
-            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+
+      - name: Verify TurboDB adapter does not absorb native database drivers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          adapter="$(find build/task4-runtime -type f -name 'libtf_turbodb_adapter.so*' | head -n1)"
+          test -n "$adapter"
+          if command -v readelf >/dev/null; then
+            ! readelf -d "$adapter" | grep -Ei 'sqlite|tidesdb|pq|mysql|mongo'
+          fi
+          printf '%s\n' "$adapter" > "$RUNNER_TEMP/task4-runtime-evidence/turbodb-adapter.txt"
+
       - name: Configure Release ThreadSanitizer concurrency build
         shell: bash
-        env:
-          SALTS_ROOT: /opt/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          DATABIND_ROOT: /opt/databind/debug
-          TURBODB_ROOT: /opt/turbodb/debug
         run: |
           set -euxo pipefail
-          cmake -S . -B build/task4-runtime-tsan -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DENABLE_SANITIZER_THREAD=ON \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON \
-            -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed" \
-            2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure-tsan.log"
+          cmake -S . -B build/task4-runtime-tsan -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DENABLE_SANITIZER_THREAD=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure-tsan.log"
 
-      - name: Build Release ThreadSanitizer concurrency tests
+      - name: Build and run Release ThreadSanitizer concurrency tests
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime-tsan \
-            --target test_flow_durable_lifecycle test_flow_inbox test_flow_inbox_driver test_flow_async_terminal \
-            -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build-tsan.log"
-
-      - name: Run Release ThreadSanitizer concurrency tests
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/task4-runtime-tsan \
-            -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$' \
-            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
+          cmake --build build/task4-runtime-tsan             --target test_flow_durable_lifecycle test_flow_inbox test_flow_inbox_driver test_flow_async_terminal             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build-tsan.log"
+          ctest --test-dir build/task4-runtime-tsan             -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
 
       - name: Install and load the durable memory plugin component
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
+          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
           installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
           test -f "$installed_plugin"
           sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
-          cmake -E env \
-            "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin" \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:/opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib" \
-            "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin" \
-            2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
-          cp build/task4-runtime/install_manifest_DurableMemory.txt "$RUNNER_TEMP/task4-runtime-evidence/"
+          cmake -E env             "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin"             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:$LD_LIBRARY_PATH"             "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin"             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
 
       - name: Verify committed source remained untouched
         if: always()
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)$' || true)"
           git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
 

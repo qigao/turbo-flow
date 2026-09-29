@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [master]
     paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'turbo_flow/CMakeLists.txt'
       - 'turbo_flow/include/turbo_flow_plugin*.h'
       - 'turbo_flow/src/flow_plugin.c'
@@ -12,12 +14,7 @@ on:
       - 'turbo_flow/src/flow_config_operation.c'
       - 'turbo_flow/include/turbo_flow_resolved_config.h'
       - 'turbo_flow/include/turbo_flow_config_limits.h'
-      - 'turbo_flow/tests/CMakeLists.txt'
-      - 'turbo_flow/tests/plugin_materializer_fixture.c'
-      - 'turbo_flow/tests/plugin_materializer_header_cpp.cpp'
-      - 'turbo_flow/tests/test_flow_plugin_materializer.c'
-      - 'turbo_flow/tests/test_materializer_binding_config.c'
-      - 'turbo_flow/tests/test_flow_plugin_materializer_generation.c'
+      - 'turbo_flow/tests/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/materializer-abi.yml'
   workflow_dispatch:
@@ -27,29 +24,24 @@ permissions:
   packages: read
 
 concurrency:
-  group: materializer-abi-${{ github.ref_name }}
+  group: materializer-abi-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-  SALTS_ROOT: /opt/salts/debug
-  SALTS_UTILS_ROOT: /opt/salts-utils/debug
-  DATABIND_ROOT: /opt/databind/debug
-  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib
 
 jobs:
   materializer:
     name: ABI3.1 materializer catalog
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Checkout exact TurboFlow head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -57,24 +49,18 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --check HEAD^ HEAD
+          git diff --exit-code
 
-      - name: Checkout pinned Salts
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/deps/salts
-          persist-credentials: false
-
-      - name: Checkout pinned SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/deps/salts-utils
-          persist-credentials: false
+      - name: Use empty vcpkg L1 cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cache="$RUNNER_TEMP/materializer-empty-l1"
+          rm -rf "$cache"
+          mkdir -p "$cache"
+          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
 
       - name: Configure shared vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
@@ -84,58 +70,33 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Prepare Linux toolchain
+      - name: Install build tools
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
-          test -x "$VCPKG_ROOT/vcpkg"
-          sudo mkdir -p /opt
-          sudo ln -sfn "$VCPKG_ROOT" /opt/vcpkg
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-
-      - name: Build standalone host Lemon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S .ci/deps/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
-
-      - name: Build and install pinned Salts SDK
-        shell: bash
-        working-directory: .ci/deps/salts
+      - name: Restore published Salts SDK pair
+        shell: pwsh
         env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-        run: |
-          set -euxo pipefail
-          configured=0
-          for attempt in 1 2 3 4; do
-            if cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF; then
-              configured=1
-              break
-            fi
-            echo "Salts configure/vcpkg bootstrap failed on attempt $attempt; retrying with already-downloaded distfiles" >&2
-            sleep $((attempt * 5))
-          done
-          test "$configured" -eq 1
-          cmake --build build/linux-gcc-debug --target install -j2
-          sudo mkdir -p /opt/salts
-          sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid linux-x64
 
-      - name: Build and install pinned SaltsUtils and DataBind SDKs
+      - name: Verify published dependency boundary
         shell: bash
-        working-directory: .ci/deps/salts-utils
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon"
-          cmake --build build/linux-gcc-debug -j2
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/salts-utils-debug" --component Unspecified
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
-          sudo mkdir -p /opt/salts-utils /opt/databind
-          sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
-          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/include/data_bind.h"
+          test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
+          test -z "${DATABIND_ROOT:-}"
+          test -z "${DATABIND_HOST_ROOT:-}"
 
       - name: Apply materializer validation-only CMake assembly
         shell: bash
@@ -148,39 +109,27 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake -S . -B build/materializer-abi -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          cmake -S . -B build/materializer-abi -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
 
       - name: Build and run materializer ABI tests
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/materializer-abi --target test_flow_plugin_materializer test_materializer_binding_config test_flow_plugin_materializer_generation -j2
-          ctest --test-dir build/materializer-abi -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation)$' --output-on-failure
+          cmake --build build/materializer-abi             --target test_flow_plugin_materializer test_materializer_binding_config test_flow_plugin_materializer_generation -j2
+          ctest --test-dir build/materializer-abi             -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation)$'             --output-on-failure
 
       - name: Restore validation-only CMake assembly
+        if: always()
         shell: bash
         run: |
           set -euxo pipefail
-          git diff --name-only | sort > "$RUNNER_TEMP/validation-dirty-files.txt"
-          printf '%s\n' CMakeLists.txt turbo_flow/CMakeLists.txt | sort > "$RUNNER_TEMP/validation-expected-dirty-files.txt"
-          diff -u "$RUNNER_TEMP/validation-expected-dirty-files.txt" "$RUNNER_TEMP/validation-dirty-files.txt"
           git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
 
       - name: Verify committed source remained clean
+        if: always()
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
           git diff --exit-code
