@@ -159,6 +159,9 @@ spec("TurboFlow CNet stream sink") {
     stream_sink_completion_t second;
     turbo_flow_msg_t first_message;
     turbo_flow_msg_t second_message;
+    mem_buffer_t *wire_header = NULL;
+    mem_buffer_t *wire_body = NULL;
+    mem_slice_t wire_segments[2] = {{0}};
     turbo_flow_t *flow = turbo_flow_create();
     char uri[640];
     char received[32] = {0};
@@ -229,13 +232,30 @@ spec("TurboFlow CNet stream sink") {
     check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
 
     turbo_flow_msg_init(&first_message);
-    first_message.buffer = mem_get_buffer(mem_global(), sizeof("pipe-terminal") - 1u);
-    check_not_null(first_message.buffer);
-    memcpy(mem_buffer_data(first_message.buffer), "pipe-terminal",
-           sizeof("pipe-terminal") - 1u);
-    mem_set_used(first_message.buffer, sizeof("pipe-terminal") - 1u);
-    first_message.payload =
-        vstr_from_buf(mem_buffer_data(first_message.buffer), sizeof("pipe-terminal") - 1u);
+    first_message.owned_payload = tstr_dup("logical");
+    check_not_null(first_message.owned_payload);
+    first_message.payload = tstr_to_v(first_message.owned_payload);
+    wire_header = mem_get_buffer(mem_global(), sizeof("pipe-") - 1u);
+    wire_body = mem_get_buffer(mem_global(), sizeof("terminal") - 1u);
+    check_not_null(wire_header);
+    check_not_null(wire_body);
+    memcpy(mem_buffer_data(wire_header), "pipe-", sizeof("pipe-") - 1u);
+    memcpy(mem_buffer_data(wire_body), "terminal", sizeof("terminal") - 1u);
+    mem_set_used(wire_header, sizeof("pipe-") - 1u);
+    mem_set_used(wire_body, sizeof("terminal") - 1u);
+    wire_segments[0] = mem_slice(wire_header, 0u, sizeof("pipe-") - 1u);
+    wire_segments[1] = mem_slice(wire_body, 0u, sizeof("terminal") - 1u);
+    check_not_null(wire_segments[0].buffer);
+    check_not_null(wire_segments[1].buffer);
+    check_equal(turbo_flow_msg_set_transport_slices(&first_message, wire_segments, 2u), SALTS_OK);
+    mem_slice_release(&wire_segments[0]);
+    mem_slice_release(&wire_segments[1]);
+    mem_buffer_release(wire_header);
+    mem_buffer_release(wire_body);
+    wire_header = NULL;
+    wire_body = NULL;
+    check_equal(turbo_flow_msg_transport_bytes(&first_message),
+                (size_t)(sizeof("pipe-terminal") - 1u));
     check_equal(
         turbo_flow_publish_async(flow, "input", &first_message, stream_sink_complete, &first),
         SALTS_OK);
