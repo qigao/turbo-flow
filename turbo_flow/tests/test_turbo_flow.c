@@ -3557,6 +3557,97 @@ suite("Turbo Flow") {
       turbo_flow_msg_cleanup(&src);
     }
 
+    it("retains transport vectors across retain clone and move ownership") {
+      mem_buffer_t *header = mem_get_buffer(mem_global(), 4u);
+      mem_buffer_t *body = mem_get_buffer(mem_global(), 4u);
+      mem_slice_t input[2] = {{0}};
+      const mem_slice_t *actual = NULL;
+      turbo_flow_msg_t src;
+      turbo_flow_msg_t retained;
+      turbo_flow_msg_t cloned;
+      turbo_flow_msg_t moved;
+
+      check_not_null(header);
+      check_not_null(body);
+      memcpy(mem_buffer_data(header), "head", 4u);
+      memcpy(mem_buffer_data(body), "body", 4u);
+      mem_set_used(header, 4u);
+      mem_set_used(body, 4u);
+      input[0] = mem_slice(header, 0u, 4u);
+      input[1] = mem_slice(body, 0u, 4u);
+      check_not_null(input[0].buffer);
+      check_not_null(input[1].buffer);
+
+      turbo_flow_msg_init(&src);
+      src.owned_payload = tstr_dup("logical");
+      src.payload = tstr_to_v(src.owned_payload);
+      check_equal(turbo_flow_msg_set_transport_slices(&src, input, 2u), SALTS_OK);
+      mem_slice_release(&input[0]);
+      mem_slice_release(&input[1]);
+      check_equal(turbo_flow_msg_transport_slices(&src, &actual), (size_t)2u);
+      check_not_null(actual);
+      check_equal(actual[0].length, (size_t)4u);
+      check_equal(actual[1].length, (size_t)4u);
+      check_equal(actual[0].data, "head");
+      check_equal(actual[1].data, "body");
+      check_equal(turbo_flow_msg_transport_bytes(&src), (size_t)8u);
+      check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
+      check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
+
+      /* retain_view rejects owned payloads, while clone shares immutable vector ownership. */
+      turbo_flow_msg_init(&retained);
+      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_EINVAL);
+      turbo_flow_msg_cleanup(&retained);
+      check_equal(turbo_flow_msg_clone(&cloned, &src), SALTS_OK);
+      check_equal(turbo_flow_msg_transport_slices(&cloned, &actual), (size_t)2u);
+      check_equal(turbo_flow_msg_transport_bytes(&cloned), (size_t)8u);
+      check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
+      check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
+
+      check_equal(turbo_flow_msg_move(&moved, &cloned), SALTS_OK);
+      check_equal(turbo_flow_msg_transport_slices(&cloned, NULL), (size_t)0u);
+      check_equal(turbo_flow_msg_transport_slices(&moved, &actual), (size_t)2u);
+      turbo_flow_msg_cleanup(&src);
+      check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
+      check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
+      turbo_flow_msg_clear_transport_slices(&moved);
+      check_equal(turbo_flow_msg_transport_slices(&moved, NULL), (size_t)0u);
+      check_equal(mem_buffer_ref_count(header), (uint32_t)1u);
+      check_equal(mem_buffer_ref_count(body), (uint32_t)1u);
+      turbo_flow_msg_cleanup(&moved);
+      mem_buffer_release(header);
+      mem_buffer_release(body);
+    }
+
+    it("rejects malformed and oversized transport vectors transactionally") {
+      mem_buffer_t *buffer = mem_get_buffer(mem_global(), 8u);
+      mem_slice_t valid = {0};
+      mem_slice_t forged = {0};
+      turbo_flow_msg_t msg;
+      const mem_slice_t *actual = NULL;
+
+      check_not_null(buffer);
+      memcpy(mem_buffer_data(buffer), "12345678", 8u);
+      mem_set_used(buffer, 8u);
+      valid = mem_slice(buffer, 1u, 3u);
+      check_not_null(valid.buffer);
+      turbo_flow_msg_init(&msg);
+      check_equal(turbo_flow_msg_set_transport_slices(&msg, &valid, 1u), SALTS_OK);
+      check_equal(turbo_flow_msg_transport_bytes(&msg), (size_t)3u);
+
+      forged.data = mem_buffer_data(buffer) + 7u;
+      forged.length = 2u;
+      forged.buffer = buffer;
+      check_equal(turbo_flow_msg_set_transport_slices(&msg, &forged, 1u), SALTS_EINVAL);
+      check_equal(turbo_flow_msg_transport_slices(&msg, &actual), (size_t)1u);
+      check_equal(turbo_flow_msg_transport_bytes(&msg), (size_t)3u);
+      check_equal(actual[0].data, "234");
+
+      mem_slice_release(&valid);
+      turbo_flow_msg_cleanup(&msg);
+      mem_buffer_release(buffer);
+    }
+
     it("propagates transport context independently from content data") {
       int transport_marker = 1;
       turbo_flow_msg_t src;
