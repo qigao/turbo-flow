@@ -10,6 +10,7 @@ on:
       - 'turbo_flow/CMakeLists.txt'
       - 'turbo_flow/benchmarks/**'
       - 'turbo_flow/src/flow_cflow_region.c'
+      - 'turbo_flow/src/flow_compile.c'
       - 'turbo_flow/src/flow_domain.c'
       - 'turbo_flow/src/flow_plan_semantics.c'
       - 'turbo_flow/src/flow_plan.c'
