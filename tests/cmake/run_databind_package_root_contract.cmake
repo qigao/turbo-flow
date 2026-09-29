@@ -14,15 +14,15 @@ file(MAKE_DIRECTORY "${TURBO_FLOW_TEST_ROOT}")
 include(CMakePackageConfigHelpers)
 
 set(salts_root "${TURBO_FLOW_TEST_ROOT}/salts")
-set(databind_root "${TURBO_FLOW_TEST_ROOT}/databind")
-set(databind_outside_root "${TURBO_FLOW_TEST_ROOT}/databind-outside")
+set(salts_utils_root "${TURBO_FLOW_TEST_ROOT}/salts-utils")
+set(salts_utils_outside_root "${TURBO_FLOW_TEST_ROOT}/salts-utils-outside")
 set(turbo_flow_root "${TURBO_FLOW_TEST_ROOT}/turbo-flow")
 set(consumer_source_dir "${TURBO_FLOW_TEST_ROOT}/consumer")
 
 foreach(package_dir IN ITEMS
         "${salts_root}/lib/cmake/Salts"
-        "${databind_root}/lib/cmake/DataBind"
-        "${databind_outside_root}/lib/cmake/DataBind"
+        "${salts_utils_root}/lib/cmake/SaltsUtils"
+        "${salts_utils_outside_root}/lib/cmake/SaltsUtils"
         "${turbo_flow_root}/lib/cmake/TurboFlow"
         "${consumer_source_dir}")
   file(MAKE_DIRECTORY "${package_dir}")
@@ -36,24 +36,28 @@ if(NOT TARGET Salts::CNet)
   add_library(Salts::CNet INTERFACE IMPORTED)
 endif()
 ]=])
+write_basic_package_version_file(
+  "${salts_root}/lib/cmake/Salts/SaltsConfigVersion.cmake"
+  VERSION 1.8.3
+  COMPATIBILITY ExactVersion)
 
-file(WRITE "${databind_root}/lib/cmake/DataBind/DataBindConfig.cmake" [=[
+file(WRITE "${salts_utils_root}/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake" [=[
+if(NOT TARGET Salts::JsonParser)
+  add_library(Salts::JsonParser INTERFACE IMPORTED)
+endif()
 if(NOT TARGET Salts::DataBind)
   add_library(Salts::DataBind INTERFACE IMPORTED)
 endif()
-if(NOT TARGET Salts::TbeSchema)
-  add_library(Salts::TbeSchema INTERFACE IMPORTED)
-endif()
 ]=])
 write_basic_package_version_file(
-  "${databind_root}/lib/cmake/DataBind/DataBindConfigVersion.cmake"
-  VERSION 3.0.0
-  COMPATIBILITY SameMajorVersion)
+  "${salts_utils_root}/lib/cmake/SaltsUtils/SaltsUtilsConfigVersion.cmake"
+  VERSION 4.1.3
+  COMPATIBILITY ExactVersion)
 
 file(COPY
-     "${databind_root}/lib/cmake/DataBind/DataBindConfig.cmake"
-     "${databind_root}/lib/cmake/DataBind/DataBindConfigVersion.cmake"
-     DESTINATION "${databind_outside_root}/lib/cmake/DataBind")
+     "${salts_utils_root}/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+     "${salts_utils_root}/lib/cmake/SaltsUtils/SaltsUtilsConfigVersion.cmake"
+     DESTINATION "${salts_utils_outside_root}/lib/cmake/SaltsUtils")
 
 set(TURBO_FLOW_HAS_TURBODB_ADAPTER OFF)
 configure_package_config_file(
@@ -86,12 +90,6 @@ file(WRITE "${consumer_source_dir}/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.25)
 project(TurboFlowDataBindPackageContract LANGUAGES C)
 
-if(TEST_PRELOAD_DATABIND)
-  add_library(Salts::DataBind INTERFACE IMPORTED)
-  unset(DataBind_DIR)
-  unset(DataBind_DIR CACHE)
-endif()
-
 if(NOT DEFINED TEST_COMPONENT OR "${TEST_COMPONENT}" STREQUAL "")
   message(FATAL_ERROR "TEST_COMPONENT is required")
 endif()
@@ -114,7 +112,9 @@ function(run_contract_case case_name expect_success expected_pattern)
       "${CMAKE_COMMAND}" -E env
       --unset=SALTS_UTILS_ROOT
       --unset=RULES_FORGE_ROOT
+      --unset=TURBODB_ROOT
       --unset=DATABIND_ROOT
+      --unset=DATABIND_HOST_ROOT
       ${CASE_ENV}
       "SALTS_ROOT=${salts_root}"
       "TURBO_FLOW_ROOT=${turbo_flow_root}"
@@ -144,157 +144,135 @@ function(run_contract_case case_name expect_success expected_pattern)
 endfunction()
 
 run_contract_case(
-  schema-without-salts-utils TRUE ""
-  ENV "DATABIND_ROOT=${databind_root}"
+  schema-with-salts-utils TRUE ""
+  ENV "SALTS_UTILS_ROOT=${salts_utils_root}"
   CMAKE
     "-DTEST_COMPONENT=ProtocolIngressInboxSchema"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE"
     "-DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE")
 
 run_contract_case(
-  config-without-databind TRUE ""
+  config-without-salts-utils TRUE ""
   CMAKE
     "-DTEST_COMPONENT=Config"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_DataBind=TRUE"
     "-DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE"
     "-DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE")
 
 run_contract_case(
-  schema-missing-databind-root FALSE
-  "DATABIND_ROOT is required for TurboFlow dependency DataBind"
+  schema-missing-salts-utils-root FALSE
+  "SALTS_UTILS_ROOT is required for TurboFlow dependency SaltsUtils"
   CMAKE
     "-DTEST_COMPONENT=ProtocolIngressInboxSchema"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE"
     "-DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE")
 
 run_contract_case(
-  schema-wrong-databind-dir FALSE
-  "DataBind_DIR is outside DATABIND_ROOT"
-  ENV "DATABIND_ROOT=${databind_root}"
+  schema-wrong-salts-utils-dir FALSE
+  "SaltsUtils_DIR is outside SALTS_UTILS_ROOT"
+  ENV "SALTS_UTILS_ROOT=${salts_utils_root}"
   CMAKE
     "-DTEST_COMPONENT=ProtocolIngressInboxSchema"
-    "-DDataBind_DIR=${databind_outside_root}/lib/cmake/DataBind"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE")
-
-run_contract_case(
-  schema-preloaded-unverifiable FALSE
-  "DataBind is already loaded but its package root cannot be verified"
-  ENV "DATABIND_ROOT=${databind_root}"
-  CMAKE
-    "-DTEST_COMPONENT=ProtocolIngressInboxSchema"
-    "-DTEST_PRELOAD_DATABIND=TRUE"
-    "-DCMAKE_DISABLE_FIND_PACKAGE_SaltsUtils=TRUE"
+    "-DSaltsUtils_DIR=${salts_utils_outside_root}/lib/cmake/SaltsUtils"
     "-DCMAKE_DISABLE_FIND_PACKAGE_RulesForge=TRUE")
 
 file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeLists.txt" root_cmake)
 foreach(required_fragment IN ITEMS
-        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT"
-        "if(TURBO_FLOW_BUILD_RULESFORGE_PLUGIN)"
-        "list(APPEND _turbo_flow_required_dependency_roots RULES_FORGE_ROOT)"
-        "find_package(DataBind 3 CONFIG REQUIRED"
-        "SALTS_UTILS_ROOT still owns DataBind target"
-        "DATABIND_ROOT must be physically distinct from SALTS_UTILS_ROOT")
+        "SALTS_ROOT SALTS_UTILS_ROOT"
+        "find_package(Salts 1.8.3 EXACT CONFIG REQUIRED"
+        "find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED"
+        "SaltsUtils 4.1.3 package is missing required target Salts::DataBind")
   string(FIND "${root_cmake}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "source package cut missing fragment: ${required_fragment}")
   endif()
 endforeach()
+foreach(forbidden_fragment IN ITEMS
+        "DATABIND_ROOT"
+        "find_package(DataBind"
+        "Salts::TbeSchema")
+  string(FIND "${root_cmake}" "${forbidden_fragment}" fragment_pos)
+  if(NOT fragment_pos EQUAL -1)
+    message(FATAL_ERROR "source package cut retains stale fragment: ${forbidden_fragment}")
+  endif()
+endforeach()
+
+file(READ "${TURBO_FLOW_SOURCE_DIR}/cmake/TurboFlowConfig.cmake.in" config_template)
+foreach(required_fragment IN ITEMS
+        "find_dependency(Salts 1.8.3 EXACT CONFIG REQUIRED"
+        "find_dependency(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED"
+        "SaltsUtils 4.1.3 package is missing Salts::DataBind")
+  string(FIND "${config_template}" "${required_fragment}" fragment_pos)
+  if(fragment_pos EQUAL -1)
+    message(FATAL_ERROR "installed config missing fragment: ${required_fragment}")
+  endif()
+endforeach()
+foreach(forbidden_fragment IN ITEMS
+        "DATABIND_ROOT"
+        "find_dependency(DataBind"
+        "Salts::TbeSchema")
+  string(FIND "${config_template}" "${forbidden_fragment}" fragment_pos)
+  if(NOT fragment_pos EQUAL -1)
+    message(FATAL_ERROR "installed config retains stale fragment: ${forbidden_fragment}")
+  endif()
+endforeach()
 
 file(READ "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/CMakeLists.txt" protocol_cmake)
 foreach(required_fragment IN ITEMS
-        "DATABIND_HOST_ROOT"
-        "find_program("
-        "NO_DEFAULT_PATH"
-        "tbe_compiler resolved outside the DataBind host root")
+        "SALTS_UTILS_HOST_ROOT"
+        "TURBO_FLOW_IDLC_HOST_EXECUTABLE"
+        "NAMES salts-idlc salts-idlc.exe"
+        "salts-idlc resolved outside the SaltsUtils host root")
   string(FIND "${protocol_cmake}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "compiler provenance cut missing fragment: ${required_fragment}")
   endif()
 endforeach()
-
-file(READ "${TURBO_FLOW_SOURCE_DIR}/cmake/TurboFlowConfig.cmake.in" config_template)
-string(FIND "${config_template}"
-            "_TurboFlow_require_dependency_root(SaltsUtils SALTS_UTILS_ROOT Salts::DataBind)"
-            stale_salts_utils_ownership)
-if(NOT stale_salts_utils_ownership EQUAL -1)
-  message(FATAL_ERROR
-          "installed package still treats Salts::DataBind as SaltsUtils provenance")
-endif()
-
-file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeUserPresets.json" user_presets)
-foreach(required_fragment IN ITEMS
-        "\"DATABIND_ROOT\""
-        "\"DATABIND_HOST_ROOT\"")
-  string(FIND "${user_presets}" "${required_fragment}" fragment_pos)
-  if(fragment_pos EQUAL -1)
-    message(FATAL_ERROR "preset package cut missing fragment: ${required_fragment}")
+foreach(forbidden_fragment IN ITEMS
+        "DATABIND_HOST_ROOT"
+        "tbe_compiler")
+  string(FIND "${protocol_cmake}" "${forbidden_fragment}" fragment_pos)
+  if(NOT fragment_pos EQUAL -1)
+    message(FATAL_ERROR "compiler provenance retains stale fragment: ${forbidden_fragment}")
   endif()
 endforeach()
-string(FIND "${user_presets}" "\"SALTS_UTILS_HOST_ROOT\"" stale_host_root)
-if(NOT stale_host_root EQUAL -1)
-  message(FATAL_ERROR "presets still use SALTS_UTILS_HOST_ROOT for tbe_compiler")
-endif()
-string(FIND "${user_presets}"
-            [["DATABIND_ROOT": "$env{PKG_ROOT}/salts-utils]]
-            stale_databind_profile_root)
-if(NOT stale_databind_profile_root EQUAL -1)
-  message(FATAL_ERROR "presets still place DataBind under the SaltsUtils root")
-endif()
-string(FIND "${user_presets}"
-            [["DATABIND_HOST_ROOT": "$env{PKG_ROOT}/salts-utils]]
-            stale_databind_host_root)
-if(NOT stale_databind_host_root EQUAL -1)
-  message(FATAL_ERROR "presets still source tbe_compiler from the SaltsUtils root")
-endif()
 
+file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeUserPresets.json" user_presets)
+foreach(forbidden_fragment IN ITEMS
+        "\"DATABIND_ROOT\""
+        "\"DATABIND_HOST_ROOT\"")
+  string(FIND "${user_presets}" "${forbidden_fragment}" fragment_pos)
+  if(NOT fragment_pos EQUAL -1)
+    message(FATAL_ERROR "presets retain stale DataBind root: ${forbidden_fragment}")
+  endif()
+endforeach()
 
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/ci/task4_runtime_assembly.py"
           task4_runtime_assembly)
-foreach(required_fragment IN ITEMS
-        "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT")
-  string(FIND "${task4_runtime_assembly}" "${required_fragment}" fragment_pos)
-  if(fragment_pos EQUAL -1)
-    message(FATAL_ERROR
-            "focused Task 4 assembly missing DataBind root fragment: ${required_fragment}")
-  endif()
-endforeach()
-
-file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/task4-runtime-focused.yml"
-          task4_runtime_workflow)
-foreach(required_fragment IN ITEMS
-        "SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae"
-        "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
-        "--component Unspecified"
-        "--component DataBind"
-        "DATABIND_ROOT: /opt/databind/debug"
-        "TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE=\"/opt/databind/debug/bin/tbe_compiler\"")
-  string(FIND "${task4_runtime_workflow}" "${required_fragment}" fragment_pos)
-  if(fragment_pos EQUAL -1)
-    message(FATAL_ERROR
-            "focused Task 4 workflow missing DataBind provenance fragment: ${required_fragment}")
-  endif()
-endforeach()
-string(FIND "${task4_runtime_workflow}"
-            "salts-utils-debug/bin/tbe_compiler"
-            stale_task4_compiler_root)
-if(NOT stale_task4_compiler_root EQUAL -1)
-  message(FATAL_ERROR
-          "focused Task 4 workflow still sources tbe_compiler from SaltsUtils")
+string(FIND "${task4_runtime_assembly}"
+            "SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT"
+            stale_task4_root)
+if(NOT stale_task4_root EQUAL -1)
+  message(FATAL_ERROR "focused Task 4 assembly still requires DATABIND_ROOT")
 endif()
 
-file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/protocol-network-intake.yml"
-          protocol_network_workflow)
+file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/rulesforge-provider.yml"
+          rulesforge_workflow)
 foreach(required_fragment IN ITEMS
-        "SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae"
-        "SALTS_UTILS_COMMIT: 47bdfdcfcbb64dc3dc25d6768dd2d3b74b7cc3f7"
-        "--component Unspecified"
-        "test ! -e \"$RUNNER_TEMP/sdk/salts-utils-debug/lib/cmake/DataBind/DataBindConfig.cmake\"")
-  string(FIND "${protocol_network_workflow}" "${required_fragment}" fragment_pos)
+        "restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
+        "VCPKG_INSTALL_OPTIONS=--only-binarycaching"
+        "TURBO_FLOW_IDLC_HOST_EXECUTABLE")
+  string(FIND "${rulesforge_workflow}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
-    message(FATAL_ERROR
-            "protocol public-compile workflow missing SaltsUtils-only install fragment: ${required_fragment}")
+    message(FATAL_ERROR "RulesForge provider gate missing published dependency fragment: ${required_fragment}")
+  endif()
+endforeach()
+foreach(forbidden_fragment IN ITEMS
+        "Checkout pinned Salts"
+        "Checkout pinned SaltsUtils"
+        "Checkout pinned RulesForge"
+        "DATABIND_ROOT")
+  string(FIND "${rulesforge_workflow}" "${forbidden_fragment}" fragment_pos)
+  if(NOT fragment_pos EQUAL -1)
+    message(FATAL_ERROR "RulesForge provider gate retains stale dependency path: ${forbidden_fragment}")
   endif()
 endforeach()
 
-message(STATUS "TurboFlow DataBind package-root contract passed")
+message(STATUS "TurboFlow SaltsUtils/DataBind package contract passed")
