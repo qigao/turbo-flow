@@ -1,14 +1,103 @@
 #include "flow_internal.h"
 #include "flow_projection_owner_internal.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define FLOW_MSG_PROJECTION_MAGIC UINT64_C(0x544650524f4a5631)
 
+struct flow_msg_transport_vector_s {
+  atomic_uint refs;
+  size_t segment_count;
+  size_t total_bytes;
+  mem_slice_t segments[];
+};
+
+static int flow_msg_transport_slice_validate(const mem_slice_t *slice, size_t *offset_out) {
+  const char *base;
+  uintptr_t data_address;
+  uintptr_t base_address;
+  size_t used;
+  size_t offset;
+  if (offset_out) *offset_out = 0u;
+  if (!slice || !slice->buffer || !slice->data || slice->length == 0u) return SALTS_EINVAL;
+  base = mem_buffer_const_data(slice->buffer);
+  used = mem_buffer_used(slice->buffer);
+  if (!base || used == 0u) return SALTS_EINVAL;
+  data_address = (uintptr_t)slice->data;
+  base_address = (uintptr_t)base;
+  if (data_address < base_address) return SALTS_EINVAL;
+  offset = (size_t)(data_address - base_address);
+  if (offset >= used || slice->length > used - offset) return SALTS_EINVAL;
+  if (offset_out) *offset_out = offset;
+  return SALTS_OK;
+}
+
+static void flow_msg_transport_vector_release(flow_msg_transport_vector_t *vector) {
+  if (!vector) return;
+  if (atomic_fetch_sub_explicit(&vector->refs, 1u, memory_order_acq_rel) != 1u) return;
+  for (size_t index = 0u; index < vector->segment_count; ++index)
+    mem_slice_release(&vector->segments[index]);
+  free(vector);
+}
+
+static int flow_msg_transport_vector_retain(flow_msg_transport_vector_t *vector) {
+  unsigned refs;
+  if (!vector) return SALTS_EINVAL;
+  refs = atomic_load_explicit(&vector->refs, memory_order_relaxed);
+  do {
+    if (refs == UINT_MAX) return SALTS_ERANGE;
+  } while (!atomic_compare_exchange_weak_explicit(&vector->refs, &refs, refs + 1u,
+                                                   memory_order_relaxed,
+                                                   memory_order_relaxed));
+  return SALTS_OK;
+}
+
+static int flow_msg_transport_vector_create(const mem_slice_t *segments, size_t segment_count,
+                                            flow_msg_transport_vector_t **out) {
+  flow_msg_transport_vector_t *vector;
+  size_t bytes;
+  size_t total = 0u;
+  if (out) *out = NULL;
+  if (!out || !segments || segment_count == 0u ||
+      segment_count > TURBO_FLOW_TRANSPORT_VECTOR_MAX_SEGMENTS)
+    return SALTS_EINVAL;
+  if (segment_count > (SIZE_MAX - sizeof(*vector)) / sizeof(mem_slice_t))
+    return SALTS_ERANGE;
+  for (size_t index = 0u; index < segment_count; ++index) {
+    int rc = flow_msg_transport_slice_validate(&segments[index], NULL);
+    if (rc != SALTS_OK) return rc;
+    if (total > SIZE_MAX - segments[index].length) return SALTS_ERANGE;
+    total += segments[index].length;
+  }
+  bytes = sizeof(*vector) + segment_count * sizeof(mem_slice_t);
+  vector = (flow_msg_transport_vector_t *)calloc(1u, bytes);
+  if (!vector) return SALTS_ENOMEM;
+  atomic_init(&vector->refs, 1u);
+  vector->segment_count = segment_count;
+  vector->total_bytes = total;
+  for (size_t index = 0u; index < segment_count; ++index) {
+    size_t offset = 0u;
+    (void)flow_msg_transport_slice_validate(&segments[index], &offset);
+    vector->segments[index] =
+        mem_slice(segments[index].buffer, offset, segments[index].length);
+    if (!vector->segments[index].buffer ||
+        vector->segments[index].length != segments[index].length) {
+      for (size_t release = 0u; release <= index; ++release)
+        mem_slice_release(&vector->segments[release]);
+      free(vector);
+      return SALTS_EPROTO;
+    }
+  }
+  *out = vector;
+  return SALTS_OK;
+}
+
 static int flow_msg_projection_empty(const flow_msg_projection_t *projection) {
   return projection && !projection->descriptor && !projection->value && !projection->result_value &&
-         !projection->has_durable_identity && !projection->has_durable_claim;
+         !projection->transport_vector && !projection->has_durable_identity &&
+         !projection->has_durable_claim;
 }
 
 static turbo_flow_projection_owner_t *flow_msg_result_release_value(flow_msg_projection_t *p) {
@@ -45,6 +134,8 @@ static void flow_msg_projection_destroy(void *ptr, void *ctx) {
   projection->magic = 0u;
   result_owner = flow_msg_result_release_value(projection);
   owner = flow_msg_projection_release_value(projection);
+  flow_msg_transport_vector_release(projection->transport_vector);
+  projection->transport_vector = NULL;
   free(projection);
   if (owner) flow_projection_owner_release(owner);
   if (result_owner) flow_projection_owner_release(result_owner);
@@ -258,6 +349,12 @@ static int flow_msg_projection_clone(turbo_flow_msg_t *dst, const turbo_flow_msg
     if (rc != SALTS_OK) goto fail;
   }
   *copy = *source;
+  copy->transport_vector = NULL;
+  if (source->transport_vector) {
+    rc = flow_msg_transport_vector_retain(source->transport_vector);
+    if (rc != SALTS_OK) goto fail;
+    copy->transport_vector = source->transport_vector;
+  }
   if (copy->owns_descriptor) copy->descriptor = &copy->owned_descriptor;
   copy->value = value;
   copy->result_value = result;
@@ -399,6 +496,15 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
     binding_copy = (flow_msg_projection_t *)calloc(1, sizeof(*binding_copy));
     if (!binding_copy) return SALTS_ENOMEM;
     *binding_copy = *source_binding;
+    binding_copy->transport_vector = NULL;
+    if (source_binding->transport_vector) {
+      int rc = flow_msg_transport_vector_retain(source_binding->transport_vector);
+      if (rc != SALTS_OK) {
+        free(binding_copy);
+        return rc;
+      }
+      binding_copy->transport_vector = source_binding->transport_vector;
+    }
     if (binding_copy->owns_descriptor) binding_copy->descriptor = &binding_copy->owned_descriptor;
   }
 
@@ -410,6 +516,10 @@ int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const turbo_flow_msg_t *sr
   memset(&dst->failure, 0, sizeof(dst->failure));
   if (flow_msg_failure_copy(&dst->failure, &src->failure) != SALTS_OK) {
     mem_buffer_release(dst->buffer);
+    if (binding_copy) {
+      flow_msg_transport_vector_release(binding_copy->transport_vector);
+      binding_copy->transport_vector = NULL;
+    }
     free(binding_copy);
     turbo_flow_msg_init(dst);
     return SALTS_ENOMEM;
@@ -471,6 +581,56 @@ int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src) {
   *dst = *src;
   turbo_flow_msg_init(src);
   return SALTS_OK;
+}
+
+int turbo_flow_msg_set_transport_slices(turbo_flow_msg_t *msg,
+                                        const mem_slice_t *segments,
+                                        size_t segment_count) {
+  flow_msg_transport_vector_t *vector = NULL;
+  flow_msg_projection_t *binding;
+  int rc;
+  if (!msg) return SALTS_EINVAL;
+  binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (binding && binding->claim_active) return SALTS_EBUSY;
+  rc = flow_msg_transport_vector_create(segments, segment_count, &vector);
+  if (rc != SALTS_OK) return rc;
+  if (!binding) {
+    binding = (flow_msg_projection_t *)calloc(1u, sizeof(*binding));
+    if (!binding) {
+      flow_msg_transport_vector_release(vector);
+      return SALTS_ENOMEM;
+    }
+    binding->magic = FLOW_MSG_PROJECTION_MAGIC;
+    msg->_content_handle = binding;
+  }
+  flow_msg_transport_vector_release(binding->transport_vector);
+  binding->transport_vector = vector;
+  return SALTS_OK;
+}
+
+size_t turbo_flow_msg_transport_slices(const turbo_flow_msg_t *msg,
+                                       const mem_slice_t **segments_out) {
+  const flow_msg_projection_t *binding = flow_msg_projection(msg);
+  if (segments_out) *segments_out = NULL;
+  if (!binding || !binding->transport_vector) return 0u;
+  if (segments_out) *segments_out = binding->transport_vector->segments;
+  return binding->transport_vector->segment_count;
+}
+
+size_t turbo_flow_msg_transport_bytes(const turbo_flow_msg_t *msg) {
+  const flow_msg_projection_t *binding = flow_msg_projection(msg);
+  return binding && binding->transport_vector ? binding->transport_vector->total_bytes : 0u;
+}
+
+void turbo_flow_msg_clear_transport_slices(turbo_flow_msg_t *msg) {
+  flow_msg_projection_t *binding = (flow_msg_projection_t *)flow_msg_projection(msg);
+  if (!binding || !binding->transport_vector || binding->claim_active) return;
+  flow_msg_transport_vector_release(binding->transport_vector);
+  binding->transport_vector = NULL;
+  if (flow_msg_projection_empty(binding)) {
+    free(binding);
+    msg->_content_handle = NULL;
+  }
 }
 
 turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_flow_msg_t *msg) {
