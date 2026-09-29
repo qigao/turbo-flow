@@ -130,13 +130,15 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-benchmark --target             bench_turbo_flow test_flow_reflected_operation -j2
+          cmake --build build/cflow-region-benchmark --target \
+            bench_turbo_flow test_flow_reflected_operation -j2
 
       - name: Run reflected CFlow region contract
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/cflow-region-benchmark             -R '^test_flow_reflected_operation
+          ctest --test-dir build/cflow-region-benchmark \
+            -R '^test_flow_reflected_operation
         shell: bash
         run: |
           set -euxo pipefail
@@ -186,7 +188,8 @@ jobs:
           path: |
             ${{ runner.temp }}/cflow-region-benchmark-evidence/
             build/cflow-region-benchmark/CMakeCache.txt
-             --output-on-failure
+ \
+            --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash
