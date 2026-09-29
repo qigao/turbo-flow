@@ -254,6 +254,55 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
   return SALTS_OK;
 }
 
+static int flow_verify_execution_backends(
+    turbo_flow_t *flow, const flow_compiled_plan_t *candidate) {
+  const size_t stage_count = candidate ? vec_size(&candidate->nodes) : 0u;
+
+  if (!flow || !candidate) return SALTS_EINVAL;
+  for (size_t stage_index = 0u; stage_index < stage_count; ++stage_index) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&candidate->nodes, stage_index);
+    const uint32_t *executor_index =
+        (const uint32_t *)vec_at_const(&candidate->executor_by_stage, stage_index);
+    const uint32_t *adapter_index =
+        (const uint32_t *)vec_at_const(&candidate->adapter_by_stage, stage_index);
+    const uint32_t *region_index =
+        (const uint32_t *)vec_at_const(&candidate->cflow_region_by_stage, stage_index);
+    const flow_executor_plan_t *executor = NULL;
+    const flow_adapter_registration_t *adapter = NULL;
+    const flow_stage_plan_impl_t *stage =
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
+
+    if (!node || !executor_index || !adapter_index || !region_index || !stage)
+      return SALTS_EPROTO;
+    if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
+                        FLOW_RUNTIME_NODE_BUFFER)) != 0u)
+      continue;
+    if (*region_index != FLOW_PLAN_INDEX_NONE) continue;
+
+    if (*executor_index != FLOW_PLAN_INDEX_NONE)
+      executor = (const flow_executor_plan_t *)vec_at_const(
+          &candidate->executors, *executor_index);
+    if (*adapter_index != FLOW_PLAN_INDEX_NONE)
+      adapter = (const flow_adapter_registration_t *)vec_at_const(
+          &flow->adapters, *adapter_index);
+
+    if ((executor &&
+         (executor->fn || executor->emit_fn || executor->keyed_fn ||
+          executor->keyed_emit_fn || executor->window_fn)) ||
+        (adapter &&
+         (adapter->ops.consume || adapter->async_terminal_ops.submit ||
+          adapter->async_emit_ops.submit))) {
+      continue;
+    }
+
+    return flow_set_error_keep_state(
+        flow, SALTS_ENOTSUP, stage->line, stage->column,
+        "stage has neither a compiled CFlow region nor a native execution backend");
+  }
+  return SALTS_OK;
+}
+
 static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_plan_t *candidate) {
   const size_t stage_count = vec_size(&candidate->nodes);
 
@@ -474,6 +523,11 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
   rc = flow_verify_compiled_plan(&candidate, stage_count, vec_size(&flow->adapters));
   if (rc != SALTS_OK) {
     return flow_plan_fail(flow, &candidate, rc, "compiled runtime plan is inconsistent");
+  }
+  rc = flow_verify_execution_backends(flow, &candidate);
+  if (rc != SALTS_OK) {
+    flow_compiled_plan_destroy(&candidate);
+    return rc;
   }
   if (flow->required_backend == FLOW_PLAN_BACKEND_CFLOW) {
     rc = flow_require_cflow_backend(flow, &candidate);
