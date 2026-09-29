@@ -29,6 +29,11 @@ typedef int (*turbo_flow_protocol_encode_fn)(
     const turbo_flow_protocol_command_view_t *command,
     turbo_flow_protocol_frame_output_t *output);
 
+typedef int (*turbo_flow_protocol_reply_slices_fn)(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output);
+
 
 /**
  * Optional single-pass ingress decoder.
@@ -53,10 +58,12 @@ typedef struct turbo_flow_protocol_codec_ops_s {
   turbo_flow_protocol_encode_fn encode;
   /** Optional append-only ABI1 extension for semantic ingress. */
   turbo_flow_protocol_decode_semantic_fn decode_semantic;
+  /** Optional append-only ABI1 extension for retained protocol replies. */
+  turbo_flow_protocol_reply_slices_fn reply_slices;
 } turbo_flow_protocol_codec_ops_t;
 
 #define TURBO_FLOW_PROTOCOL_CODEC_OPS_INIT                                                      \
-  {sizeof(turbo_flow_protocol_codec_ops_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, NULL, NULL, NULL}
+  {sizeof(turbo_flow_protocol_codec_ops_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, NULL, NULL, NULL, NULL}
 
 /**
  * Create/destroy the opaque provider-neutral service used by plugin open/close.
