@@ -129,6 +129,12 @@ elif args.protocol_intake:
         "add_test(NAME test_turbo_flow_use_aliases COMMAND test_turbo_flow_focus --filter \"use aliases\")\n"
         "add_test(NAME test_turbo_flow_legacy_cflow_boundary COMMAND test_turbo_flow_focus --filter \"legacy typed operations\")\n"
         "add_test(NAME test_turbo_flow_source_only_cflow COMMAND test_turbo_flow_focus --filter \"source-only plan\")\n"
+        "cmake_add_test(\n"
+        "  test_flow_transport_reply\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_transport_reply.c\n"
+        "          ${CMAKE_SOURCE_DIR}/turbo_flow/tests/transport_reply_header_cpp.cpp\n"
+        "  LIBS TurboFlow::Graph Salts::TinyTest\n"
+        '  FOLDER "turbo_flow/tests")\n'
     )
 elif args.materializer:
     children = (
