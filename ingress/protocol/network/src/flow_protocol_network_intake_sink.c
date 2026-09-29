@@ -360,8 +360,10 @@ static int intake_decoded_admit(void *ctx,
     payload_data = sink->envelope_scratch;
   }
 
-  rc = intake_reply_prepare(sink, request->message, &prepared_reply, &reply_output);
-  if (rc != SALTS_OK) return rc;
+  if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    if (!sink->active_reply_session_valid) return SALTS_EPROTO;
+    if (sink->reply_count >= sink->settings.max_pending_claims) return SALTS_ENOBUFS;
+  }
 
   buffer = mem_wrap_external((void *)payload_data, encoded_size, NULL, NULL);
   if (!buffer) return SALTS_ENOMEM;
@@ -376,8 +378,24 @@ static int intake_decoded_admit(void *ctx,
   if (rc == SALTS_OK)
     rc = turbo_flow_publish(sink->downstream_flow, sink->decoded_source_name, &message);
   turbo_flow_msg_cleanup(&message);
-  if (rc == SALTS_OK && prepared_reply) intake_reply_commit(sink, prepared_reply);
-  return rc;
+  if (rc != SALTS_OK) return rc;
+
+  /*
+   * Durable admission is the configured settlement point. Codec reply
+   * generation is intentionally sequenced after it: a failed/backpressured
+   * durable publish cannot consume codec reply state or authorize wire output.
+   * Once durable admission succeeds, reply failure is an independent fact and
+   * must not make ProtocolSource replay the already admitted business message.
+   */
+  if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    rc = intake_reply_prepare(sink, request->message, &prepared_reply, &reply_output);
+    if (rc != SALTS_OK) {
+      intake_counter_add(&sink->reply_failures, 1u);
+      return SALTS_OK;
+    }
+    if (prepared_reply) intake_reply_commit(sink, prepared_reply);
+  }
+  return SALTS_OK;
 }
 
 static int intake_ipv4_device_id(const cnet_datagram_peer *peer, char *out, size_t capacity) {
