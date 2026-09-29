@@ -542,6 +542,70 @@ spec("protocol plugin conformance") {
     protocol_close_one(host, registry, owner);
   }
 
+  it("emits retained CoAP reply framing without flattening the token") {
+    static const uint8_t coap[] = {0x42u, 0x01u, 0x12u, 0x34u, 0xaau, 0xbbu};
+    static const uint8_t expected[] = {0x62u, 0x45u, 0x12u, 0x34u, 0xaau, 0xbbu};
+    turbo_flow_plugin_host_t *host = NULL;
+    turbo_flow_protocol_registry_t *registry = NULL;
+    turbo_flow_protocol_owner_t *owner = NULL;
+    turbo_flow_protocol_t *protocol = NULL;
+    turbo_flow_protocol_frame_view_t request =
+        TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+    turbo_flow_protocol_frame_slices_output_t output =
+        TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
+    mem_slice_t segments[2] = {{0}};
+
+    check_equal(protocol_open_one(FLOW_PROTOCOL_COAP_MODULE, "coap",
+                                  TURBO_FLOW_PROTOCOL_COAP, "RFC7252",
+                                  &host, &registry, &owner, &protocol),
+                SALTS_OK);
+    request.data = coap;
+    request.data_size = sizeof(coap);
+    request.device_id = "sensor-2";
+    request.protocol_version = "RFC7252";
+    output.segments = segments;
+    output.segment_capacity = 2u;
+    check_equal(turbo_flow_protocol_reply_slices(protocol, &request, SALTS_OK, &output),
+                SALTS_OK);
+    check_equal(output.segment_count, (size_t)2u);
+    check_equal(output.data_size, sizeof(expected));
+    check_equal(segments[0].length, (size_t)4u);
+    check_equal(segments[1].length, (size_t)2u);
+    check_equal(memcmp(segments[0].data, expected, 4u), 0);
+    check_equal(memcmp(segments[1].data, expected + 4u, 2u), 0);
+    check_equal(output.metadata.operation, "response");
+    turbo_flow_protocol_frame_slices_output_release(&output);
+    check_equal(output.segment_count, (size_t)0u);
+
+    protocol_close_one(host, registry, owner);
+
+    {
+      uint8_t jtt808[64];
+      turbo_flow_protocol_frame_slices_output_t unsupported =
+          TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
+      mem_slice_t one[1] = {{0}};
+      check_true(protocol_jtt808_frame(jtt808, sizeof(jtt808)) > 0u);
+      host = NULL;
+      registry = NULL;
+      owner = NULL;
+      protocol = NULL;
+      check_equal(protocol_open_one(FLOW_PROTOCOL_JTT808_MODULE, "jtt808",
+                                    TURBO_FLOW_PROTOCOL_JTT_808, "2019-A1",
+                                    &host, &registry, &owner, &protocol),
+                  SALTS_OK);
+      request = (turbo_flow_protocol_frame_view_t)TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+      request.data = jtt808;
+      request.data_size = protocol_jtt808_frame(jtt808, sizeof(jtt808));
+      request.protocol_version = "2019-A1";
+      unsupported.segments = one;
+      unsupported.segment_capacity = 1u;
+      check_equal(turbo_flow_protocol_reply_slices(
+                      protocol, &request, SALTS_OK, &unsupported),
+                  SALTS_ENOTSUP);
+      protocol_close_one(host, registry, owner);
+    }
+  }
+
   it("extracts identical application JSON through real CoAP and JT/T808 codecs") {
     static const uint8_t json[] = "{\"age\":21}";
     uint8_t coap[64];

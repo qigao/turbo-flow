@@ -4,6 +4,8 @@
 #include "platform.h"
 #include "turbo_flow_export.h"
 
+#include <salts_buffer.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -191,6 +193,30 @@ typedef struct turbo_flow_protocol_frame_output_s {
   {sizeof(turbo_flow_protocol_frame_output_t), TURBO_FLOW_PROTOCOL_ABI_VERSION, NULL, 0u, 0u,      \
    TURBO_FLOW_PROTOCOL_METADATA_INIT}
 
+#define TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS 32u
+
+/**
+ * Caller-owned retained-vector output for one protocol reply.
+ *
+ * The codec writes retained mem_slice_t values into caller-provided slots.
+ * Successful return transfers those slice references to the caller, which may
+ * admit them to a transport and then release them with
+ * turbo_flow_protocol_frame_slices_output_release().
+ */
+typedef struct turbo_flow_protocol_frame_slices_output_s {
+  size_t size;
+  uint32_t abi_version;
+  mem_slice_t *segments;
+  size_t segment_capacity;
+  size_t segment_count;
+  size_t data_size;
+  turbo_flow_protocol_metadata_t metadata;
+} turbo_flow_protocol_frame_slices_output_t;
+
+#define TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT                                               \
+  {sizeof(turbo_flow_protocol_frame_slices_output_t), TURBO_FLOW_PROTOCOL_ABI_VERSION,              \
+   NULL, 0u, 0u, 0u, TURBO_FLOW_PROTOCOL_METADATA_INIT}
+
 /**
  * Borrowed protocol-neutral downlink command.
  *
@@ -236,6 +262,22 @@ TURBO_FLOW_C_API int turbo_flow_protocol_reply(turbo_flow_protocol_t *protocol,
                                                const turbo_flow_protocol_frame_view_t *request,
                                                int status,
                                                turbo_flow_protocol_frame_output_t *output);
+
+/**
+ * Build one protocol response as retained scatter/gather slices.
+ *
+ * Codecs without the optional vector callback return SALTS_ENOTSUP. On success
+ * segment_count == 0 means the protocol requires no response. Otherwise
+ * data_size is the sum of all canonical non-empty slices.
+ */
+TURBO_FLOW_C_API int turbo_flow_protocol_reply_slices(
+    turbo_flow_protocol_t *protocol,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output);
+
+/** Release every retained slice currently published by a vector output. */
+TURBO_FLOW_C_API void turbo_flow_protocol_frame_slices_output_release(
+    turbo_flow_protocol_frame_slices_output_t *output);
 
 /**
  * Encode one protocol-neutral downlink command into a device wire frame.

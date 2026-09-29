@@ -383,6 +383,107 @@ int turbo_flow_protocol_reply(
       protocol, request_metadata.device_id, output);
 }
 
+static int flow_protocol_reply_slice_valid(const mem_slice_t *slice) {
+  const char *base;
+  uintptr_t base_address;
+  uintptr_t data_address;
+  size_t used;
+  size_t offset;
+  if (!slice || !slice->buffer || !slice->data || slice->length == 0u) return 0;
+  base = mem_buffer_const_data(slice->buffer);
+  used = mem_buffer_used(slice->buffer);
+  if (!base || used == 0u) return 0;
+  base_address = (uintptr_t)base;
+  data_address = (uintptr_t)slice->data;
+  if (data_address < base_address) return 0;
+  offset = (size_t)(data_address - base_address);
+  return offset < used && slice->length <= used - offset;
+}
+
+void turbo_flow_protocol_frame_slices_output_release(
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  size_t count;
+  if (!output || !output->segments) return;
+  count = output->segment_count < output->segment_capacity
+              ? output->segment_count
+              : output->segment_capacity;
+  for (size_t i = 0u; i < count; ++i)
+    mem_slice_release(&output->segments[i]);
+  output->segment_count = 0u;
+  output->data_size = 0u;
+  output->metadata = (turbo_flow_protocol_metadata_t)TURBO_FLOW_PROTOCOL_METADATA_INIT;
+}
+
+int turbo_flow_protocol_reply_slices(
+    turbo_flow_protocol_t *protocol,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  turbo_flow_protocol_metadata_t request_metadata =
+      TURBO_FLOW_PROTOCOL_METADATA_INIT;
+  turbo_flow_protocol_metadata_t metadata = TURBO_FLOW_PROTOCOL_METADATA_INIT;
+  size_t total = 0u;
+  int rc;
+  if (!protocol || !request || !output || output->size < sizeof(*output) ||
+      output->abi_version != TURBO_FLOW_PROTOCOL_ABI_VERSION ||
+      !output->segments || output->segment_capacity == 0u ||
+      output->segment_capacity > TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS)
+    return SALTS_EINVAL;
+  for (size_t i = 0u; i < output->segment_capacity; ++i) {
+    if (output->segments[i].buffer || output->segments[i].data ||
+        output->segments[i].length != 0u)
+      return SALTS_EBUSY;
+  }
+  output->segment_count = 0u;
+  output->data_size = 0u;
+  output->metadata =
+      (turbo_flow_protocol_metadata_t)TURBO_FLOW_PROTOCOL_METADATA_INIT;
+  if (!protocol->ops.reply_slices ||
+      (protocol->capabilities & TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY) == 0u)
+    return SALTS_ENOTSUP;
+  rc = flow_protocol_inspect(protocol, request,
+                            TURBO_FLOW_PROTOCOL_DIRECTION_UP,
+                            &request_metadata);
+  if (rc != SALTS_OK) return rc;
+  rc = protocol->ops.reply_slices(protocol->codec_ctx, protocol->protocol_version,
+                                  request, status, output);
+  if (rc != SALTS_OK) {
+    turbo_flow_protocol_frame_slices_output_release(output);
+    return rc;
+  }
+  if (output->segment_count == 0u) {
+    if (output->data_size != 0u) return SALTS_EPROTO;
+    request_metadata.direction = TURBO_FLOW_PROTOCOL_DIRECTION_DOWN;
+    output->metadata = request_metadata;
+    return SALTS_OK;
+  }
+  if (output->segment_count > output->segment_capacity) {
+    turbo_flow_protocol_frame_slices_output_release(output);
+    return SALTS_EPROTO;
+  }
+  for (size_t i = 0u; i < output->segment_count; ++i) {
+    if (!flow_protocol_reply_slice_valid(&output->segments[i]) ||
+        total > SIZE_MAX - output->segments[i].length) {
+      turbo_flow_protocol_frame_slices_output_release(output);
+      return SALTS_EPROTO;
+    }
+    total += output->segments[i].length;
+  }
+  if (total == 0u || total != output->data_size ||
+      total > protocol->max_frame_size) {
+    turbo_flow_protocol_frame_slices_output_release(output);
+    return total > protocol->max_frame_size ? SALTS_EMSGSIZE : SALTS_EPROTO;
+  }
+  metadata = output->metadata;
+  rc = flow_protocol_metadata_finalize(protocol, request,
+                                       TURBO_FLOW_PROTOCOL_DIRECTION_DOWN,
+                                       &metadata, &output->metadata);
+  if (rc != SALTS_OK) {
+    turbo_flow_protocol_frame_slices_output_release(output);
+    return rc;
+  }
+  return SALTS_OK;
+}
+
 static int flow_protocol_command_validate(
     const turbo_flow_protocol_t *protocol,
     const turbo_flow_protocol_command_view_t *command) {

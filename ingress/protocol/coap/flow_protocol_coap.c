@@ -36,6 +36,20 @@ static int flow_coap_reply(void *ctx, const char *configured_version,
   return flow_protocol_coap_reply(request, status, output, 0, (uint16_t)next);
 }
 
+static int flow_coap_reply_slices(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  unsigned next;
+  (void)configured_version;
+  if (!ctx) return SALTS_EINVAL;
+  next = atomic_fetch_add_explicit((atomic_uint *)ctx, 1u, memory_order_relaxed) + 1u;
+  if ((uint16_t)next == 0u)
+    next = atomic_fetch_add_explicit((atomic_uint *)ctx, 1u, memory_order_relaxed) + 1u;
+  return flow_protocol_coap_reply_slices(
+      request, status, output, 0, (uint16_t)next);
+}
+
 static int flow_coap_encode(void *ctx, const char *configured_version,
                             const turbo_flow_protocol_command_view_t *command,
                             turbo_flow_protocol_frame_output_t *output) {
@@ -55,7 +69,8 @@ static const flow_protocol_plugin_descriptor_t FLOW_COAP_DESCRIPTOR = {
     flow_coap_reply,
     flow_coap_encode,
     &FLOW_COAP_NEXT_MESSAGE_ID,
-    flow_coap_decode_semantic};
+    flow_coap_decode_semantic,
+    flow_coap_reply_slices};
 
 static const turbo_flow_protocol_plugin_api_t FLOW_COAP_API = {
     sizeof(turbo_flow_protocol_plugin_api_t),
