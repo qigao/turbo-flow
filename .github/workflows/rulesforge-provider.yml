@@ -6,12 +6,8 @@ on:
     paths:
       - 'CMakeLists.txt'
       - 'CMakeOptions.cmake'
-      - 'turbo_flow/CMakeLists.txt'
-      - 'turbo_flow/include/turbo_flow_plugin*.h'
-      - 'turbo_flow/src/flow_plugin*.c'
-      - 'turbo_flow/tests/CMakeLists.txt'
-      - 'turbo_flow/tests/test_flow_rulesforge_plugin.c'
-      - 'turbo_flow/tests/test_flow_rulesforge_durable_network.c'
+      - 'cmake/**'
+      - 'turbo_flow/**'
       - 'io/cnet/**'
       - 'io/durable/**'
       - 'ingress/protocol/**'
@@ -26,27 +22,24 @@ permissions:
   packages: read
 
 concurrency:
-  group: rulesforge-provider-${{ github.ref_name }}
+  group: rulesforge-provider-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
-  SALTS_COMMIT: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_COMMIT: 3d3b1c3c245279825d5db38dfaec4fb8e510ff34
-  RULESFORGE_COMMIT: 183c8fb33d86b4dec14ad599e1ed026888413d39
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   ASAN_OPTIONS: detect_leaks=1:detect_odr_violation=2:halt_on_error=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-  LD_LIBRARY_PATH: /opt/salts/debug/lib:/opt/salts-utils/debug/lib:/opt/databind/debug/lib:/opt/rulesforge/debug/lib
 
 jobs:
   provider:
-    name: Real RulesForge ABI3 provider
+    name: Published RulesForge ABI3 provider
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 45
     steps:
       - name: Checkout exact TurboFlow head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -54,32 +47,18 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --check HEAD^ HEAD
+          git diff --exit-code
 
-      - name: Checkout pinned Salts
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_COMMIT }}
-          path: .ci/deps/salts
-          persist-credentials: false
-
-      - name: Checkout pinned SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_COMMIT }}
-          path: .ci/deps/salts-utils
-          persist-credentials: false
-
-      - name: Checkout pinned RulesForge
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/RulesForge
-          ref: ${{ env.RULESFORGE_COMMIT }}
-          path: .ci/deps/rulesforge
-          persist-credentials: false
+      - name: Use empty vcpkg L1 cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cache="$RUNNER_TEMP/rulesforge-provider-empty-l1"
+          rm -rf "$cache"
+          mkdir -p "$cache"
+          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
 
       - name: Configure shared vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
@@ -89,81 +68,35 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Prepare Linux toolchain
+      - name: Install build tools
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils autoconf automake libtool
-          test -x "$VCPKG_ROOT/vcpkg"
-          sudo mkdir -p /opt
-          sudo ln -sfn "$VCPKG_ROOT" /opt/vcpkg
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-
-      - name: Build standalone host Lemon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S .ci/deps/salts-utils/tools/lemon -B "$RUNNER_TEMP/host-lemon" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build "$RUNNER_TEMP/host-lemon" --target lemon -j2
-
-      - name: Build and install pinned Salts SDK
-        shell: bash
-        working-directory: .ci/deps/salts
+      - name: Restore published ecosystem SDKs
+        shell: pwsh
         env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
-          cmake --build build/linux-gcc-debug --target install -j2
-          sudo mkdir -p /opt/salts
-          sudo ln -sfn "$PROJECT_ROOT/external/pkgs/salts/debug" /opt/salts/debug
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge
 
-      - name: Build and install pinned SaltsUtils and DataBind SDKs
-        shell: bash
-        working-directory: .ci/deps/salts-utils
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$RUNNER_TEMP/host-lemon/lemon"
-          cmake --build build/linux-gcc-debug -j2
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/salts-utils-debug" --component Unspecified
-          cmake --install build/linux-gcc-debug --prefix "$RUNNER_TEMP/sdk/databind-debug" --component DataBind
-          sudo mkdir -p /opt/salts-utils /opt/databind
-          sudo ln -sfn "$RUNNER_TEMP/sdk/salts-utils-debug" /opt/salts-utils/debug
-          sudo ln -sfn "$RUNNER_TEMP/sdk/databind-debug" /opt/databind/debug
-
-      - name: Verify pinned DataBind native materializer API
+      - name: Verify published dependency boundary
         shell: bash
         run: |
           set -euxo pipefail
-          test -f /opt/databind/debug/include/data_bind_native.h
-          grep -F 'data_bind_native_decode(' /opt/databind/debug/include/data_bind_native.h
-          test -f /opt/databind/debug/include/data_bind_json_provider.h
-
-      - name: Build and install pinned RulesForge SDK
-        shell: bash
-        working-directory: .ci/deps/rulesforge
-        env:
-          SALTS_ROOT: /opt/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          DATABIND_ROOT: /opt/databind/debug
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/provider -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTING=OFF \
-            -DENABLE_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE/.ci/deps/rulesforge" \
-            -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/vcpkg-installed-rulesforge"
-          cmake --build build/provider -j2
-          cmake --install build/provider --prefix "$RUNNER_TEMP/sdk/rulesforge-debug"
-          test -f "$RUNNER_TEMP/sdk/rulesforge-debug/lib/cmake/RulesForge/RulesForgeConfig.cmake"
-          sudo mkdir -p /opt/rulesforge
-          sudo ln -sfn "$RUNNER_TEMP/sdk/rulesforge-debug" /opt/rulesforge/debug
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/include/data_bind_native.h"
+          test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
+          test -f "$RULES_FORGE_ROOT/lib/cmake/RulesForge/RulesForgeConfig.cmake"
+          test ! -e "$SALTS_UTILS_ROOT/lib/cmake/DataBind/DataBindConfig.cmake"
+          test -z "${DATABIND_ROOT:-}"
+          test -z "${DATABIND_HOST_ROOT:-}"
 
       - name: Apply durable RulesForge E2E validation-only CMake assembly
         shell: bash
@@ -174,37 +107,16 @@ jobs:
 
       - name: Configure provider-focused TurboFlow build
         shell: bash
-        env:
-          SALTS_ROOT: /opt/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          DATABIND_ROOT: /opt/databind/debug
-          RULES_FORGE_ROOT: /opt/rulesforge/debug
         run: |
           set -euxo pipefail
-          cmake -S . -B build/rulesforge-provider -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=ON \
-            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=ON \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
-            -DTURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE="/opt/databind/debug/bin/tbe_compiler" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"
+          cmake -S . -B build/rulesforge-provider -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=ON             -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=ON             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
 
       - name: Build and run RulesForge provider and durable network composition
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/rulesforge-provider \
-            --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network -j2
-          ctest --test-dir build/rulesforge-provider \
-            -R '^test_flow_rulesforge_(plugin|durable_network)$' --output-on-failure
+          cmake --build build/rulesforge-provider             --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network -j2
+          ctest --test-dir build/rulesforge-provider             -R '^test_flow_rulesforge_(plugin|durable_network)$' --output-on-failure
 
       - name: Install and load composed providers from install tree
         shell: bash
@@ -220,25 +132,11 @@ jobs:
           mapper_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_applicant_mapper_provider.so' -o -name 'tf_applicant_mapper_provider.dll' \) | head -n1)"
           test_bin="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_plugin*' -perm -111 | head -n1)"
           composition_test="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_durable_network*' -perm -111 | head -n1)"
-          test -n "$provider"
-          test -n "$cnet_provider"
-          test -n "$durable_provider"
-          test -n "$jtt808_provider"
-          test -n "$coap_provider"
-          test -n "$mapper_provider"
-          test -n "$test_bin"
-          test -n "$composition_test"
-          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
-            FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
-            "$test_bin"
-          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
-            FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
-            FLOW_CNET_PLUGIN_PATH="$cnet_provider" \
-            TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH="$durable_provider" \
-            FLOW_PROTOCOL_JTT808_PLUGIN_PATH="$jtt808_provider" \
-            FLOW_PROTOCOL_COAP_PLUGIN_PATH="$coap_provider" \
-            FLOW_APPLICANT_MAPPER_PLUGIN_PATH="$mapper_provider" \
-            "$composition_test"
+          for path in "$provider" "$cnet_provider" "$durable_provider" "$jtt808_provider" "$coap_provider" "$mapper_provider" "$test_bin" "$composition_test"; do
+            test -n "$path"
+          done
+          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH"             FLOW_RULESFORGE_PLUGIN_PATH="$provider"             "$test_bin"
+          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH"             FLOW_RULESFORGE_PLUGIN_PATH="$provider"             FLOW_CNET_PLUGIN_PATH="$cnet_provider"             TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH="$durable_provider"             FLOW_PROTOCOL_JTT808_PLUGIN_PATH="$jtt808_provider"             FLOW_PROTOCOL_COAP_PLUGIN_PATH="$coap_provider"             FLOW_APPLICANT_MAPPER_PLUGIN_PATH="$mapper_provider"             "$composition_test"
 
       - name: Verify core unlink and canonical provider export
         shell: bash
@@ -255,18 +153,17 @@ jobs:
           test "$(cat "$RUNNER_TEMP/provider-exports.txt")" = "turbo_flow_plugin_get_api"
 
       - name: Restore validation-only CMake assembly
+        if: always()
         shell: bash
         run: |
           set -euxo pipefail
-          git diff --name-only | sort > "$RUNNER_TEMP/validation-dirty-files.txt"
-          printf '%s\n' CMakeLists.txt turbo_flow/CMakeLists.txt | sort > "$RUNNER_TEMP/validation-expected-dirty-files.txt"
-          diff -u "$RUNNER_TEMP/validation-expected-dirty-files.txt" "$RUNNER_TEMP/validation-dirty-files.txt"
           git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
 
       - name: Verify committed source remained clean
+        if: always()
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
           git diff --exit-code

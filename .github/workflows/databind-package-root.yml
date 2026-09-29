@@ -1,4 +1,4 @@
-name: DataBind package root contract
+name: SaltsUtils DataBind package contract
 
 on:
   push:
@@ -12,6 +12,10 @@ on:
       - '.github/workflows/task4-runtime-focused.yml'
       - '.github/workflows/protocol-network-intake.yml'
       - 'tests/install_consumer/**'
+      - 'cmake/ci/restore-versioned-native-sdks.ps1'
+      - '.github/workflows/rulesforge-provider.yml'
+      - 'cmake/ci/restore-versioned-native-sdks.ps1'
+      - '.github/workflows/rulesforge-provider.yml'
       - 'tests/cmake/run_databind_package_root_contract.cmake'
       - '.github/workflows/databind-package-root.yml'
   pull_request:
@@ -38,7 +42,7 @@ concurrency:
 
 jobs:
   package-root:
-    name: Exact-head DataBind package provenance
+    name: Exact-head SaltsUtils DataBind provenance
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -59,7 +63,7 @@ jobs:
           git diff --check HEAD^ HEAD
           test -z "$(git status --porcelain --untracked-files=no)"
 
-      - name: Run executable DataBind package-root contract
+      - name: Run executable SaltsUtils DataBind contract
         shell: bash
         run: |
           set -euxo pipefail

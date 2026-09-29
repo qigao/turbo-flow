@@ -1,7 +1,16 @@
-find_package(RulesForge 0.9 CONFIG REQUIRED
-             PATHS "$ENV{RULES_FORGE_ROOT}" NO_DEFAULT_PATH)
-find_package(DataBind 3 CONFIG REQUIRED COMPONENTS JsonAdapter
-             PATHS "$ENV{DATABIND_ROOT}" NO_DEFAULT_PATH)
+file(TO_CMAKE_PATH "$ENV{RULES_FORGE_ROOT}" _turbo_flow_rulesforge_root)
+find_package(RulesForge 0.9.0 EXACT CONFIG REQUIRED
+             PATHS "${_turbo_flow_rulesforge_root}" NO_DEFAULT_PATH)
+
+foreach(_turbo_flow_rulesforge_databind_target IN ITEMS
+        Salts::DataBindCore
+        Salts::DataBindJsonAdapter)
+  if(NOT TARGET ${_turbo_flow_rulesforge_databind_target})
+    message(FATAL_ERROR
+            "SaltsUtils 4.1.3 package is missing required target: "
+            "${_turbo_flow_rulesforge_databind_target}")
+  endif()
+endforeach()
 
 add_library(tf_rulesforge_provider SHARED
   src/rulesforge_plugin.c)
@@ -36,3 +45,6 @@ install(TARGETS tf_rulesforge_provider
 
 install(FILES include/turbo_flow_rulesforge_plugin.h
         DESTINATION include/turbo_flow/plugins)
+
+unset(_turbo_flow_rulesforge_databind_target)
+unset(_turbo_flow_rulesforge_root)
