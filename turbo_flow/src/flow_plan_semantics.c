@@ -78,20 +78,53 @@ static int flow_semantic_type_add(flow_compiled_plan_t *plan, turbo_flow_domain_
   return SALTS_OK;
 }
 
+uint32_t flow_function_semantic_barriers(
+    const cmeta_function_desc *function) {
+  cmeta_effects effects;
+  uint32_t barriers = FLOW_LOWERING_BARRIER_NONE;
+  size_t i;
+
+  if (!function || !cmeta_function_desc_valid(function))
+    return FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN;
+
+  effects = function->effects;
+  if ((effects & CMETA_EFFECT_STATEFUL) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_STATEFUL;
+  if ((effects & CMETA_EFFECT_ASYNC) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_ASYNC;
+  if ((effects & CMETA_EFFECT_IO) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
+  if ((effects & CMETA_EFFECT_UNKNOWN) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN;
+
+  for (i = 0u; i < function->param_count; ++i) {
+    const cmeta_param_desc *param = cmeta_function_param(function, i);
+    if (!param || (param->flags & CMETA_PARAM_OUT) != 0u) {
+      barriers |= FLOW_LOWERING_BARRIER_NATIVE_MUTATION;
+      break;
+    }
+  }
+  return barriers;
+}
+
 static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
                                     const flow_runtime_node_plan_t *node,
                                     const turbo_flow_operation_descriptor_t *operation,
+                                    const cmeta_function_desc *function,
                                     cmeta_effects *effects_out) {
   const turbo_flow_operation_runtime_contract_t *runtime =
       operation ? &operation->runtime : NULL;
   uint32_t barriers = FLOW_LOWERING_BARRIER_NONE;
-  cmeta_effects effects = CMETA_EFFECT_PURE;
+  cmeta_effects effects = function ? function->effects : CMETA_EFFECT_PURE;
+
+  if (function)
+    barriers |= flow_function_semantic_barriers(function);
 
   if (!stage || !node || !operation) {
     if (effects_out) *effects_out = CMETA_EFFECT_UNKNOWN;
     return FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE;
   }
-  if (!stage->is_source && !stage->is_port) {
+  if (!stage->is_source && !stage->is_port && !function) {
     barriers |= FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE;
     effects |= CMETA_EFFECT_MAY_FAIL;
     if (!stage->operation_name) effects |= CMETA_EFFECT_UNKNOWN;
@@ -105,42 +138,42 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
       operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_LOCAL ||
       operation->scope.authority == TURBO_FLOW_AUTHORITY_OWNER_COMMAND) {
     barriers |= FLOW_LOWERING_BARRIER_STATEFUL;
-    effects |= CMETA_EFFECT_STATEFUL;
+    if (!function) effects |= CMETA_EFFECT_STATEFUL;
   }
   if (stage->async_emitting || stage->exec.kind != TURBO_FLOW_EXEC_INLINE ||
       stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL ||
       (runtime && runtime->handoff != TURBO_FLOW_HANDOFF_DIRECT)) {
     barriers |= FLOW_LOWERING_BARRIER_ASYNC;
-    effects |= CMETA_EFFECT_ASYNC;
+    if (!function) effects |= CMETA_EFFECT_ASYNC;
   }
   if (stage->retry.max_attempts > 1u ||
       (runtime && runtime->error_mode == TURBO_FLOW_ERROR_RETRY)) {
     barriers |= FLOW_LOWERING_BARRIER_RETRY;
-    effects |= CMETA_EFFECT_MAY_FAIL;
+    if (!function) effects |= CMETA_EFFECT_MAY_FAIL;
   }
   if (runtime && runtime->settlement != 0u) {
     barriers |= FLOW_LOWERING_BARRIER_SETTLEMENT;
-    effects |= CMETA_EFFECT_IO;
+    if (!function) effects |= CMETA_EFFECT_IO;
   }
   if (stage->window_fn || stage->window_close_fn) {
     barriers |= FLOW_LOWERING_BARRIER_WINDOW;
-    effects |= CMETA_EFFECT_STATEFUL;
+    if (!function) effects |= CMETA_EFFECT_STATEFUL;
   }
   if ((stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) {
     barriers |= FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE;
-    effects |= CMETA_EFFECT_MAY_FAIL;
+    if (!function) effects |= CMETA_EFFECT_MAY_FAIL;
   }
   if (stage->is_source || stage->adapter_name || stage->resource_name ||
       operation->domain == TURBO_FLOW_DOMAIN_IO_TRANSPORT ||
       operation->domain == TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN ||
       operation->resource_domain != TURBO_FLOW_DOMAIN_NONE) {
     barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
-    effects |= CMETA_EFFECT_IO;
+    if (!function) effects |= CMETA_EFFECT_IO;
   }
   if (stage->reorder.capacity != 0u ||
       (runtime && runtime->ordering != TURBO_FLOW_ORDERING_UNORDERED)) {
     barriers |= FLOW_LOWERING_BARRIER_ORDERING;
-    effects |= CMETA_EFFECT_STATEFUL;
+    if (!function) effects |= CMETA_EFFECT_STATEFUL;
   }
   if (node->incoming_count > 1u || node->outgoing_count > 1u || stage->is_port) {
     barriers |= FLOW_LOWERING_BARRIER_RELATION;
@@ -292,6 +325,12 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
         (const flow_runtime_node_plan_t *)vec_at_const(&plan->nodes, stage_index);
     const turbo_flow_operation_descriptor_t *operation =
         flow_stage_operation_descriptor(stage);
+    const flow_operation_registration_t *registration =
+        stage && stage->operation_name
+            ? flow_find_operation_registration(flow, stage->operation_name)
+            : NULL;
+    const cmeta_function_desc *function =
+        registration && registration->reflected ? registration->function : NULL;
     flow_stage_semantic_plan_t *semantics =
         (flow_stage_semantic_plan_t *)vec_at(&plan->stage_semantics, stage_index);
 
@@ -302,27 +341,54 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
                                     ? CFLOW_OP_FLAT_MAP
                                     : CFLOW_OP_MAP;
     if (stage->is_source || stage->is_port) semantics->cflow_operator = CFLOW_OP_INPUT;
-    if (operation && operation->input_type) {
-      rc = flow_semantic_type_add(plan, operation->input_domain, operation->input_type,
-                                  &semantics->input_type_index);
-      if (rc != SALTS_OK) return rc;
+
+    if (registration && registration->reflected) {
+      semantics->reflected = 1;
+      semantics->effects = registration->function->effects;
+      semantics->callable = registration->callable;
+      if (registration->reflected_lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP &&
+          cflow_function_projection_valid(&registration->projection)) {
+        semantics->cflow_operator = registration->projection.op;
+        semantics->canonical_input_type = registration->projection.input_type;
+        semantics->canonical_output_type = registration->projection.output_type;
+      }
+      semantics->typed =
+          semantics->canonical_input_type != NULL &&
+          semantics->canonical_output_type != NULL;
+    } else {
+      if (operation && operation->input_type) {
+        rc = flow_semantic_type_add(plan, operation->input_domain, operation->input_type,
+                                    &semantics->input_type_index);
+        if (rc != SALTS_OK) return rc;
+      }
+      if (operation && operation->output_type) {
+        rc = flow_semantic_type_add(plan, operation->output_domain, operation->output_type,
+                                    &semantics->output_type_index);
+        if (rc != SALTS_OK) return rc;
+      }
+      semantics->typed = semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
+                         semantics->output_type_index != FLOW_PLAN_INDEX_NONE;
     }
-    if (operation && operation->output_type) {
-      rc = flow_semantic_type_add(plan, operation->output_domain, operation->output_type,
-                                  &semantics->output_type_index);
-      if (rc != SALTS_OK) return rc;
-    }
-    semantics->typed = semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
-                       semantics->output_type_index != FLOW_PLAN_INDEX_NONE;
-    semantics->barriers = flow_stage_barriers(stage, node, operation, &semantics->effects);
+
+    semantics->barriers =
+        flow_stage_barriers(stage, node, operation, function, &semantics->effects);
     if (flow_node_has_dynamic_route(plan, node)) {
       semantics->barriers |= FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE;
-      semantics->effects |= CMETA_EFFECT_MAY_FAIL;
+      if (!function) semantics->effects |= CMETA_EFFECT_MAY_FAIL;
     }
-    semantics->lowering_candidate =
-        semantics->typed && !stage->is_source && !stage->is_port &&
-        (semantics->barriers & ~FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE) == 0u &&
-        (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
+
+    if (registration && registration->reflected) {
+      semantics->lowering_candidate =
+          semantics->typed && !stage->is_source && !stage->is_port &&
+          registration->reflected_lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP &&
+          semantics->barriers == FLOW_LOWERING_BARRIER_NONE &&
+          (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
+    } else {
+      semantics->lowering_candidate =
+          semantics->typed && !stage->is_source && !stage->is_port &&
+          (semantics->barriers & ~FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE) == 0u &&
+          (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
+    }
   }
 
   /*
