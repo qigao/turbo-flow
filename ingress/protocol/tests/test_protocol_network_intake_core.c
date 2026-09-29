@@ -24,6 +24,177 @@ typedef struct intake_mapper_probe_s {
   int status;
 } intake_mapper_probe_t;
 
+typedef struct intake_reply_probe_s {
+  size_t raw_sends;
+  size_t slice_sends;
+  size_t last_segment_count;
+  size_t bytes_size;
+  uint8_t bytes[64];
+  turbo_flow_transport_reply_terminal_t terminal;
+  int terminal_ready;
+} intake_reply_probe_t;
+
+static int intake_reply_capture(
+    void *ctx, const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session) {
+  const turbo_flow_cnet_listener_message_context_t *transport;
+  (void)ctx;
+  if (!message || !session) return SALTS_EINVAL;
+  transport = turbo_flow_cnet_listener_message_context(message);
+  if (!transport || transport->connection.generation == 0u) return SALTS_ENOENT;
+  *session = (turbo_flow_transport_reply_session_t)
+      TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+  session->token_size = sizeof(transport->connection);
+  memcpy(session->token, &transport->connection, sizeof(transport->connection));
+  return SALTS_OK;
+}
+
+static int intake_reply_send(
+    void *ctx, const turbo_flow_transport_reply_request_t *request) {
+  intake_reply_probe_t *probe = (intake_reply_probe_t *)ctx;
+  if (!probe || !request || probe->terminal_ready) return SALTS_EBUSY;
+  ++probe->raw_sends;
+  probe->terminal = (turbo_flow_transport_reply_terminal_t)
+      TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  probe->terminal.session = request->session;
+  probe->terminal.kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+  probe->terminal.data_size = request->data_size;
+  probe->terminal.status = SALTS_OK;
+  probe->terminal.tag = request->tag;
+  probe->terminal_ready = 1;
+  return SALTS_OK;
+}
+
+static int intake_reply_send_slices(
+    void *ctx, const turbo_flow_transport_reply_slices_request_t *request) {
+  intake_reply_probe_t *probe = (intake_reply_probe_t *)ctx;
+  size_t offset = 0u;
+  if (!probe || !request || probe->terminal_ready) return SALTS_EBUSY;
+  if (request->segment_count == 0u || request->segment_count > 32u)
+    return SALTS_EINVAL;
+  for (size_t i = 0u; i < request->segment_count; ++i) {
+    const mem_slice_t *segment = &request->segments[i];
+    if (!segment->data || segment->length == 0u ||
+        segment->length > sizeof(probe->bytes) - offset)
+      return SALTS_EMSGSIZE;
+    memcpy(probe->bytes + offset, segment->data, segment->length);
+    offset += segment->length;
+  }
+  ++probe->slice_sends;
+  probe->last_segment_count = request->segment_count;
+  probe->bytes_size = offset;
+  probe->terminal = (turbo_flow_transport_reply_terminal_t)
+      TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  probe->terminal.session = request->session;
+  probe->terminal.kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+  probe->terminal.data_size = offset;
+  probe->terminal.status = SALTS_OK;
+  probe->terminal.tag = request->tag;
+  probe->terminal_ready = 1;
+  return SALTS_OK;
+}
+
+static int intake_reply_take(
+    void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
+  intake_reply_probe_t *probe = (intake_reply_probe_t *)ctx;
+  if (!probe || !terminal) return SALTS_EINVAL;
+  if (!probe->terminal_ready) return SALTS_ENOENT;
+  *terminal = probe->terminal;
+  probe->terminal_ready = 0;
+  return SALTS_OK;
+}
+
+static int intake_test_reply_raw(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_output_t *output) {
+  static const uint8_t raw_reply[] = "raw-reply";
+  (void)ctx;
+  (void)configured_version;
+  (void)request;
+  (void)status;
+  if (!output || !output->data || output->capacity < sizeof(raw_reply) - 1u)
+    return SALTS_EMSGSIZE;
+  memcpy(output->data, raw_reply, sizeof(raw_reply) - 1u);
+  output->data_size = sizeof(raw_reply) - 1u;
+  return SALTS_OK;
+}
+
+static int intake_test_reply_slices(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  static const char first[] = "sg-";
+  static const char second[] = "reply";
+  mem_buffer_t *left = NULL;
+  mem_buffer_t *right = NULL;
+  mem_slice_t left_slice = {0};
+  mem_slice_t right_slice = {0};
+  (void)ctx;
+  (void)configured_version;
+  (void)status;
+  if (!request || !output || !output->segments || output->segment_capacity < 2u)
+    return SALTS_EINVAL;
+
+  left = mem_get_buffer(mem_global(), sizeof(first) - 1u);
+  right = mem_get_buffer(mem_global(), sizeof(second) - 1u);
+  if (!left || !right) {
+    mem_buffer_release(left);
+    mem_buffer_release(right);
+    return SALTS_ENOMEM;
+  }
+  memcpy(mem_buffer_data(left), first, sizeof(first) - 1u);
+  memcpy(mem_buffer_data(right), second, sizeof(second) - 1u);
+  mem_set_used(left, sizeof(first) - 1u);
+  mem_set_used(right, sizeof(second) - 1u);
+  left_slice = mem_slice(left, 0u, sizeof(first) - 1u);
+  right_slice = mem_slice(right, 0u, sizeof(second) - 1u);
+  if (!left_slice.buffer || !right_slice.buffer) {
+    mem_slice_release(&left_slice);
+    mem_slice_release(&right_slice);
+    mem_buffer_release(left);
+    mem_buffer_release(right);
+    return SALTS_EPROTO;
+  }
+
+  output->segments[0] = left_slice;
+  output->segments[1] = right_slice;
+  output->segment_count = 2u;
+  output->data_size = (sizeof(first) - 1u) + (sizeof(second) - 1u);
+  output->metadata.message_type = UINT32_C(0x8001);
+  output->metadata.sequence =
+      request->data_size > 1u ? (uint64_t)request->data[1] : 1u;
+  memcpy(output->metadata.device_id, "013800138000", sizeof("013800138000"));
+  memcpy(output->metadata.operation, "ack", sizeof("ack"));
+
+  mem_buffer_release(left);
+  mem_buffer_release(right);
+  return SALTS_OK;
+}
+
+static turbo_flow_protocol_t *intake_test_reply_protocol(void) {
+  turbo_flow_protocol_open_request_t request =
+      TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
+  turbo_flow_protocol_codec_ops_t ops = TURBO_FLOW_PROTOCOL_CODEC_OPS_INIT;
+  turbo_flow_protocol_t *protocol = NULL;
+  request.protocol = TURBO_FLOW_PROTOCOL_JTT_808;
+  request.protocol_version = "2019-A1";
+  request.max_frame_size = 64u;
+  ops.inspect = intake_test_jtt_inspect;
+  ops.reply = intake_test_reply_raw;
+  ops.reply_slices = intake_test_reply_slices;
+  check_equal(turbo_flow_protocol_create(
+                  &request, "jtt808-reply-test", "2019-A1",
+                  TURBO_FLOW_PROTOCOL_CAP_INGRESS |
+                      TURBO_FLOW_PROTOCOL_CAP_EGRESS |
+                      TURBO_FLOW_PROTOCOL_CAP_RAW_PRESERVE |
+                      TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY,
+                  &ops, NULL, &protocol),
+              SALTS_OK);
+  check_not_null(protocol);
+  return protocol;
+}
+
 static int intake_test_jtt_inspect(void *ctx, const char *configured_version,
                                    const turbo_flow_protocol_frame_view_t *frame,
                                    turbo_flow_protocol_metadata_t *metadata) {
@@ -234,11 +405,12 @@ static turbo_flow_inbox_t intake_test_inbox(size_t max_records) {
   return inbox;
 }
 
-static turbo_flow_t *intake_test_flow_with_mapper(
+static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
     flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
     turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
     const turbo_flow_protocol_mapper_v1_t *mapper,
     const turbo_flow_protocol_mapper_contract_t *mapper_contract,
+    intake_reply_probe_t *reply_probe,
     turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
   static const char graph[] = "source input\n"
                               "stage decode adapter protocol.decode\n"
@@ -269,6 +441,26 @@ static turbo_flow_t *intake_test_flow_with_mapper(
   check_equal(turbo_flow_compile(downstream), SALTS_OK);
   check_equal(turbo_flow_start(downstream), SALTS_OK);
   check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+  if (reply_probe) {
+    turbo_flow_adapter_ops_t adapter = {0};
+    turbo_flow_adapter_schema_t schema = {0};
+    turbo_flow_transport_reply_provider_ops_t reply =
+        TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+    schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+    schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+    schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+    check_equal(turbo_flow_register_adapter_ex(
+                    flow, settings->source_adapter_name,
+                    &adapter, reply_probe, &schema),
+                SALTS_OK);
+    reply.capture = intake_reply_capture;
+    reply.send = intake_reply_send;
+    reply.take_terminal = intake_reply_take;
+    reply.send_slices = intake_reply_send_slices;
+    check_equal(turbo_flow_register_adapter_transport_reply(
+                    flow, settings->source_adapter_name, &reply, reply_probe),
+                SALTS_OK);
+  }
   memset(&config, 0, sizeof(config));
   config.flow = flow;
   config.adapter_name = "protocol.decode";
@@ -285,6 +477,17 @@ static turbo_flow_t *intake_test_flow_with_mapper(
   check_equal(turbo_flow_start(flow), SALTS_OK);
   *downstream_out = downstream;
   return flow;
+}
+
+static turbo_flow_t *intake_test_flow_with_mapper(
+    flow_protocol_network_intake_sink_t **sink_out, turbo_flow_protocol_t *protocol,
+    turbo_flow_inbox_t *inbox, const flow_protocol_network_intake_settings_t *settings,
+    const turbo_flow_protocol_mapper_v1_t *mapper,
+    const turbo_flow_protocol_mapper_contract_t *mapper_contract,
+    turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
+  return intake_test_flow_with_mapper_and_reply(
+      sink_out, protocol, inbox, settings, mapper, mapper_contract, NULL,
+      downstream_out, binding_out);
 }
 
 static turbo_flow_t *intake_test_flow(
@@ -424,6 +627,54 @@ static void intake_destroy(turbo_flow_t *flow, flow_protocol_network_intake_sink
 }
 
 spec("protocol network intake core") {
+  it("keeps retained protocol reply spans through the listener transport queue") {
+    static const uint8_t frame[] = {0x7eu, 0x02u, 0x7eu};
+    turbo_flow_protocol_t *protocol = intake_test_reply_protocol();
+    flow_protocol_network_intake_settings_t settings =
+        intake_test_settings(TURBO_FLOW_PROTOCOL_JTT_808);
+    turbo_flow_inbox_t inbox = intake_test_inbox(1u);
+    flow_protocol_network_intake_sink_t *sink = NULL;
+    turbo_flow_t *downstream = NULL;
+    turbo_flow_durable_buffer_binding_t *binding = NULL;
+    intake_reply_probe_t reply = {0};
+    turbo_flow_t *flow;
+    intake_completion_probe_t completion;
+    flow_protocol_network_intake_sink_metrics_t metrics;
+    turbo_flow_msg_t message;
+
+    settings.reply_point =
+        TURBO_FLOW_PROTOCOL_NETWORK_REPLY_DURABLE_ADMISSION;
+    settings.reply_max_encoded_bytes = 64u;
+    flow = intake_test_flow_with_mapper_and_reply(
+        &sink, protocol, &inbox, &settings, NULL, NULL, &reply,
+        &downstream, &binding);
+
+    intake_probe_init(&completion);
+    message = intake_listener_message(30u, 1u, 1u, frame, sizeof(frame));
+    check_equal(intake_publish(flow, &message, &completion), SALTS_OK);
+    intake_wait_calls(&completion, 1u);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire),
+                SALTS_OK);
+
+    check_equal(flow_protocol_network_intake_sink_retry(sink), SALTS_OK);
+    check_equal(reply.slice_sends, (size_t)1u);
+    check_equal(reply.raw_sends, (size_t)0u);
+    check_equal(reply.last_segment_count, (size_t)2u);
+    check_equal(reply.bytes_size, sizeof("sg-reply") - 1u);
+    check_equal(memcmp(reply.bytes, "sg-reply", sizeof("sg-reply") - 1u), 0);
+
+    check_equal(flow_protocol_network_intake_sink_retry(sink), SALTS_OK);
+    memset(&metrics, 0, sizeof(metrics));
+    flow_protocol_network_intake_sink_metrics(sink, &metrics);
+    check_equal(metrics.replies_admitted, (uint64_t)1u);
+    check_equal(metrics.reply_terminals, (uint64_t)1u);
+    check_equal(metrics.reply_failures, (uint64_t)0u);
+    check_equal(metrics.pending_replies, (size_t)0u);
+
+    intake_free_one_record(&inbox);
+    intake_destroy(flow, sink, downstream, binding, protocol, &inbox);
+  }
+
   it("retains a capacity-blocked JT/T frame and retries it without re-feeding bytes") {
     static const uint8_t first_half[] = {0x7eu, 0x01u};
     static const uint8_t second_half[] = {0x7eu};
