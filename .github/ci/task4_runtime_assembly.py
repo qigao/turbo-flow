@@ -14,7 +14,8 @@ if sum((args.turbodb, args.rulesforge, args.rulesforge_e2e, args.materializer,
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
-assert "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT)" in text
+assert "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT)" in text
+assert "DATABIND_ROOT" not in text
 assert "include(TurboFlowRequireCHTTP)" in text
 text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
