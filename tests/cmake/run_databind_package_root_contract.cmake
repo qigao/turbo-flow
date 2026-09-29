@@ -264,7 +264,7 @@ endif()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/rulesforge-provider.yml"
           rulesforge_workflow)
 foreach(required_fragment IN ITEMS
-        "restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
+        "restore-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
         "VCPKG_INSTALL_OPTIONS=--only-binarycaching"
         "TURBO_FLOW_IDLC_HOST_EXECUTABLE"
         "test -z \"\${DATABIND_ROOT:-}\"")
@@ -274,6 +274,7 @@ foreach(required_fragment IN ITEMS
   endif()
 endforeach()
 foreach(forbidden_fragment IN ITEMS
+        "restore-versioned-native-sdks.ps1"
         "Checkout pinned Salts"
         "Checkout pinned SaltsUtils"
         "Checkout pinned RulesForge"
