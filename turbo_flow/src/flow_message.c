@@ -553,6 +553,7 @@ int flow_msg_commit_trivial_projection_in_place(
    * introduced at the TurboFlow boundary.
    */
   memcpy(projection->value, output_value, output_data->storage_type->size);
+  projection->data = output_data;
   return SALTS_OK;
 }
 
