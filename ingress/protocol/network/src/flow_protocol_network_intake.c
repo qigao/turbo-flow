@@ -44,7 +44,9 @@ static int intake_owner_public_validate(
     const turbo_flow_protocol_network_intake_config_t *config, turbo_flow_t **flow_io,
     turbo_flow_protocol_network_intake_t **out, turbo_flow_config_error_t *error) {
   if (out) *out = NULL;
-  if (!config || config->size != sizeof(*config) ||
+  if (!config || config->size < TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE ||
+      (config->size > TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE &&
+       config->size < sizeof(*config)) ||
       config->version != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION || !config->catalog ||
       !config->resolved || !config->downstream_flow ||
       turbo_flow_state(config->downstream_flow) != TURBO_FLOW_STATE_STARTED ||
@@ -59,6 +61,38 @@ static int intake_owner_public_validate(
     return intake_owner_error(error, SALTS_EINVAL, "$.graph",
                               "ProtocolNetworkIntake requires one parsed intake Flow");
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  return SALTS_OK;
+}
+
+static int intake_owner_reply_policy(
+    const turbo_flow_protocol_network_intake_config_t *config,
+    flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_config_error_t *error) {
+  const turbo_flow_protocol_network_reply_policy_t *policy = NULL;
+  if (!config || !settings) return SALTS_EINVAL;
+  settings->reply_point = TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE;
+  settings->reply_max_encoded_bytes = 0u;
+  if (config->size >= sizeof(*config)) policy = config->reply_policy;
+  if (!policy) return SALTS_OK;
+  if (policy->size < sizeof(*policy) ||
+      policy->version != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_API_VERSION)
+    return intake_owner_error(error, SALTS_EINVAL, "$.protocol_network_intake.reply",
+                              "invalid protocol reply policy ABI");
+  if (policy->point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    if (policy->max_encoded_bytes != 0u)
+      return intake_owner_error(error, SALTS_EINVAL, "$.protocol_network_intake.reply",
+                                "disabled reply policy must not reserve encoded bytes");
+    return SALTS_OK;
+  }
+  if (policy->point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_DURABLE_ADMISSION)
+    return intake_owner_error(error, SALTS_ENOTSUP, "$.protocol_network_intake.reply",
+                              "unsupported protocol reply settlement point");
+  if (policy->max_encoded_bytes == 0u ||
+      policy->max_encoded_bytes > settings->max_frame_size)
+    return intake_owner_error(error, SALTS_ERANGE, "$.protocol_network_intake.reply",
+                              "reply bound must fit the configured protocol frame bound");
+  settings->reply_point = policy->point;
+  settings->reply_max_encoded_bytes = policy->max_encoded_bytes;
   return SALTS_OK;
 }
 
@@ -376,6 +410,11 @@ int turbo_flow_protocol_network_intake_create(
     free(intake);
     return rc;
   }
+  rc = intake_owner_reply_policy(config, &intake->settings, error);
+  if (rc != SALTS_OK) {
+    free(intake);
+    return rc;
+  }
   rc = intake_owner_product_catalog(config->catalog, &catalog, error);
   if (rc != SALTS_OK) {
     free(intake);
@@ -425,6 +464,16 @@ int turbo_flow_protocol_network_intake_create(
     intake_owner_pretransfer_cleanup(intake);
     return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_EPROTO, "$.protocol",
                               "configured protocol owner returned no matching instance");
+  }
+  if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    turbo_flow_protocol_info_t info = TURBO_FLOW_PROTOCOL_INFO_INIT;
+    rc = turbo_flow_protocol_get_info(intake->protocol, &info);
+    if (rc != SALTS_OK ||
+        (info.capabilities & TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY) == 0u) {
+      intake_owner_pretransfer_cleanup(intake);
+      return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.protocol.reply",
+                                "configured protocol does not support codec-owned replies");
+    }
   }
   rc = intake_owner_mapper_bind(intake->catalog, &intake->settings, &intake->mapper,
                                 &intake->mapper_contract, error);
@@ -483,6 +532,15 @@ int turbo_flow_protocol_network_intake_create(
     return intake_owner_error(error, SALTS_EPROTO, "$.adapters.owner",
                               "provider returned an invalid Product owner vtable");
   }
+  if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    rc = turbo_flow_transport_reply_supported(intake->flow,
+                                              intake->settings.source_adapter_name);
+    if (rc != SALTS_OK) {
+      intake_owner_failed_create_cleanup(intake);
+      return intake_owner_error(error, rc, "$.adapters.reply",
+                                "configured Source has no generation-fenced reply capability");
+    }
+  }
 
   rc = turbo_flow_compile(intake->flow);
   if (rc != SALTS_OK) {
@@ -539,6 +597,8 @@ int turbo_flow_protocol_network_intake_poll(
   ++intake->source_polls;
   rc = intake->source_owner.poll(intake->source_owner.ctx, timeout_ms);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
+  rc = flow_protocol_network_intake_sink_retry(intake->sink);
+  if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
   rc = intake_owner_refresh_endpoint(intake);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
   memset(&metrics, 0, sizeof(metrics));
@@ -582,6 +642,10 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   if (intake->flow &&
       (flow_state == TURBO_FLOW_STATE_STARTED || flow_state == TURBO_FLOW_STATE_FAILED)) {
     rc = turbo_flow_stop(intake->flow);
+    if (rc != SALTS_OK && first_status == SALTS_OK) first_status = rc;
+  }
+  if (intake->sink) {
+    rc = flow_protocol_network_intake_sink_retry(intake->sink);
     if (rc != SALTS_OK && first_status == SALTS_OK) first_status = rc;
   }
   if (first_status == SALTS_OK) {
