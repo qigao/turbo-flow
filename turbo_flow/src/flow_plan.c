@@ -332,6 +332,8 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
       return flow_set_error(flow, SALTS_EPROTO, 0, 0,
                             "required CFlow backend received an invalid candidate plan");
     }
+    /* Inactive composite templates are declarations, not runtime backend obligations. */
+    if (!stage->operation_resolved) continue;
     if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
                         FLOW_RUNTIME_NODE_BUFFER)) != 0u) {
       continue;
