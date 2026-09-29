@@ -841,10 +841,12 @@ int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
-int flow_plan_owned_resources_reserve(turbo_flow_t *flow, size_t additional);
-int flow_plan_owned_resource_stage(turbo_flow_t *flow, void *ctx,
-                                   flow_plan_owned_resource_release_fn release);
-int flow_plan_owned_resource_unstage_last(turbo_flow_t *flow, void *ctx);
+TURBO_FLOW_API int flow_plan_owned_resources_reserve(turbo_flow_t *flow, size_t additional);
+TURBO_FLOW_API int flow_plan_owned_resource_stage(
+    turbo_flow_t *flow, void *ctx,
+    flow_plan_owned_resource_release_fn release);
+TURBO_FLOW_API int flow_plan_owned_resource_unstage_last(
+    turbo_flow_t *flow, void *ctx);
 void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
