@@ -96,6 +96,15 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   memset(plan, 0, sizeof(*plan));
 }
 
+int flow_plan_owned_resources_reserve(turbo_flow_t *flow, size_t additional) {
+  size_t required;
+  if (!flow || flow->compiled_plan.sealed) return SALTS_EINVAL;
+  if (additional > SIZE_MAX - vec_size(&flow->pending_plan_resources))
+    return SALTS_ERANGE;
+  required = vec_size(&flow->pending_plan_resources) + additional;
+  return turbo_flow_stl_error(vec_reserve(&flow->pending_plan_resources, required));
+}
+
 int flow_plan_owned_resource_stage(
     turbo_flow_t *flow, void *ctx,
     flow_plan_owned_resource_release_fn release) {
