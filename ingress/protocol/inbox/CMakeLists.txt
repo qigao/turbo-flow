@@ -16,16 +16,16 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_protocol_inbox_generated_dir}"
   COMMAND
-    "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
     "${_protocol_inbox_schema}"
     --lang c
     --output "${_protocol_inbox_generated_header}"
     --source-output "${_protocol_inbox_generated_source}"
     --dsl-output "${_protocol_inbox_generated_rfl}"
   DEPENDS "${_protocol_inbox_schema}"
-          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+          "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Generating canonical protocol Inbox TBE and RulesForge bindings"
+  COMMENT "Generating canonical protocol Inbox IDL and RulesForge bindings"
   VERBATIM)
 
 add_custom_command(
@@ -33,12 +33,12 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_protocol_inbox_generated_dir}"
   COMMAND
-    "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
     "${_protocol_inbox_schema}"
     --lang ts
     --output "${_protocol_inbox_generated_ts}"
   DEPENDS "${_protocol_inbox_schema}"
-          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+          "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Generating protocol Inbox TurboScript declarations"
   VERBATIM)

@@ -47,7 +47,7 @@ include(Sanitizers)
 include(CmakeUtils)
 
 set(_turbo_flow_required_dependency_roots
-    SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT)
+    SALTS_ROOT SALTS_UTILS_ROOT)
 if(TURBO_FLOW_BUILD_RULESFORGE_PLUGIN)
   list(APPEND _turbo_flow_required_dependency_roots RULES_FORGE_ROOT)
 endif()
@@ -67,43 +67,27 @@ foreach(_turbo_flow_dependency_root IN LISTS
   endif()
 endforeach()
 
-find_package(Salts CONFIG REQUIRED
-             PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
-find_package(SaltsUtils CONFIG REQUIRED
-             PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" TURBO_FLOW_SALTS_ROOT)
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_ROOT)
 
-foreach(_turbo_flow_stale_databind_target IN ITEMS
-        Salts::DataBind
-        Salts::DataBindCore
-        Salts::DataBindCMeta
-        Salts::DataBindCFlow
-        Salts::TbeSchema)
-  if(TARGET ${_turbo_flow_stale_databind_target})
-    message(FATAL_ERROR
-            "SALTS_UTILS_ROOT still owns DataBind target: ${_turbo_flow_stale_databind_target}")
-  endif()
-endforeach()
-unset(_turbo_flow_stale_databind_target)
+find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
+             PATHS "${TURBO_FLOW_SALTS_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+             PATHS "${TURBO_FLOW_SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 
-find_package(DataBind 3 CONFIG REQUIRED
-             PATHS "$ENV{DATABIND_ROOT}" NO_DEFAULT_PATH)
-if(NOT TARGET Salts::DataBind OR NOT TARGET Salts::TbeSchema)
+file(REAL_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_REAL_ROOT)
+file(REAL_PATH "${SaltsUtils_DIR}" TURBO_FLOW_SALTS_UTILS_REAL_DIR)
+cmake_path(IS_PREFIX TURBO_FLOW_SALTS_UTILS_REAL_ROOT
+           "${TURBO_FLOW_SALTS_UTILS_REAL_DIR}" NORMALIZE
+           TURBO_FLOW_SALTS_UTILS_IS_WITHIN_ROOT)
+if(NOT TURBO_FLOW_SALTS_UTILS_IS_WITHIN_ROOT)
   message(FATAL_ERROR
-          "DATABIND_ROOT does not provide the canonical DataBind targets")
+          "SaltsUtils resolved outside SALTS_UTILS_ROOT: ${SaltsUtils_DIR}")
 endif()
-file(REAL_PATH "$ENV{SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_REAL_ROOT)
-file(REAL_PATH "$ENV{DATABIND_ROOT}" TURBO_FLOW_DATABIND_REAL_ROOT)
-if(TURBO_FLOW_DATABIND_REAL_ROOT STREQUAL TURBO_FLOW_SALTS_UTILS_REAL_ROOT)
+
+if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR
-          "DATABIND_ROOT must be physically distinct from SALTS_UTILS_ROOT")
-endif()
-file(REAL_PATH "${DataBind_DIR}" TURBO_FLOW_DATABIND_REAL_DIR)
-cmake_path(IS_PREFIX TURBO_FLOW_DATABIND_REAL_ROOT
-           "${TURBO_FLOW_DATABIND_REAL_DIR}" NORMALIZE
-           TURBO_FLOW_DATABIND_IS_WITHIN_ROOT)
-if(NOT TURBO_FLOW_DATABIND_IS_WITHIN_ROOT)
-  message(FATAL_ERROR
-          "DataBind resolved outside DATABIND_ROOT: ${DataBind_DIR}")
+          "SaltsUtils 4.1.3 package is missing required target Salts::DataBind")
 endif()
 
 include(TurboFlowRequireCNet)
@@ -112,8 +96,10 @@ include(TurboFlowRequireCHTTP)
 find_package(xxHash CONFIG REQUIRED)
 
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
-  find_package(Orm CONFIG REQUIRED PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
-  file(REAL_PATH "$ENV{TURBODB_ROOT}" TURBO_FLOW_TURBODB_REAL_ROOT)
+  file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" TURBO_FLOW_TURBODB_ROOT)
+  find_package(Orm 2.1.0 EXACT CONFIG REQUIRED
+               PATHS "${TURBO_FLOW_TURBODB_ROOT}" NO_DEFAULT_PATH)
+  file(REAL_PATH "${TURBO_FLOW_TURBODB_ROOT}" TURBO_FLOW_TURBODB_REAL_ROOT)
   file(REAL_PATH "${Orm_DIR}" TURBO_FLOW_ORM_REAL_DIR)
   cmake_path(IS_PREFIX TURBO_FLOW_TURBODB_REAL_ROOT
              "${TURBO_FLOW_ORM_REAL_DIR}" NORMALIZE
@@ -131,9 +117,8 @@ if(WIN32)
     REQUIRED)
 
   set(TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS
-      "$ENV{SALTS_ROOT}"
-      "$ENV{SALTS_UTILS_ROOT}"
-      "$ENV{DATABIND_ROOT}")
+      "${TURBO_FLOW_SALTS_ROOT}"
+      "${TURBO_FLOW_SALTS_UTILS_ROOT}")
   if(TURBO_FLOW_BUILD_RULESFORGE_PLUGIN)
     list(APPEND TURBO_FLOW_EXTERNAL_PACKAGE_ROOTS "$ENV{RULES_FORGE_ROOT}")
   endif()

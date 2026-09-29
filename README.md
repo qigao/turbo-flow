@@ -135,13 +135,27 @@ Reactive execution is demand-driven and bounded. Waiting resumes only through a 
 
 ## Dependency roots
 
-The build resolves dependencies from explicit installed SDK roots and fails if required roots are absent.
+The build resolves exact published producer SDKs from explicit installed roots and fails if required roots are absent or resolve outside those roots.
 
-Current required roots include:
+Current published dependency baseline is:
+
+- **Salts.Native 1.8.3**
+- **SaltsUtils.Native 4.1.3** (including DataBind)
+- **RulesForge.Native 0.9.0** when the RulesForge plugin/provider is enabled
+- **TurboDB.Native 1.0.0** when the TurboDB adapter is enabled
+
+Required roots for the base build are:
 
 ```text
 SALTS_ROOT
 SALTS_UTILS_ROOT
+```
+
+There is no independent `DATABIND_ROOT`; DataBind is resolved only through the selected SaltsUtils package.
+
+When the RulesForge plugin/provider is enabled:
+
+```text
 RULES_FORGE_ROOT
 ```
 
