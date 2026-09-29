@@ -450,6 +450,39 @@ spec("cnet_plugin") {
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
     check_equal(turbo_flow_managed_boundary_count(turbo_flow_plugin_generation_flow(generation)),
                 6u);
+    {
+      turbo_flow_transport_reply_slices_request_t request =
+          TURBO_FLOW_TRANSPORT_REPLY_SLICES_REQUEST_INIT;
+      cnet_connection fake_connection = {1u, 1u};
+      mem_buffer_t *buffer = mem_get_buffer(mem_global(), 1u);
+      mem_slice_t segment = {0};
+      uint8_t byte = 0x2au;
+
+      check_not_null(buffer);
+      memcpy(mem_buffer_data(buffer), &byte, 1u);
+      mem_set_used(buffer, 1u);
+      segment = mem_slice(buffer, 0u, 1u);
+      check_not_null(segment.buffer);
+      request.session.token_size = sizeof(fake_connection);
+      memcpy(request.session.token, &fake_connection, sizeof(fake_connection));
+      request.segments = &segment;
+      request.segment_count = 1u;
+      request.tag = 77u;
+
+      /* Listener reply SG reaches the concrete owner; the fake generation is absent. */
+      check_equal(turbo_flow_transport_reply_send_slices(
+                      turbo_flow_plugin_generation_flow(generation),
+                      "listener.source", &request),
+                  SALTS_ENOENT);
+      /* Packet replies deliberately remain on the contiguous packet contract. */
+      check_equal(turbo_flow_transport_reply_send_slices(
+                      turbo_flow_plugin_generation_flow(generation),
+                      "packet.source", &request),
+                  SALTS_ENOTSUP);
+
+      mem_slice_release(&segment);
+      mem_buffer_release(buffer);
+    }
     size_t source_boundary_count = 0u;
     size_t sink_boundary_count = 0u;
     bool packet_sink_found = false;

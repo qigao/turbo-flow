@@ -1196,12 +1196,27 @@ typedef struct turbo_flow_transport_reply_terminal_s {
    TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_NONE, 0u,           \
    SALTS_OK, 0u}
 
+typedef struct turbo_flow_transport_reply_slices_request_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_transport_reply_session_t session;
+  const mem_slice_t *segments;
+  size_t segment_count;
+  uint64_t tag;
+} turbo_flow_transport_reply_slices_request_t;
+
+#define TURBO_FLOW_TRANSPORT_REPLY_SLICES_REQUEST_INIT                                             \
+  {sizeof(turbo_flow_transport_reply_slices_request_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION,     \
+   TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, NULL, 0u, 0u}
+
 typedef int (*turbo_flow_transport_reply_capture_fn)(
     void *ctx, const turbo_flow_msg_t *message, turbo_flow_transport_reply_session_t *session);
 typedef int (*turbo_flow_transport_reply_send_fn)(
     void *ctx, const turbo_flow_transport_reply_request_t *request);
 typedef int (*turbo_flow_transport_reply_take_terminal_fn)(
     void *ctx, turbo_flow_transport_reply_terminal_t *terminal);
+typedef int (*turbo_flow_transport_reply_send_slices_fn)(
+    void *ctx, const turbo_flow_transport_reply_slices_request_t *request);
 
 /**
  * Optional Source-owned generation-fenced reply capability.
@@ -1209,6 +1224,10 @@ typedef int (*turbo_flow_transport_reply_take_terminal_fn)(
  * A successful send is admission only. Exactly one later terminal must be
  * observable for every successfully admitted request. Failed admission retains
  * no request and creates no terminal.
+ *
+ * send_slices is an additive size-gated tail callback. Providers compiled
+ * against the original V1 layout remain valid; new callers may use retained
+ * slices only when the registered provider exposes this callback.
  */
 typedef struct turbo_flow_transport_reply_provider_ops_s {
   size_t size;
@@ -1216,11 +1235,14 @@ typedef struct turbo_flow_transport_reply_provider_ops_s {
   turbo_flow_transport_reply_capture_fn capture;
   turbo_flow_transport_reply_send_fn send;
   turbo_flow_transport_reply_take_terminal_fn take_terminal;
+  turbo_flow_transport_reply_send_slices_fn send_slices;
 } turbo_flow_transport_reply_provider_ops_t;
 
+#define TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_V1_SIZE                                            \
+  offsetof(turbo_flow_transport_reply_provider_ops_t, send_slices)
 #define TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT                                               \
   {sizeof(turbo_flow_transport_reply_provider_ops_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION,       \
-   NULL, NULL, NULL}
+   NULL, NULL, NULL, NULL}
 
 /** Attach one reply capability to an already registered Source adapter before compile. */
 TURBO_FLOW_C_API int turbo_flow_register_adapter_transport_reply(
@@ -1236,10 +1258,21 @@ TURBO_FLOW_C_API int turbo_flow_transport_reply_capture(
     const turbo_flow_t *flow, const char *adapter_name, const turbo_flow_msg_t *message,
     turbo_flow_transport_reply_session_t *session);
 
-/** Admit one encoded reply to the exact captured transport generation. */
+/** Admit one encoded contiguous reply to the exact captured transport generation. */
 TURBO_FLOW_C_API int turbo_flow_transport_reply_send(
     const turbo_flow_t *flow, const char *adapter_name,
     const turbo_flow_transport_reply_request_t *request);
+
+/**
+ * Admit one retained scatter/gather reply to the exact captured transport generation.
+ *
+ * Each non-empty segment must be a canonical mem_slice_t view. Successful
+ * admission means the provider has retained all required backing before return.
+ * Returns SALTS_ENOTSUP when the provider exposes only the legacy contiguous path.
+ */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_send_slices(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_slices_request_t *request);
 
 /** Consume one authoritative terminal; returns SALTS_ENOENT when none is ready. */
 TURBO_FLOW_C_API int turbo_flow_transport_reply_take_terminal(

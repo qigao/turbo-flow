@@ -706,6 +706,42 @@ static void listener_source_refresh_run(turbo_flow_cnet_listener_source_t *sourc
     listener_source_fail(source, result.status, 0, "graph_run");
 }
 
+static int listener_source_reply_prepare(
+    turbo_flow_cnet_listener_source_t *source, cnet_connection connection,
+    size_t data_size, uint64_t tag, listener_source_slot_t **slot_out) {
+  listener_source_slot_t *slot;
+  if (slot_out) *slot_out = NULL;
+  if (!source || connection.generation == 0u || data_size == 0u || tag == 0u || !slot_out)
+    return SALTS_EINVAL;
+  if (source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED) return source->status;
+  if (source->state != TURBO_FLOW_CNET_LISTENER_SOURCE_LISTENING ||
+      !source->client_initialized)
+    return SALTS_ESHUTDOWN;
+  if (data_size > source->max_send_bytes) return SALTS_EMSGSIZE;
+  slot = listener_source_find_connection(source, connection);
+  if (!slot || !slot->connected || slot->closing) return SALTS_ENOENT;
+  if (slot->reply_send_pending || slot->reply_terminal_ready) return SALTS_EBUSY;
+  *slot_out = slot;
+  return SALTS_OK;
+}
+
+static int listener_source_reply_slice_valid(const mem_slice_t *slice) {
+  const char *base;
+  uintptr_t base_address;
+  uintptr_t data_address;
+  size_t used;
+  size_t offset;
+  if (!slice || !slice->buffer || !slice->data || slice->length == 0u) return 0;
+  base = mem_buffer_const_data(slice->buffer);
+  used = mem_buffer_used(slice->buffer);
+  if (!base || used == 0u) return 0;
+  base_address = (uintptr_t)base;
+  data_address = (uintptr_t)slice->data;
+  if (data_address < base_address) return 0;
+  offset = (size_t)(data_address - base_address);
+  return offset < used && slice->length <= used - offset;
+}
+
 int turbo_flow_cnet_listener_source_reply_send(
     turbo_flow_cnet_listener_source_t *source,
     const turbo_flow_cnet_listener_reply_request_t *request) {
@@ -715,22 +751,15 @@ int turbo_flow_cnet_listener_source_reply_send(
   int status;
   if (!source || !request || request->size != sizeof(*request) ||
       request->version != TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION ||
-      request->connection.generation == 0u || !request->data ||
-      request->data_size == 0u || request->tag == 0u)
+      !request->data)
     return SALTS_EINVAL;
-  if (source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED) return source->status;
-  if (source->state != TURBO_FLOW_CNET_LISTENER_SOURCE_LISTENING ||
-      !source->client_initialized)
-    return SALTS_ESHUTDOWN;
-  if (request->data_size > source->max_send_bytes) return SALTS_EMSGSIZE;
-  slot = listener_source_find_connection(source, request->connection);
-  if (!slot || !slot->connected || slot->closing) return SALTS_ENOENT;
-  if (slot->reply_send_pending || slot->reply_terminal_ready) return SALTS_EBUSY;
+  status = listener_source_reply_prepare(source, request->connection,
+                                         request->data_size, request->tag, &slot);
+  if (status != SALTS_OK) return status;
 
   /*
-   * The public reply request borrows raw bytes and carries no retained owner.
-   * Preserve copy-on-admission at this legacy raw-pointer boundary, then enter
-   * CNet through its canonical retained scatter/gather path.
+   * The legacy public reply request borrows raw bytes and carries no retained
+   * owner. Preserve copy-on-admission, then enter the same retained SG path.
    */
   payload = mem_get_buffer(mem_global(), request->data_size);
   if (!payload) return SALTS_ENOMEM;
@@ -748,6 +777,35 @@ int turbo_flow_cnet_listener_source_reply_send(
   if (status != SALTS_OK) return status;
   slot->reply_send_pending = true;
   slot->reply_send_size = request->data_size;
+  slot->reply_tag = request->tag;
+  return SALTS_OK;
+}
+
+int turbo_flow_cnet_listener_source_reply_send_slices(
+    turbo_flow_cnet_listener_source_t *source,
+    const turbo_flow_cnet_listener_reply_slices_request_t *request) {
+  listener_source_slot_t *slot;
+  size_t total = 0u;
+  int status;
+  if (!source || !request || request->size != sizeof(*request) ||
+      request->version != TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION ||
+      !request->segments || request->segment_count == 0u ||
+      request->segment_count > CNET_RETAINED_VECTOR_MAX)
+    return SALTS_EINVAL;
+  for (size_t i = 0u; i < request->segment_count; ++i) {
+    if (!listener_source_reply_slice_valid(&request->segments[i]) ||
+        total > SIZE_MAX - request->segments[i].length)
+      return SALTS_EINVAL;
+    total += request->segments[i].length;
+  }
+  status = listener_source_reply_prepare(source, request->connection,
+                                         total, request->tag, &slot);
+  if (status != SALTS_OK) return status;
+  status = cnet_send_slicev(&source->client, slot->connection,
+                            request->segments, request->segment_count);
+  if (status != SALTS_OK) return status;
+  slot->reply_send_pending = true;
+  slot->reply_send_size = total;
   slot->reply_tag = request->tag;
   return SALTS_OK;
 }

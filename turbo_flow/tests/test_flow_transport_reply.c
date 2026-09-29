@@ -7,6 +7,7 @@ typedef struct reply_fixture_s {
   turbo_flow_transport_reply_session_t captured;
   turbo_flow_transport_reply_terminal_t terminal;
   size_t sends;
+  size_t slice_sends;
   int terminal_ready;
 } reply_fixture_t;
 
@@ -37,6 +38,25 @@ static int reply_send(void *ctx, const turbo_flow_transport_reply_request_t *req
   return SALTS_OK;
 }
 
+static int reply_send_slices(
+    void *ctx, const turbo_flow_transport_reply_slices_request_t *request) {
+  reply_fixture_t *fixture = (reply_fixture_t *)ctx;
+  size_t total = 0u;
+  if (!fixture || !request || fixture->terminal_ready) return SALTS_EBUSY;
+  for (size_t i = 0u; i < request->segment_count; ++i)
+    total += request->segments[i].length;
+  ++fixture->slice_sends;
+  fixture->terminal =
+      (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  fixture->terminal.session = request->session;
+  fixture->terminal.kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+  fixture->terminal.data_size = total;
+  fixture->terminal.status = SALTS_OK;
+  fixture->terminal.tag = request->tag;
+  fixture->terminal_ready = 1;
+  return SALTS_OK;
+}
+
 static int reply_take(void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
   reply_fixture_t *fixture = (reply_fixture_t *)ctx;
   if (!fixture || !terminal) return SALTS_EINVAL;
@@ -60,6 +80,7 @@ static int register_source(turbo_flow_t *flow, reply_fixture_t *fixture) {
   reply.capture = reply_capture;
   reply.send = reply_send;
   reply.take_terminal = reply_take;
+  reply.send_slices = reply_send_slices;
   return turbo_flow_register_adapter_transport_reply(flow, "source.reply", &reply, fixture);
 }
 
@@ -102,6 +123,42 @@ spec("Turbo Flow transport reply capability") {
     check_equal(turbo_flow_transport_reply_take_terminal(flow, "source.reply", &terminal),
                 SALTS_ENOENT);
 
+    {
+      mem_buffer_t *header = mem_get_buffer(mem_global(), 3u);
+      mem_buffer_t *body = mem_get_buffer(mem_global(), 4u);
+      mem_slice_t segments[2] = {{0}};
+      turbo_flow_transport_reply_slices_request_t slices =
+          TURBO_FLOW_TRANSPORT_REPLY_SLICES_REQUEST_INIT;
+      check_not_null(header);
+      check_not_null(body);
+      memcpy(mem_buffer_data(header), "ack", 3u);
+      memcpy(mem_buffer_data(body), "-sg!", 4u);
+      mem_set_used(header, 3u);
+      mem_set_used(body, 4u);
+      segments[0] = mem_slice(header, 0u, 3u);
+      segments[1] = mem_slice(body, 0u, 4u);
+      check_not_null(segments[0].buffer);
+      check_not_null(segments[1].buffer);
+      slices.session = session;
+      slices.segments = segments;
+      slices.segment_count = 2u;
+      slices.tag = 100u;
+      check_equal(turbo_flow_transport_reply_send_slices(flow, "source.reply", &slices),
+                  SALTS_OK);
+      check_equal(fixture.slice_sends, (size_t)1u);
+      mem_slice_release(&segments[0]);
+      mem_slice_release(&segments[1]);
+      mem_buffer_release(header);
+      mem_buffer_release(body);
+
+      terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+      check_equal(turbo_flow_transport_reply_take_terminal(flow, "source.reply", &terminal),
+                  SALTS_OK);
+      check_equal(terminal.kind, TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT);
+      check_equal(terminal.data_size, (size_t)7u);
+      check_equal(terminal.tag, UINT64_C(100));
+    }
+
     turbo_flow_msg_cleanup(&message);
     turbo_flow_destroy(flow);
   }
@@ -132,6 +189,48 @@ spec("Turbo Flow transport reply capability") {
     reply.take_terminal = NULL;
     check_equal(turbo_flow_register_adapter_transport_reply(flow, "sink.only", &reply, &fixture),
                 SALTS_EINVAL);
+
+    {
+      turbo_flow_adapter_schema_t source_schema = {0};
+      turbo_flow_transport_reply_provider_ops_t legacy =
+          TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+      turbo_flow_transport_reply_slices_request_t slices =
+          TURBO_FLOW_TRANSPORT_REPLY_SLICES_REQUEST_INIT;
+      turbo_flow_transport_reply_session_t session =
+          TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+      mem_buffer_t *buffer = mem_get_buffer(mem_global(), 1u);
+      mem_slice_t segment = {0};
+      uint8_t value = 1u;
+
+      source_schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+      source_schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+      source_schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+      check_equal(turbo_flow_register_adapter_ex(flow, "source.legacy", &adapter, &fixture,
+                                                 &source_schema),
+                  SALTS_OK);
+      legacy.size = TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_V1_SIZE;
+      legacy.capture = reply_capture;
+      legacy.send = reply_send;
+      legacy.take_terminal = reply_take;
+      check_equal(turbo_flow_register_adapter_transport_reply(flow, "source.legacy", &legacy,
+                                                              &fixture),
+                  SALTS_OK);
+
+      check_not_null(buffer);
+      memcpy(mem_buffer_data(buffer), &value, 1u);
+      mem_set_used(buffer, 1u);
+      segment = mem_slice(buffer, 0u, 1u);
+      check_not_null(segment.buffer);
+      session.token_size = sizeof(uint64_t);
+      slices.session = session;
+      slices.segments = &segment;
+      slices.segment_count = 1u;
+      slices.tag = 101u;
+      check_equal(turbo_flow_transport_reply_send_slices(flow, "source.legacy", &slices),
+                  SALTS_ENOTSUP);
+      mem_slice_release(&segment);
+      mem_buffer_release(buffer);
+    }
     turbo_flow_destroy(flow);
   }
 }

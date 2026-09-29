@@ -291,6 +291,24 @@ typedef struct turbo_flow_cnet_listener_reply_request_s {
    0u,                                                                                             \
    0u}
 
+/** Retained scatter/gather bytes admitted to one exact listener generation. */
+typedef struct turbo_flow_cnet_listener_reply_slices_request_s {
+  size_t size;
+  uint32_t version;
+  cnet_connection connection;
+  const mem_slice_t *segments;
+  size_t segment_count;
+  uint64_t tag;
+} turbo_flow_cnet_listener_reply_slices_request_t;
+
+#define TURBO_FLOW_CNET_LISTENER_REPLY_SLICES_REQUEST_INIT                                         \
+  {sizeof(turbo_flow_cnet_listener_reply_slices_request_t),                                        \
+   TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION,                                                     \
+   {0u, 0u},                                                                                       \
+   NULL,                                                                                           \
+   0u,                                                                                             \
+   0u}
+
 typedef enum turbo_flow_cnet_listener_reply_terminal_kind_e {
   TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_NONE = 0,
   TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT,
@@ -330,6 +348,16 @@ typedef struct turbo_flow_cnet_listener_reply_terminal_s {
 TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_send(
     turbo_flow_cnet_listener_source_t *source,
     const turbo_flow_cnet_listener_reply_request_t *request);
+
+/**
+ * Retain and admit one scatter/gather reply to an exact accepted generation.
+ *
+ * The caller may release every supplied mem_slice_t immediately after SALTS_OK.
+ * CNet retains canonical backing until the authoritative logical-send terminal.
+ */
+TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_send_slices(
+    turbo_flow_cnet_listener_source_t *source,
+    const turbo_flow_cnet_listener_reply_slices_request_t *request);
 
 /**
  * Consume one completed listener reply terminal.
