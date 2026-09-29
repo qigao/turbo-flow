@@ -94,6 +94,8 @@ uint32_t flow_function_semantic_barriers(
     barriers |= FLOW_LOWERING_BARRIER_ASYNC;
   if ((effects & CMETA_EFFECT_IO) != 0u)
     barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
+  if ((effects & CMETA_EFFECT_MAY_FAIL) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_MAY_FAIL;
   if ((effects & CMETA_EFFECT_UNKNOWN) != 0u)
     barriers |= FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN;
 
@@ -151,6 +153,14 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
     barriers |= FLOW_LOWERING_BARRIER_RETRY;
     if (!function) effects |= CMETA_EFFECT_MAY_FAIL;
   }
+  if (runtime && runtime->deadline_ms != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_DEADLINE;
+  if (runtime && runtime->cancellation != TURBO_FLOW_CANCELLATION_NONE)
+    barriers |= FLOW_LOWERING_BARRIER_CANCELLATION;
+  if (runtime && runtime->backpressure != TURBO_FLOW_BACKPRESSURE_NONE)
+    barriers |= FLOW_LOWERING_BARRIER_BACKPRESSURE;
+  if (runtime && runtime->error_mode != TURBO_FLOW_ERROR_PROPAGATE)
+    barriers |= FLOW_LOWERING_BARRIER_ERROR_POLICY;
   if (runtime && runtime->settlement != 0u) {
     barriers |= FLOW_LOWERING_BARRIER_SETTLEMENT;
     if (!function) effects |= CMETA_EFFECT_IO;
