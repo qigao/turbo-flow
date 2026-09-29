@@ -471,9 +471,9 @@ bench_cflow_region_native_descriptor(const char *name) {
   operation.version = 1u;
   operation.domain = TURBO_FLOW_DOMAIN_DATA;
   operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_type = cmeta_data_int.stable_id;
+  operation.input_type = "Message";
   operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.output_type = cmeta_data_int.stable_id;
+  operation.output_type = "Message";
   operation.flags = TURBO_FLOW_OPERATION_STAGE;
   operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
@@ -692,8 +692,8 @@ static void bench_report_cflow_region_publish(
       completed ? (double)clone_count / (double)completed : 0.0;
 
   printf(
-      "BENCH_RESULT stage_plan=%s executor=%s workers=1 payload_bytes=%zu "
-      "iterations=%zu throughput_msg_s=%.2f p50_ns=%" PRIu64
+      "BENCH_RESULT stage_plan=%s executor=%s workers=1 payload_bytes=0 "
+      "projection_bytes=%zu iterations=%zu throughput_msg_s=%.2f p50_ns=%" PRIu64
       " p95_ns=%" PRIu64 " p99_ns=%" PRIu64
       " cpu_ns_per_msg=%.2f stage_callbacks_per_msg=%.2f "
       "projection_clone_allocs_per_msg=%.2f\n",
