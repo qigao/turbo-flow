@@ -566,6 +566,32 @@ suite("TurboFlow reflected operation semantics") {
     barriers = flow_function_semantic_barriers(
         FunctionMeta(reflected_join_out));
     check_bits(barriers, FLOW_LOWERING_BARRIER_NATIVE_MUTATION);
+    check_bits(barriers, FLOW_LOWERING_BARRIER_MAY_FAIL);
+  }
+
+  it("keeps operation deadlines outside direct CFlow regions") {
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.deadline");
+    const flow_stage_semantic_plan_t *semantics;
+
+    check_not_null(flow);
+    operation.runtime.deadline_ms = 1u;
+    check_true(register_unary_reflected(
+        flow, &operation,
+        FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment)));
+
+    semantics = compile_single_reflected_stage(flow, operation.name);
+    check_not_null(semantics);
+    check_true(semantics->reflected);
+    check_true(semantics->typed);
+    check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_DEADLINE);
+    check_false(semantics->lowering_candidate);
+    check_equal(semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
+
+    turbo_flow_destroy(flow);
   }
 
   it("applies FunctionDesc state barriers to the compiled stage") {
