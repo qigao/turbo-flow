@@ -275,8 +275,13 @@ spec("CNet listener source owner") {
         listener_source_test_config(flow, &listener, &server_client);
     turbo_flow_cnet_listener_reply_request_t reply =
         TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+    turbo_flow_cnet_listener_reply_slices_request_t reply_slices =
+        TURBO_FLOW_CNET_LISTENER_REPLY_SLICES_REQUEST_INIT;
     turbo_flow_cnet_listener_reply_terminal_t terminal =
         TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
+    mem_buffer_t *reply_head = NULL;
+    mem_buffer_t *reply_body = NULL;
+    mem_slice_t reply_segments[2] = {{0}};
     cnet_client client = {0};
     cnet_connection connection = {0};
     cnet_connect_options connect = {0};
@@ -335,11 +340,38 @@ spec("CNet listener source owner") {
     check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_ENOENT);
 
     check_equal(cnet_receive(&client, connection, 1u), SALTS_OK);
+    reply_head = mem_get_buffer(mem_global(), 2u);
+    reply_body = mem_get_buffer(mem_global(), 3u);
+    check_not_null(reply_head);
+    check_not_null(reply_body);
+    memcpy(mem_buffer_data(reply_head), "re", 2u);
+    memcpy(mem_buffer_data(reply_body), "ply", 3u);
+    mem_set_used(reply_head, 2u);
+    mem_set_used(reply_body, 3u);
+    reply_segments[0] = mem_slice(reply_head, 0u, 2u);
+    reply_segments[1] = mem_slice(reply_body, 0u, 3u);
+    check_not_null(reply_segments[0].buffer);
+    check_not_null(reply_segments[1].buffer);
+    reply_slices.connection = graph_probe.connections[0];
+    reply_slices.segments = reply_segments;
+    reply_slices.segment_count = 2u;
+    reply_slices.tag = 72u;
+    check_equal(turbo_flow_cnet_listener_source_reply_send_slices(source, &reply_slices),
+                SALTS_OK);
+    /*
+     * Successful admission retained both backings inside CNet; callers no
+     * longer need to keep framing slices alive until the terminal.
+     */
+    mem_slice_release(&reply_segments[0]);
+    mem_slice_release(&reply_segments[1]);
+    mem_buffer_release(reply_head);
+    mem_buffer_release(reply_body);
+    reply_head = NULL;
+    reply_body = NULL;
+
     reply.connection = graph_probe.connections[0];
-    reply.data = "reply";
-    reply.data_size = 5u;
-    reply.tag = 72u;
-    check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_OK);
+    reply.data = "busy";
+    reply.data_size = 4u;
     reply.tag = 73u;
     check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_EBUSY);
 
