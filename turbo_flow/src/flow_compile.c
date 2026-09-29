@@ -670,10 +670,55 @@ static int compile_resolve_port_types(turbo_flow_t *flow) {
   return SALTS_OK;
 }
 
+static const flow_operation_registration_t *
+flow_stage_reflected_registration(const turbo_flow_t *flow,
+                                  const flow_stage_plan_impl_t *stage) {
+  const flow_operation_registration_t *registration;
+  if (!flow || !stage || !stage->operation_name) return NULL;
+  registration = flow_find_operation_registration(flow, stage->operation_name);
+  return registration && registration->reflected ? registration : NULL;
+}
+
+static int flow_reflected_unary_graph_contract(
+    const flow_operation_registration_t *registration,
+    turbo_flow_domain_t *input_domain_out, const char **input_type_out,
+    turbo_flow_domain_t *output_domain_out, const char **output_type_out) {
+  const turbo_flow_operation_port_binding_t *input = NULL;
+  const turbo_flow_operation_port_binding_t *output = NULL;
+
+  if (!registration || !registration->reflected ||
+      !registration->input_type || !registration->output_type)
+    return 0;
+
+  for (size_t i = 0u; i < vec_size(&registration->reflected_ports); ++i) {
+    const turbo_flow_operation_port_binding_t *port =
+        (const turbo_flow_operation_port_binding_t *)vec_at_const(
+            &registration->reflected_ports, i);
+    if (!port) return 0;
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) {
+      if (input) return 0;
+      input = port;
+    } else if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT) {
+      if (output) return 0;
+      output = port;
+    }
+  }
+  if (!input || !output || !input->data || !output->data ||
+      strcmp(input->data->stable_id, registration->input_type) != 0 ||
+      strcmp(output->data->stable_id, registration->output_type) != 0)
+    return 0;
+
+  if (input_domain_out) *input_domain_out = input->domain;
+  if (input_type_out) *input_type_out = registration->input_type;
+  if (output_domain_out) *output_domain_out = output->domain;
+  if (output_type_out) *output_type_out = registration->output_type;
+  return 1;
+}
+
 static int compile_resolve_operations(turbo_flow_t *flow) {
   for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
-    const turbo_flow_operation_descriptor_t *registered;
+    const flow_operation_registration_t *registered;
     if (!stage) return SALTS_EINVAL;
     memset(&stage->resolved_operation, 0, sizeof(stage->resolved_operation));
     stage->operation_resolved = 0;
@@ -682,12 +727,31 @@ static int compile_resolve_operations(turbo_flow_t *flow) {
       flow_resolve_core_operation(flow, stage, (uint32_t)i);
       continue;
     }
-    registered = turbo_flow_find_operation(flow, stage->operation_name);
+    registered = flow_find_operation_registration(flow, stage->operation_name);
     if (!registered) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stage or source operation is not registered");
     }
-    stage->resolved_operation = *registered;
+    stage->resolved_operation = registered->descriptor;
+    if (registered->reflected) {
+      turbo_flow_domain_t input_domain = TURBO_FLOW_DOMAIN_NONE;
+      turbo_flow_domain_t output_domain = TURBO_FLOW_DOMAIN_NONE;
+      const char *input_type = NULL;
+      const char *output_type = NULL;
+
+      /*
+       * This is a compile-local compatibility view only. Canonical reflected
+       * type/effect semantics remain owned by CMeta and reflected_ports.
+       */
+      if (flow_reflected_unary_graph_contract(
+              registered, &input_domain, &input_type,
+              &output_domain, &output_type)) {
+        stage->resolved_operation.input_domain = input_domain;
+        stage->resolved_operation.input_type = input_type;
+        stage->resolved_operation.output_domain = output_domain;
+        stage->resolved_operation.output_type = output_type;
+      }
+    }
     stage->operation_resolved = 1;
   }
   return SALTS_OK;
@@ -1026,6 +1090,8 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
     const flow_stage_plan_impl_t *to;
     const turbo_flow_operation_descriptor_t *from_operation;
     const turbo_flow_operation_descriptor_t *to_operation;
+    const flow_operation_registration_t *from_reflected;
+    const flow_operation_registration_t *to_reflected;
 
     if (!edge || edge->from_stage == UINT32_MAX || edge->to_stage == UINT32_MAX) continue;
     from = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, edge->from_stage);
@@ -1036,6 +1102,8 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
     }
     from_operation = flow_stage_operation_descriptor(from);
     to_operation = flow_stage_operation_descriptor(to);
+    from_reflected = flow_stage_reflected_registration(flow, from);
+    to_reflected = flow_stage_reflected_registration(flow, to);
     if (!from_operation || !to_operation) {
       return flow_set_error(flow, SALTS_EPROTO, edge->line, edge->column,
                             "runtime edge endpoint has no resolved operation contract");
@@ -1048,6 +1116,30 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
       return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
                             "operation without input cannot have an upstream edge");
     }
+
+    if (from_reflected && to_reflected &&
+        cflow_function_projection_valid(&from_reflected->projection) &&
+        cflow_function_projection_valid(&to_reflected->projection)) {
+      if (!cmeta_type_equal(from_reflected->projection.output_type,
+                            to_reflected->projection.input_type)) {
+        return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
+                              "reflected operation edge CMeta types are incompatible");
+      }
+      continue;
+    }
+
+    /*
+     * turbo.flow.Message is the control/transport envelope, not the semantic
+     * payload type. Crossing that envelope boundary into or out of a reflected
+     * stage must not be rejected as Message-vs-CMeta string mismatch.
+     */
+    if ((to_reflected && from_operation->output_domain == TURBO_FLOW_DOMAIN_DATA &&
+         strcmp(from_operation->output_type, FLOW_CORE_MESSAGE_TYPE) == 0) ||
+        (from_reflected && to_operation->input_domain == TURBO_FLOW_DOMAIN_DATA &&
+         strcmp(to_operation->input_type, FLOW_CORE_MESSAGE_TYPE) == 0)) {
+      continue;
+    }
+
     if (!operation_types_equal(from_operation->output_domain, from_operation->output_type,
                                to_operation->input_domain, to_operation->input_type)) {
       return flow_set_error(flow, SALTS_EINVAL, edge->line, edge->column,
@@ -1056,7 +1148,6 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
   }
   return SALTS_OK;
 }
-
 static int stage_output_is_unordered(const flow_stage_plan_impl_t *stage) {
   return stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL ||
          stage->exec.kind == TURBO_FLOW_EXEC_THREAD_POOL;
