@@ -34,6 +34,8 @@ typedef struct intake_pending_reply_s {
   turbo_flow_transport_reply_session_t session;
   size_t data_size;
   uint64_t tag;
+  size_t segment_count;
+  mem_slice_t segments[TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS];
 } intake_pending_reply_t;
 
 struct flow_protocol_network_intake_sink_s {
@@ -216,6 +218,36 @@ static uint8_t *intake_reply_storage(flow_protocol_network_intake_sink_t *sink, 
   return sink->reply_bytes + index * sink->settings.reply_max_encoded_bytes;
 }
 
+static void intake_reply_release_segments(intake_pending_reply_t *reply) {
+  if (!reply) return;
+  for (size_t i = 0u; i < reply->segment_count &&
+                      i < TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS; ++i)
+    mem_slice_release(&reply->segments[i]);
+  reply->segment_count = 0u;
+}
+
+static int intake_reply_flatten_segments(flow_protocol_network_intake_sink_t *sink,
+                                         size_t index,
+                                         intake_pending_reply_t *reply) {
+  uint8_t *storage;
+  size_t offset = 0u;
+  if (!sink || !reply || reply->segment_count == 0u) return SALTS_EINVAL;
+  storage = intake_reply_storage(sink, index);
+  if (!storage) return SALTS_EPROTO;
+  for (size_t i = 0u; i < reply->segment_count; ++i) {
+    const mem_slice_t *segment = &reply->segments[i];
+    if (!segment->data || segment->length == 0u ||
+        offset > sink->settings.reply_max_encoded_bytes ||
+        segment->length > sink->settings.reply_max_encoded_bytes - offset)
+      return SALTS_EMSGSIZE;
+    memcpy(storage + offset, segment->data, segment->length);
+    offset += segment->length;
+  }
+  if (offset != reply->data_size) return SALTS_EPROTO;
+  intake_reply_release_segments(reply);
+  return SALTS_OK;
+}
+
 static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
                                 const turbo_flow_protocol_message_output_t *message,
                                 intake_pending_reply_t **reply_out,
@@ -233,14 +265,9 @@ static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
   if (sink->reply_count >= sink->settings.max_pending_claims) return SALTS_ENOBUFS;
   index = intake_reply_index(sink, sink->reply_count);
   reply = &sink->replies[index];
-  *reply = (intake_pending_reply_t){
-      .session = TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, .data_size = 0u, .tag = 0u};
+  intake_reply_release_segments(reply);
+  memset(reply, 0, sizeof(*reply));
   reply->session = sink->active_reply_session;
-
-  *output = (turbo_flow_protocol_frame_output_t)TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
-  output->data = intake_reply_storage(sink, index);
-  output->capacity = sink->settings.reply_max_encoded_bytes;
-  if (!output->data || output->capacity == 0u) return SALTS_EPROTO;
 
   frame.data = message->payload;
   frame.data_size = message->payload_size;
@@ -248,6 +275,35 @@ static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
   frame.protocol_version =
       message->metadata.protocol_version[0] ? message->metadata.protocol_version
                                             : sink->settings.protocol_version;
+
+  if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP) {
+    turbo_flow_protocol_frame_slices_output_t vector =
+        TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
+    vector.segments = reply->segments;
+    vector.segment_capacity = TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS;
+    rc = turbo_flow_protocol_reply_slices(
+        sink->protocol, &frame, SALTS_OK, &vector);
+    if (rc == SALTS_OK) {
+      if (vector.data_size > sink->settings.reply_max_encoded_bytes) {
+        vector.segment_count = vector.segment_count;
+        intake_reply_release_segments(reply);
+        return SALTS_EMSGSIZE;
+      }
+      if (vector.segment_count == 0u) return SALTS_OK;
+      reply->segment_count = vector.segment_count;
+      reply->data_size = vector.data_size;
+      if (sink->next_reply_tag == 0u) sink->next_reply_tag = 1u;
+      reply->tag = sink->next_reply_tag;
+      *reply_out = reply;
+      return SALTS_OK;
+    }
+    if (rc != SALTS_ENOTSUP) return rc;
+  }
+
+  *output = (turbo_flow_protocol_frame_output_t)TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
+  output->data = intake_reply_storage(sink, index);
+  output->capacity = sink->settings.reply_max_encoded_bytes;
+  if (!output->data || output->capacity == 0u) return SALTS_EPROTO;
   rc = turbo_flow_protocol_reply(sink->protocol, &frame, SALTS_OK, output);
   if (rc != SALTS_OK) return rc;
   if (output->data_size > output->capacity) return SALTS_EPROTO;
@@ -330,33 +386,68 @@ static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
   while (sink->reply_count > 0u) {
     const size_t index = sink->reply_head;
     intake_pending_reply_t *reply = &sink->replies[index];
-    turbo_flow_transport_reply_request_t request = TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
-    request.session = reply->session;
-    request.data = intake_reply_storage(sink, index);
-    request.data_size = reply->data_size;
-    request.tag = reply->tag;
-    if (!request.data || request.data_size == 0u || request.tag == 0u) return SALTS_EPROTO;
-    rc = turbo_flow_transport_reply_send(
-        sink->flow, sink->settings.source_adapter_name, &request);
+
+    if (reply->segment_count > 0u) {
+      turbo_flow_transport_reply_slices_request_t request =
+          TURBO_FLOW_TRANSPORT_REPLY_SLICES_REQUEST_INIT;
+      request.session = reply->session;
+      request.segments = reply->segments;
+      request.segment_count = reply->segment_count;
+      request.tag = reply->tag;
+      rc = turbo_flow_transport_reply_send_slices(
+          sink->flow, sink->settings.source_adapter_name, &request);
+      if (rc == SALTS_ENOTSUP) {
+        rc = intake_reply_flatten_segments(sink, index, reply);
+        if (rc != SALTS_OK) goto reply_failed;
+      } else if (rc == SALTS_EBUSY || rc == SALTS_ENOBUFS || rc == SALTS_ENOSPC) {
+        sink->reply_backpressured = 1;
+        return SALTS_OK;
+      } else if (rc != SALTS_OK) {
+        goto reply_failed;
+      } else {
+        goto reply_admitted;
+      }
+    }
+
+    {
+      turbo_flow_transport_reply_request_t request =
+          TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
+      request.session = reply->session;
+      request.data = intake_reply_storage(sink, index);
+      request.data_size = reply->data_size;
+      request.tag = reply->tag;
+      if (!request.data || request.data_size == 0u || request.tag == 0u)
+        return SALTS_EPROTO;
+      rc = turbo_flow_transport_reply_send(
+          sink->flow, sink->settings.source_adapter_name, &request);
+    }
     if (rc == SALTS_EBUSY || rc == SALTS_ENOBUFS || rc == SALTS_ENOSPC) {
       sink->reply_backpressured = 1;
       return SALTS_OK;
     }
-    if (rc != SALTS_OK) {
-      intake_counter_add(&sink->reply_failures, 1u);
-      *reply = (intake_pending_reply_t){0};
-      sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
-      --sink->reply_count;
-      continue;
-    }
+    if (rc != SALTS_OK) goto reply_failed;
+
+reply_admitted:
     {
       intake_pending_reply_t *inflight = intake_reply_inflight_reserve(sink);
       if (!inflight) return SALTS_EPROTO;
-      *inflight = *reply;
+      *inflight = (intake_pending_reply_t){
+          .session = reply->session,
+          .data_size = reply->data_size,
+          .tag = reply->tag};
     }
+    intake_reply_release_segments(reply);
     intake_counter_add(&sink->replies_admitted, 1u);
     ++sink->pending_replies;
-    *reply = (intake_pending_reply_t){0};
+    memset(reply, 0, sizeof(*reply));
+    sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
+    --sink->reply_count;
+    continue;
+
+reply_failed:
+    intake_counter_add(&sink->reply_failures, 1u);
+    intake_reply_release_segments(reply);
+    memset(reply, 0, sizeof(*reply));
     sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
     --sink->reply_count;
   }
@@ -1063,6 +1154,10 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
     if (entry && entry->claim._impl)
       (void)turbo_flow_async_terminal_complete(&entry->claim, SALTS_ECANCELED, NULL);
     intake_pending_pop(sink);
+  }
+  if (sink->replies) {
+    for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i)
+      intake_reply_release_segments(&sink->replies[i]);
   }
   tstr_free(sink->adapter_name);
   tstr_free(sink->decoded_source_name);
