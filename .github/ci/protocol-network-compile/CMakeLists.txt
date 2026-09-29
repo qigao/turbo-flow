@@ -19,12 +19,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _tf_salts_root)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" _tf_salts_utils_root)
-find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
+find_package(Salts CONFIG REQUIRED
              PATHS "${_tf_salts_root}" NO_DEFAULT_PATH)
-find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+find_package(SaltsUtils CONFIG REQUIRED
              PATHS "${_tf_salts_utils_root}" NO_DEFAULT_PATH)
 if(NOT TARGET Salts::DataBind)
-  message(FATAL_ERROR "SaltsUtils 4.1.3 package is missing Salts::DataBind")
+  message(FATAL_ERROR "resolved SaltsUtils package is missing Salts::DataBind")
 endif()
 find_package(xxHash CONFIG REQUIRED)
 
