@@ -17,6 +17,75 @@ static int flow_cflow_stage_in_candidate(const flow_compiled_plan_t *plan,
   return semantics && semantics->candidate_region == candidate_region;
 }
 
+static int flow_cflow_stage_data_contract(
+    const turbo_flow_t *flow, uint32_t stage_index,
+    const cmeta_data_desc **input_out, const cmeta_data_desc **output_out) {
+  const flow_stage_plan_impl_t *stage;
+  const flow_operation_registration_t *registration;
+  const cmeta_data_desc *input = NULL;
+  const cmeta_data_desc *output = NULL;
+
+  if (input_out) *input_out = NULL;
+  if (output_out) *output_out = NULL;
+  if (!flow || stage_index >= vec_size(&flow->stages)) return SALTS_EINVAL;
+  stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
+  if (!stage || !stage->operation_name) return SALTS_EPROTO;
+  registration = flow_find_operation_registration(flow, stage->operation_name);
+  if (!registration || !registration->reflected ||
+      registration->reflected_lowering != TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP)
+    return SALTS_EPROTO;
+
+  for (size_t i = 0u; i < vec_size(&registration->reflected_ports); ++i) {
+    const turbo_flow_operation_port_binding_t *port =
+        (const turbo_flow_operation_port_binding_t *)vec_at_const(
+            &registration->reflected_ports, i);
+    if (!port || !port->data || port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT)
+      return SALTS_EPROTO;
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) {
+      if (input || port->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER)
+        return SALTS_EPROTO;
+      input = port->data;
+    } else if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT) {
+      if (output || port->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN)
+        return SALTS_EPROTO;
+      output = port->data;
+    }
+  }
+  if (!input || !output) return SALTS_EPROTO;
+  if (input_out) *input_out = input;
+  if (output_out) *output_out = output;
+  return SALTS_OK;
+}
+
+static int flow_cflow_direct_boundary_supported(
+    const turbo_flow_t *flow, uint32_t entry_stage, uint32_t exit_stage,
+    const cflow_plan *plan, const cmeta_data_desc **input_data_out,
+    const cmeta_data_desc **output_data_out) {
+  const cmeta_data_desc *input_data = NULL;
+  const cmeta_data_desc *output_data = NULL;
+  const cmeta_trait_flags required =
+      CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
+  int rc;
+
+  if (!flow || !plan || !plan->input_type || !plan->output_type)
+    return SALTS_EINVAL;
+  rc = flow_cflow_stage_data_contract(flow, entry_stage, &input_data, NULL);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_cflow_stage_data_contract(flow, exit_stage, NULL, &output_data);
+  if (rc != SALTS_OK) return rc;
+
+  if (!cmeta_data_desc_equal(input_data, output_data) ||
+      !cmeta_type_equal(input_data->storage_type, plan->input_type) ||
+      !cmeta_type_equal(output_data->storage_type, plan->output_type) ||
+      cmeta_type_require_traits(plan->input_type, required) != CMETA_OK ||
+      cmeta_type_require_traits(plan->output_type, required) != CMETA_OK) {
+    return SALTS_ENOTSUP;
+  }
+  if (input_data_out) *input_data_out = input_data;
+  if (output_data_out) *output_data_out = output_data;
+  return SALTS_OK;
+}
+
 static int flow_cflow_region_shape(const flow_compiled_plan_t *plan,
                                    uint32_t candidate_region,
                                    uint32_t *entry_out,
@@ -102,7 +171,8 @@ static int flow_cflow_region_successor(const flow_compiled_plan_t *plan,
   return SALTS_OK;
 }
 
-static int flow_cflow_region_compile(const flow_compiled_plan_t *plan,
+static int flow_cflow_region_compile(const turbo_flow_t *flow,
+                                     const flow_compiled_plan_t *plan,
                                      uint32_t candidate_region,
                                      uint32_t entry_stage,
                                      uint32_t exit_stage,
@@ -115,7 +185,7 @@ static int flow_cflow_region_compile(const flow_compiled_plan_t *plan,
   uint32_t visited = 0u;
   int rc = SALTS_OK;
 
-  if (!plan || !region_out || stage_count == 0u) return SALTS_EINVAL;
+  if (!flow || !plan || !region_out || stage_count == 0u) return SALTS_EINVAL;
   memset(&region, 0, sizeof(region));
   region.candidate_region = candidate_region;
   region.entry_stage = entry_stage;
@@ -183,6 +253,12 @@ static int flow_cflow_region_compile(const flow_compiled_plan_t *plan,
     goto cleanup;
   }
 
+  rc = flow_cflow_direct_boundary_supported(
+      flow, entry_stage, exit_stage, &region.plan,
+      &region.input_data, &region.output_data);
+  if (rc != SALTS_OK) goto cleanup;
+  region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
+
   *region_out = region;
   memset(&region, 0, sizeof(region));
 
@@ -215,7 +291,7 @@ int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t
     if (!compilable) continue;
 
     memset(&region, 0, sizeof(region));
-    rc = flow_cflow_region_compile(plan, candidate, entry, exit, count, &region);
+    rc = flow_cflow_region_compile(flow, plan, candidate, entry, exit, count, &region);
     if (rc != SALTS_OK) return rc;
     compiled_index = vec_size(&plan->cflow_regions);
     if (compiled_index > UINT32_MAX) {
@@ -239,4 +315,61 @@ int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t
   }
 
   return SALTS_OK;
+}
+
+
+const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
+    const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out) {
+  const uint32_t *region_index;
+  const flow_cflow_region_plan_t *region;
+
+  if (region_index_out) *region_index_out = FLOW_PLAN_INDEX_NONE;
+  if (!flow || !flow->compiled_plan.sealed ||
+      stage_index >= vec_size(&flow->compiled_plan.cflow_region_by_stage))
+    return NULL;
+  region_index = (const uint32_t *)vec_at_const(
+      &flow->compiled_plan.cflow_region_by_stage, stage_index);
+  if (!region_index || *region_index == FLOW_PLAN_INDEX_NONE ||
+      *region_index >= vec_size(&flow->compiled_plan.cflow_regions))
+    return NULL;
+  region = (const flow_cflow_region_plan_t *)vec_at_const(
+      &flow->compiled_plan.cflow_regions, *region_index);
+  if (!region || region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT ||
+      region->entry_stage != stage_index)
+    return NULL;
+  if (region_index_out) *region_index_out = *region_index;
+  return region;
+}
+
+int flow_cflow_region_execute(
+    turbo_flow_t *flow, const flow_cflow_region_plan_t *region,
+    turbo_flow_msg_t *message) {
+  cflow_result result = {0};
+  const cmeta_data_desc *input_data;
+  const void *input_value;
+  int rc;
+
+  if (!flow || !region || !message ||
+      region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT ||
+      !region->input_data || !region->output_data)
+    return SALTS_EINVAL;
+
+  input_value = turbo_flow_msg_projection(message, NULL);
+  input_data = turbo_flow_msg_projection_data(message);
+  if (!input_value || !input_data ||
+      !cmeta_data_desc_equal(input_data, region->input_data))
+    return SALTS_EPROTO;
+
+  if (!cflow_plan_eval_array(&region->plan, input_value, 1u, &result))
+    return SALTS_EPROTO;
+  if (result.count != 1u || !result.data ||
+      !cmeta_type_equal(result.type, region->plan.output_type)) {
+    cflow_result_destroy(&result);
+    return SALTS_EPROTO;
+  }
+
+  rc = flow_msg_replace_trivial_projection(
+      message, region->input_data, region->output_data, result.data);
+  cflow_result_destroy(&result);
+  return rc;
 }
