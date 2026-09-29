@@ -374,6 +374,7 @@ typedef struct flow_cflow_region_batch_workspace_s {
   cflow_plan_batch_workspace plan;
   void *input_allocation;
   unsigned char *input_values;
+  size_t input_allocation_bytes;
   size_t capacity;
 } flow_cflow_region_batch_workspace_t;
 
@@ -840,6 +841,8 @@ int flow_cflow_region_batch_workspace_init(
     flow_cflow_region_batch_workspace_t *workspace);
 void flow_cflow_region_batch_workspace_destroy(
     flow_cflow_region_batch_workspace_t *workspace);
+size_t flow_cflow_region_batch_workspace_bytes(
+    const flow_cflow_region_batch_workspace_t *workspace);
 int flow_cflow_region_batch_stage_message(
     const flow_cflow_region_plan_t *region,
     flow_cflow_region_batch_workspace_t *workspace, size_t index,
