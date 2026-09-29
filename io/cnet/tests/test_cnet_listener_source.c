@@ -33,6 +33,28 @@ static cnet_client_config listener_source_test_client_config(void) {
   return config;
 }
 
+static int listener_source_client_send_sg(
+    cnet_client *client, cnet_connection connection, const void *data, size_t size) {
+  mem_buffer_t *payload;
+  mem_slice_t segment = {0};
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  payload = mem_get_buffer(mem_global(), size);
+  if (!payload) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(payload), data, size);
+  mem_set_used(payload, size);
+  segment = mem_slice(payload, 0u, size);
+  if (!segment.buffer || segment.length != size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  status = cnet_send_slicev(client, connection, &segment, 1u);
+  mem_slice_release(&segment);
+  mem_buffer_release(payload);
+  return status;
+}
+
 static turbo_flow_cnet_listener_source_config_t
 listener_source_test_config(turbo_flow_t *flow, const cnet_listener_config *listener,
                             const cnet_client_config *client) {
@@ -289,7 +311,7 @@ spec("CNet listener source owner") {
     check_equal(client_probe.connected, (size_t)1u);
     check_equal(snapshot.active_connections, (size_t)1u);
 
-    check_equal(cnet_send(&client, connection, "req", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "req", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -429,7 +451,7 @@ spec("CNet listener source owner") {
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(client_probe.connected, 1u);
-    check_equal(cnet_send(&client, connection, "plain", 5u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "plain", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (snapshot.connections_failed == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -510,7 +532,7 @@ spec("CNet listener source owner") {
     }
     check_equal(client_probe.connected, 1u);
     check_equal(client_probe.failed, 0);
-    check_equal(cnet_send(&client, connection, "tls", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "tls", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -608,7 +630,7 @@ spec("CNet listener source owner") {
     check_equal(snapshot.connections_accepted, 1u);
     check_equal(snapshot.active_connections, 1u);
 
-    check_equal(cnet_send(&client, connection, "first", 5u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "first", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (client_probe.sent == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -705,7 +727,7 @@ spec("CNet listener source owner") {
     check_equal(snapshot.connections_closed, 1u);
     check_equal(snapshot.active_connections, 1u);
 
-    check_equal(cnet_send(&client, second, "reuse", 5u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, second, "reuse", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -767,8 +789,8 @@ spec("CNet listener source owner") {
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(snapshot.active_connections, 2u);
-    check_equal(cnet_send(&client, first, "left", 4u), SALTS_OK);
-    check_equal(cnet_send(&client, second, "right", 5u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, first, "left", 4u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, second, "right", 5u), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_request(source, 2u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count < 2u && salts_monotonic_ms() < deadline) {
@@ -844,8 +866,8 @@ spec("CNet listener source owner") {
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(snapshot.active_connections, (size_t)2u);
-    check_equal(cnet_send(&client, first, "left-req", 8u), SALTS_OK);
-    check_equal(cnet_send(&client, second, "right-req", 9u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, first, "left-req", 8u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, second, "right-req", 9u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count < 2u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -964,7 +986,7 @@ spec("CNet listener source owner") {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
-    check_equal(cnet_send(&client, connection, "req", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "req", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -1051,7 +1073,7 @@ spec("CNet listener source owner") {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
-    check_equal(cnet_send(&client, connection, "req", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "req", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -1132,7 +1154,7 @@ spec("CNet listener source owner") {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
-    check_equal(cnet_send(&client, first, "old", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, first, "old", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count < 1u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -1162,7 +1184,7 @@ spec("CNet listener source owner") {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
-    check_equal(cnet_send(&client, second, "new", 3u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, second, "new", 3u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (graph_probe.count < 2u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -1250,7 +1272,7 @@ spec("CNet listener source owner") {
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
-    check_equal(cnet_send(&client, connection, "large", 5u), SALTS_OK);
+    check_equal(listener_source_client_send_sg(&client, connection, "large", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED &&
            salts_monotonic_ms() < deadline) {
