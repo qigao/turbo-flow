@@ -346,6 +346,14 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
                            : -1;
     const turbo_flow_operation_descriptor_t *operation =
         stage->operation_name ? turbo_flow_find_operation(flow, stage->operation_name) : NULL;
+    const flow_operation_registration_t *operation_registration =
+        stage->operation_name
+            ? flow_find_operation_registration(flow, stage->operation_name)
+            : NULL;
+    const int reflected_cflow =
+        operation_registration && operation_registration->reflected &&
+        operation_registration->reflected_lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP &&
+        cflow_function_projection_valid(&operation_registration->projection);
     const flow_adapter_registration_t *adapter = NULL;
 
     stage->async_emitting = 0;
@@ -470,9 +478,10 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
 
     if (!stage->is_source && !stage->is_port && !stage->is_buffer && provider_index < 0 &&
         (!adapter || (!adapter->ops.consume && !adapter->async_terminal_ops.submit &&
-                      !adapter->async_emit_ops.submit))) {
+                      !adapter->async_emit_ops.submit)) &&
+        !reflected_cflow) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
-                            "operation provider or adapter consume callback is not registered");
+                            "operation provider, adapter consume callback, or admitted CFlow callable is required");
     }
     if (!stage->is_source && !stage->is_port && !stage->is_buffer && provider_index < 0 && adapter &&
         (adapter->ops.consume || adapter->async_terminal_ops.submit ||
