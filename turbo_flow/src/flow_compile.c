@@ -353,7 +353,10 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
     const int reflected_cflow =
         operation_registration && operation_registration->reflected &&
         operation_registration->reflected_lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP &&
-        cflow_function_projection_valid(&operation_registration->projection);
+        (cflow_function_projection_valid(&operation_registration->projection) ||
+         (operation_registration->reflected_typed_adapter &&
+          cflow_function_typed_adapter_projection_valid(
+              &operation_registration->typed_adapter_projection)));
     const flow_adapter_registration_t *adapter = NULL;
 
     stage->async_emitting = 0;
