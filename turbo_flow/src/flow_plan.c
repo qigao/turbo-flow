@@ -116,6 +116,22 @@ int flow_plan_owned_resource_stage(
   return turbo_flow_stl_error(vec_push(&flow->pending_plan_resources, &resource));
 }
 
+int flow_plan_owned_resource_unstage_last(turbo_flow_t *flow, void *ctx) {
+  flow_plan_owned_resource_t resource = {0};
+  flow_plan_owned_resource_t *last;
+  const size_t count = flow ? vec_size(&flow->pending_plan_resources) : 0u;
+  int rc;
+  if (!flow || !ctx || flow->compiled_plan.sealed || count == 0u)
+    return SALTS_EINVAL;
+  last = (flow_plan_owned_resource_t *)vec_at(
+      &flow->pending_plan_resources, count - 1u);
+  if (!last || last->ctx != ctx || !last->release) return SALTS_EPROTO;
+  rc = turbo_flow_stl_error(vec_pop(&flow->pending_plan_resources, &resource));
+  if (rc != SALTS_OK) return rc;
+  resource.release(resource.ctx);
+  return SALTS_OK;
+}
+
 void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow) {
   if (!flow) return;
   flow_plan_owned_resource_vector_release(&flow->pending_plan_resources);
