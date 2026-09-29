@@ -1529,8 +1529,12 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(releases, (size_t)0u);
 
     flow_clear_runtime_plan(flow);
-    check_equal(releases, (size_t)1u);
+    check_equal(releases, (size_t)0u);
     check_equal(vec_size(&flow->compiled_plan.owned_resources), (size_t)0u);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    flow_clear_registry(flow);
+    check_equal(releases, (size_t)1u);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     turbo_flow_destroy(flow);
     check_equal(releases, (size_t)1u);
   }
@@ -1566,6 +1570,9 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(releases, (size_t)0u);
 
     flow_clear_plan(flow);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    check_equal(releases, (size_t)0u);
+    flow_clear_registry(flow);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(releases, (size_t)1u);
     turbo_flow_destroy(flow);
