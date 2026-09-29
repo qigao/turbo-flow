@@ -239,6 +239,7 @@ static int composition_tcp_send_copy(
     cnet_client *client, cnet_connection connection,
     const void *data, size_t size) {
   mem_buffer_t *payload;
+  mem_slice_t segment = {0};
   int rc;
   if (!client || !data || size == 0u) return SALTS_EINVAL;
 
@@ -246,7 +247,14 @@ static int composition_tcp_send_copy(
   if (!payload) return SALTS_ENOMEM;
   memcpy(mem_buffer_data(payload), data, size);
   mem_set_used(payload, size);
-  rc = cnet_send_buffer(client, connection, payload);
+  segment = mem_slice(payload, 0u, size);
+  if (!segment.buffer || segment.length != size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  rc = cnet_send_slicev(client, connection, &segment, 1u);
+  mem_slice_release(&segment);
   mem_buffer_release(payload);
   return rc;
 }
