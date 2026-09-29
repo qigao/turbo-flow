@@ -9,6 +9,14 @@ on:
       - 'cmake/**'
       - 'turbo_flow/CMakeLists.txt'
       - 'turbo_flow/benchmarks/**'
+      - 'turbo_flow/src/flow_cflow_region.c'
+      - 'turbo_flow/src/flow_compile.c'
+      - 'turbo_flow/src/flow_domain.c'
+      - 'turbo_flow/src/flow_plan_semantics.c'
+      - 'turbo_flow/src/flow_plan.c'
+      - 'turbo_flow/src/flow_internal.h'
+      - 'turbo_flow/tests/test_flow_reflected_operation.c'
+      - 'turbo_flow/tests/reflected_operation_header_cpp.cpp'
       - '.github/workflows/cflow-region-benchmark.yml'
   workflow_dispatch:
 
@@ -120,11 +128,17 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
 
-      - name: Build benchmark target
+      - name: Build CFlow region evidence targets
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-benchmark --target bench_turbo_flow -j2
+          cmake --build build/cflow-region-benchmark --target bench_turbo_flow test_flow_reflected_operation -j2
+
+      - name: Run reflected CFlow region contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/cflow-region-benchmark --tests-regex test_flow_reflected_operation --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash

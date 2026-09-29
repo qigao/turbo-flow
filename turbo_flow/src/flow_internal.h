@@ -133,8 +133,10 @@ typedef struct flow_operation_registration_s {
   const cmeta_function_abi_desc *abi;
   cmeta_callable callable;
   cflow_function_projection projection;
+  cflow_function_typed_adapter_projection typed_adapter_projection;
   vec_t reflected_ports; /* turbo_flow_operation_port_binding_t */
   turbo_flow_reflected_lowering_t reflected_lowering;
+  int reflected_typed_adapter;
   int reflected;
 } flow_operation_registration_t;
 
@@ -307,6 +309,8 @@ typedef struct flow_stage_semantic_plan_s {
   const cmeta_type_desc *canonical_input_type;
   const cmeta_type_desc *canonical_output_type;
   cmeta_callable callable;
+  cflow_function_typed_adapter_projection typed_adapter_projection;
+  int reflected_typed_adapter;
   int reflected;
 } flow_stage_semantic_plan_t;
 

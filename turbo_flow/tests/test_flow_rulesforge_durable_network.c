@@ -235,6 +235,30 @@ static uint16_t endpoint_port(const char *endpoint, const char *scheme) {
   return (uint16_t)value;
 }
 
+static int composition_tcp_send_copy(
+    cnet_client *client, cnet_connection connection,
+    const void *data, size_t size) {
+  mem_buffer_t *payload;
+  mem_slice_t segment = {0};
+  int rc;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+
+  payload = mem_get_buffer(mem_global(), size);
+  if (!payload) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(payload), data, size);
+  mem_set_used(payload, size);
+  segment = mem_slice(payload, 0u, size);
+  if (!segment.buffer || segment.length != size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  rc = cnet_send_slicev(client, connection, &segment, 1u);
+  mem_slice_release(&segment);
+  mem_buffer_release(payload);
+  return rc;
+}
+
 static void pump_until(turbo_flow_plugin_generation_t *generation,
                        turbo_flow_protocol_network_intake_t *jtt_intake,
                        turbo_flow_protocol_network_intake_t *coap_intake,
@@ -818,7 +842,7 @@ spec("RulesForge real network composition") {
         jtt_frame, sizeof(jtt_frame), (const uint8_t *)adult_payload,
         sizeof(adult_payload) - 1u, 1u);
     check_true(jtt_frame_size > 0u);
-    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    check_equal(composition_tcp_send_copy(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
     pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
                &decisions, &outputs, 1u);
     check_equal(decisions.matched[0], 1);
@@ -846,7 +870,7 @@ spec("RulesForge real network composition") {
         jtt_frame, sizeof(jtt_frame), (const uint8_t *)minor_payload,
         sizeof(minor_payload) - 1u, 2u);
     check_true(jtt_frame_size > 0u);
-    check_equal(cnet_send(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
+    check_equal(composition_tcp_send_copy(&tcp, tcp_connection, jtt_frame, jtt_frame_size), SALTS_OK);
     pump_until(generation, jtt_intake, coap_intake, &tcp, &udp_peer, &datagram,
                &decisions, &outputs, 3u);
     check_equal(decisions.matched[2], 0);

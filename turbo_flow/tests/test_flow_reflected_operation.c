@@ -46,6 +46,62 @@ void reflected_join_out(int left, int right, int *output) {
   if (output) *output = left + right;
 }
 
+FunctionDecl(value, void, reflected_increment_out,
+    (int, input, CMETA_PARAM_IN),
+    (int *, output, CMETA_PARAM_OUT,
+     &cmeta_type_int_ptr, CMETA_ABI_OBJECT_POINTER));
+static size_t reflected_increment_out_calls = 0u;
+static size_t reflected_increment_out_alias_calls = 0u;
+void reflected_increment_out(int input, int *output) {
+  if (!output) return;
+  ++reflected_increment_out_calls;
+  *output = input + 1;
+}
+
+static bool reflected_increment_out_invoke(
+    const cmeta_callable *self, void *out, const void *const *args) {
+  const cmeta_function_desc *function = FunctionMeta(reflected_increment_out);
+  (void)self;
+  if (!out || !args || !args[0] || !function) return false;
+  if (out == args[0]) ++reflected_increment_out_alias_calls;
+  reflected_increment_out(*(const int *)args[0], (int *)out);
+  return true;
+}
+
+static cmeta_callable reflected_increment_out_adapter(void) {
+  cmeta_callable adapter = {0};
+  const cmeta_function_desc *function = FunctionMeta(reflected_increment_out);
+  adapter.meta.effects = function->effects;
+  adapter.meta.properties = function->properties;
+  adapter.invoke = reflected_increment_out_invoke;
+  adapter.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
+  return adapter;
+}
+FunctionDecl(value, void, reflected_inout,
+    (int *, value, CMETA_PARAM_INOUT,
+     &cmeta_type_int_ptr, CMETA_ABI_OBJECT_POINTER));
+void reflected_inout(int *value) {
+  if (value) ++*value;
+}
+
+static bool reflected_inout_invoke(
+    const cmeta_callable *self, void *out, const void *const *args) {
+  (void)self;
+  if (!out || !args || !args[0]) return false;
+  *(int *)out = *(const int *)args[0] + 1;
+  return true;
+}
+
+static cmeta_callable reflected_inout_adapter(void) {
+  cmeta_callable adapter = {0};
+  const cmeta_function_desc *function = FunctionMeta(reflected_inout);
+  adapter.meta.effects = function->effects;
+  adapter.meta.properties = function->properties;
+  adapter.invoke = reflected_inout_invoke;
+  adapter.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
+  return adapter;
+}
+
 static int reflected_noop_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
@@ -722,6 +778,115 @@ suite("TurboFlow reflected operation semantics") {
 
     turbo_flow_msg_cleanup(&message);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("lowers one-IN one-OUT native adapters into a direct CFlow region") {
+    static const char graph[] =
+        "source input\n"
+        "stage op operation test.reflected.increment_out\n"
+        "stage sink operation test.reflected.increment_out.sink\n"
+        "stage main {\n"
+        "  input -> op -> sink\n"
+        "}\n";
+    static const turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.increment_out");
+    turbo_flow_operation_port_binding_t ports[2];
+    turbo_flow_reflected_operation_registration_t registration =
+        TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+    reflected_runtime_sink_probe_t probe = {0};
+    turbo_flow_msg_t message;
+    const flow_stage_semantic_plan_t *semantics;
+    int stage;
+
+    check_not_null(flow);
+    reflected_increment_out_calls = 0u;
+    reflected_increment_out_alias_calls = 0u;
+    ports[0] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_INPUT, 0u,
+        TURBO_FLOW_OPERATION_STORAGE_DIRECT);
+    ports[1] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_OUTPUT, 1u,
+        TURBO_FLOW_OPERATION_STORAGE_POINTEE);
+    registration.operation = &operation;
+    registration.function = FunctionMeta(reflected_increment_out);
+    registration.abi = FunctionAbi(reflected_increment_out);
+    registration.adapter = reflected_increment_out_adapter();
+    registration.ports = ports;
+    registration.port_count = 2u;
+    registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP;
+
+    check_equal(turbo_flow_register_reflected_operation(
+                    flow, &registration),
+                SALTS_OK);
+    check_true(register_native_int_stage(
+        flow, "test.reflected.increment_out.sink",
+        reflected_runtime_sink, &probe));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+
+    stage = turbo_flow_find_stage(flow, "op");
+    check_true(stage >= 0);
+    semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+        &flow->compiled_plan.stage_semantics, (size_t)stage);
+    check_not_null(semantics);
+    check_true(semantics->reflected);
+    check_true(semantics->reflected_typed_adapter);
+    check_true(semantics->lowering_candidate);
+    check_equal(
+        semantics->barriers & FLOW_LOWERING_BARRIER_NATIVE_MUTATION,
+        (uint32_t)0u);
+    check_true(cflow_function_typed_adapter_projection_valid(
+        &semantics->typed_adapter_projection));
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(bind_test_int_projection(&message, &schema, 41), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(probe.value, 42);
+    check_equal(reflected_increment_out_calls, (size_t)1u);
+    check_equal(reflected_increment_out_alias_calls, (size_t)0u);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 41);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("keeps INOUT reflected parameters outside CFlow lowering") {
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.inout");
+    turbo_flow_operation_port_binding_t ports[2];
+    turbo_flow_reflected_operation_registration_t registration =
+        TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+
+    check_not_null(flow);
+    ports[0] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_INPUT, 0u,
+        TURBO_FLOW_OPERATION_STORAGE_POINTEE);
+    ports[1] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_OUTPUT, 0u,
+        TURBO_FLOW_OPERATION_STORAGE_POINTEE);
+    registration.operation = &operation;
+    registration.function = FunctionMeta(reflected_inout);
+    registration.abi = FunctionAbi(reflected_inout);
+    registration.adapter = reflected_inout_adapter();
+    registration.ports = ports;
+    registration.port_count = 2u;
+    registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP;
+
+    check_equal(turbo_flow_register_reflected_operation(
+                    flow, &registration),
+                SALTS_EINVAL);
+    check_equal(turbo_flow_operation_count(flow), (size_t)0u);
     turbo_flow_destroy(flow);
   }
 

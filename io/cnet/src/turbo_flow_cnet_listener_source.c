@@ -710,6 +710,8 @@ int turbo_flow_cnet_listener_source_reply_send(
     turbo_flow_cnet_listener_source_t *source,
     const turbo_flow_cnet_listener_reply_request_t *request) {
   listener_source_slot_t *slot;
+  mem_buffer_t *payload;
+  mem_slice_t segment = {0};
   int status;
   if (!source || !request || request->size != sizeof(*request) ||
       request->version != TURBO_FLOW_CNET_LISTENER_REPLY_API_VERSION ||
@@ -724,7 +726,25 @@ int turbo_flow_cnet_listener_source_reply_send(
   slot = listener_source_find_connection(source, request->connection);
   if (!slot || !slot->connected || slot->closing) return SALTS_ENOENT;
   if (slot->reply_send_pending || slot->reply_terminal_ready) return SALTS_EBUSY;
-  status = cnet_send(&source->client, slot->connection, request->data, request->data_size);
+
+  /*
+   * The public reply request borrows raw bytes and carries no retained owner.
+   * Preserve copy-on-admission at this legacy raw-pointer boundary, then enter
+   * CNet through its canonical retained scatter/gather path.
+   */
+  payload = mem_get_buffer(mem_global(), request->data_size);
+  if (!payload) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(payload), request->data, request->data_size);
+  mem_set_used(payload, request->data_size);
+  segment = mem_slice(payload, 0u, request->data_size);
+  if (!segment.buffer || segment.length != request->data_size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  status = cnet_send_slicev(&source->client, slot->connection, &segment, 1u);
+  mem_slice_release(&segment);
+  mem_buffer_release(payload);
   if (status != SALTS_OK) return status;
   slot->reply_send_pending = true;
   slot->reply_send_size = request->data_size;

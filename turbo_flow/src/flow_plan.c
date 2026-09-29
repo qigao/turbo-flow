@@ -199,10 +199,14 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           (!!semantics->typed !=
            (semantics->canonical_input_type != NULL &&
             semantics->canonical_output_type != NULL)) ||
-          (semantics->typed &&
-           !cmeta_callable_contract_valid(semantics->callable)))) ||
+          (semantics->typed && !semantics->reflected_typed_adapter &&
+           !cmeta_callable_contract_valid(semantics->callable)) ||
+          (semantics->reflected_typed_adapter &&
+           !cflow_function_typed_adapter_projection_valid(
+               &semantics->typed_adapter_projection)))) ||
         (!semantics->reflected &&
-         (semantics->canonical_input_type != NULL ||
+         (semantics->reflected_typed_adapter ||
+          semantics->canonical_input_type != NULL ||
           semantics->canonical_output_type != NULL ||
           (!!semantics->typed !=
            (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&

@@ -39,16 +39,15 @@ static int flow_cflow_stage_data_contract(
     const turbo_flow_operation_port_binding_t *port =
         (const turbo_flow_operation_port_binding_t *)vec_at_const(
             &registration->reflected_ports, i);
-    if (!port || !port->data || port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT)
-      return SALTS_EPROTO;
+    if (!port || !port->data) return SALTS_EPROTO;
     if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) {
-      if (input || port->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER)
-        return SALTS_EPROTO;
+      if (input) return SALTS_EPROTO;
       input = port->data;
     } else if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT) {
-      if (output || port->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN)
-        return SALTS_EPROTO;
+      if (output) return SALTS_EPROTO;
       output = port->data;
+    } else {
+      return SALTS_EPROTO;
     }
   }
   if (!input || !output) return SALTS_EPROTO;
@@ -112,7 +111,11 @@ static int flow_cflow_region_shape(const flow_compiled_plan_t *plan,
     ++count;
 
     if (!semantics->reflected ||
-        !cmeta_callable_contract_valid(semantics->callable) ||
+        (!semantics->reflected_typed_adapter &&
+         !cmeta_callable_contract_valid(semantics->callable)) ||
+        (semantics->reflected_typed_adapter &&
+         !cflow_function_typed_adapter_projection_valid(
+             &semantics->typed_adapter_projection)) ||
         !semantics->canonical_input_type || !semantics->canonical_output_type) {
       compilable = 0;
     }
@@ -212,7 +215,11 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
     if (!semantics || semantics->candidate_region != candidate_region ||
         !semantics->reflected || !semantics->lowering_candidate ||
         !semantics->canonical_input_type || !semantics->canonical_output_type ||
-        !cmeta_callable_contract_valid(semantics->callable)) {
+        (!semantics->reflected_typed_adapter &&
+         !cmeta_callable_contract_valid(semantics->callable)) ||
+        (semantics->reflected_typed_adapter &&
+         !cflow_function_typed_adapter_projection_valid(
+             &semantics->typed_adapter_projection))) {
       rc = SALTS_EPROTO;
       goto cleanup;
     }
@@ -221,8 +228,14 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
       rc = SALTS_EPROTO;
       goto cleanup;
     }
-    if (!cflow_graph_add(&surface, semantics->cflow_operator,
-                         semantics->callable, NULL)) {
+    if (semantics->reflected_typed_adapter) {
+      if (!cflow_graph_add_function_typed_adapter_projection(
+              &surface, &semantics->typed_adapter_projection)) {
+        rc = SALTS_ENOTSUP;
+        goto cleanup;
+      }
+    } else if (!cflow_graph_add(&surface, semantics->cflow_operator,
+                                semantics->callable, NULL)) {
       rc = SALTS_ENOTSUP;
       goto cleanup;
     }

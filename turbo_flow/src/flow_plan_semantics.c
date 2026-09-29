@@ -361,6 +361,19 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
         semantics->cflow_operator = registration->projection.op;
         semantics->canonical_input_type = registration->projection.input_type;
         semantics->canonical_output_type = registration->projection.output_type;
+      } else if (
+          registration->reflected_lowering == TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP &&
+          registration->reflected_typed_adapter &&
+          cflow_function_typed_adapter_projection_valid(
+              &registration->typed_adapter_projection)) {
+        semantics->cflow_operator = CFLOW_OP_MAP;
+        semantics->typed_adapter_projection =
+            registration->typed_adapter_projection;
+        semantics->canonical_input_type =
+            registration->typed_adapter_projection.input_type;
+        semantics->canonical_output_type =
+            registration->typed_adapter_projection.output_type;
+        semantics->reflected_typed_adapter = 1;
       }
       semantics->typed =
           semantics->canonical_input_type != NULL &&
@@ -382,6 +395,15 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
 
     semantics->barriers =
         flow_stage_barriers(stage, node, operation, function, &semantics->effects);
+    if (semantics->reflected_typed_adapter) {
+      /*
+       * The admitted typed adapter converts a distinct native OUT pointee into
+       * CFlow-owned result storage. That mutation is internal to the output
+       * slot, so it is not a graph alias/mutation barrier. INOUT shapes never
+       * reach this path and remain conservatively blocked.
+       */
+      semantics->barriers &= ~FLOW_LOWERING_BARRIER_NATIVE_MUTATION;
+    }
     if (flow_node_has_dynamic_route(plan, node)) {
       semantics->barriers |= FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE;
       if (!function) semantics->effects |= CMETA_EFFECT_MAY_FAIL;

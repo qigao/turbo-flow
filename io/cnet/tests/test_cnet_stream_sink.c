@@ -229,8 +229,13 @@ spec("TurboFlow CNet stream sink") {
     check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
 
     turbo_flow_msg_init(&first_message);
-    first_message.owned_payload = tstr_dup("pipe-terminal");
-    first_message.payload = tstr_to_v(first_message.owned_payload);
+    first_message.buffer = mem_get_buffer(mem_global(), sizeof("pipe-terminal") - 1u);
+    check_not_null(first_message.buffer);
+    memcpy(mem_buffer_data(first_message.buffer), "pipe-terminal",
+           sizeof("pipe-terminal") - 1u);
+    mem_set_used(first_message.buffer, sizeof("pipe-terminal") - 1u);
+    first_message.payload =
+        vstr_from_buf(mem_buffer_data(first_message.buffer), sizeof("pipe-terminal") - 1u);
     check_equal(
         turbo_flow_publish_async(flow, "input", &first_message, stream_sink_complete, &first),
         SALTS_OK);
