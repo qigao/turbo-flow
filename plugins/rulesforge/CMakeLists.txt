@@ -36,3 +36,6 @@ install(TARGETS tf_rulesforge_provider
 
 install(FILES include/turbo_flow_rulesforge_plugin.h
         DESTINATION include/turbo_flow/plugins)
+
+unset(_turbo_flow_rulesforge_databind_target)
+unset(_turbo_flow_rulesforge_root)
