@@ -15,6 +15,11 @@ typedef struct intake_completion_probe_s {
   atomic_int status;
 } intake_completion_probe_t;
 
+static int intake_test_jtt_inspect(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *frame,
+    turbo_flow_protocol_metadata_t *metadata);
+
 typedef struct intake_semantic_probe_s {
   size_t decode_calls;
 } intake_semantic_probe_t;
