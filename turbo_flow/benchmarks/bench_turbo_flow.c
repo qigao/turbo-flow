@@ -725,6 +725,8 @@ static void bench_report_cflow_region_batch(
   size_t batch_count;
   size_t completed = 0u;
   size_t clone_count;
+  size_t workspace_bytes = 0u;
+  size_t staging_copy_bytes_per_message = 0u;
   double throughput;
   double cpu_ns_per_message;
   double clone_allocs_per_message;
@@ -751,6 +753,24 @@ static void bench_report_cflow_region_batch(
           bench_cflow_region_clone_int, bench_cflow_region_destroy_int, NULL),
       SALTS_OK);
   input = NULL;
+
+  {
+    const flow_cflow_region_plan_t *region =
+        vec_size(&flow->compiled_plan.cflow_regions) == 1u
+            ? (const flow_cflow_region_plan_t *)vec_at_const(
+                  &flow->compiled_plan.cflow_regions, 0u)
+            : NULL;
+    flow_cflow_region_batch_workspace_t workspace = {0};
+    check_not_null(region);
+    if (!region) goto cleanup;
+    staging_copy_bytes_per_message = region->plan.input_type->size;
+    check_equal(flow_cflow_region_batch_workspace_init(
+                    region, batch_size, &workspace),
+                SALTS_OK);
+    workspace_bytes = flow_cflow_region_batch_workspace_bytes(&workspace);
+    check_true(workspace_bytes > 0u);
+    flow_cflow_region_batch_workspace_destroy(&workspace);
+  }
 
   config.message_count = batch_size;
   config.prepare = bench_publish_prepare_clone;
@@ -807,15 +827,152 @@ static void bench_report_cflow_region_batch(
       "throughput_msg_s=%.2f p50_batch_ns=%" PRIu64
       " p95_batch_ns=%" PRIu64 " p99_batch_ns=%" PRIu64
       " cpu_ns_per_msg=%.2f stage_callbacks_per_msg=0.00 "
-      "projection_clone_allocs_per_msg=%.2f\n",
+      "projection_clone_allocs_per_msg=%.2f "
+      "typed_staging_copy_bytes_per_msg=%zu peak_workspace_bytes=%zu "
+      "workspace_init_calls_per_msg=%.6f\n",
       stage_plan, sizeof(int), completed, batch_size, throughput,
       bench_percentile(latencies, batch_count, 50),
       bench_percentile(latencies, batch_count, 95),
       bench_percentile(latencies, batch_count, 99),
-      cpu_ns_per_message, clone_allocs_per_message);
+      cpu_ns_per_message, clone_allocs_per_message,
+      staging_copy_bytes_per_message, workspace_bytes,
+      1.0 / (double)batch_size);
 
 cleanup:
   turbo_flow_msg_cleanup(&message);
+  free(latencies);
+}
+
+typedef struct bench_cflow_batch_failure_projection_s {
+  size_t clones;
+  size_t destroys;
+} bench_cflow_batch_failure_projection_t;
+
+typedef struct bench_cflow_batch_failure_prepare_s {
+  const turbo_flow_msg_t *source;
+  size_t fail_index;
+} bench_cflow_batch_failure_prepare_t;
+
+static int bench_cflow_batch_failure_clone(
+    const void *value, void *ctx, void **out) {
+  bench_cflow_batch_failure_projection_t *probe =
+      (bench_cflow_batch_failure_projection_t *)ctx;
+  int *copy;
+  if (!value || !probe || !out) return SALTS_EINVAL;
+  *out = NULL;
+  copy = (int *)malloc(sizeof(*copy));
+  if (!copy) return SALTS_ENOMEM;
+  *copy = *(const int *)value;
+  *out = copy;
+  ++probe->clones;
+  return SALTS_OK;
+}
+
+static void bench_cflow_batch_failure_destroy(void *value, void *ctx) {
+  bench_cflow_batch_failure_projection_t *probe =
+      (bench_cflow_batch_failure_projection_t *)ctx;
+  if (probe) ++probe->destroys;
+  free(value);
+}
+
+static int bench_cflow_batch_failure_prepare(
+    void *ctx, size_t index, turbo_flow_msg_t *message) {
+  const bench_cflow_batch_failure_prepare_t *prepare =
+      (const bench_cflow_batch_failure_prepare_t *)ctx;
+  if (!prepare || !prepare->source || !message) return SALTS_EINVAL;
+  if (index == prepare->fail_index) return SALTS_EIO;
+  return turbo_flow_msg_clone(message, prepare->source);
+}
+
+static void bench_report_cflow_region_batch_failure(
+    turbo_flow_t *flow, const char *stage_plan, size_t batch_size,
+    size_t fail_index, size_t iterations) {
+  turbo_flow_msg_t source;
+  turbo_flow_publish_batch_config_t config =
+      TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+  bench_cflow_batch_failure_projection_t projection = {0};
+  bench_cflow_batch_failure_prepare_t prepare = {0};
+  uint64_t *latencies = NULL;
+  uint64_t wall_start;
+  uint64_t wall_elapsed;
+  uint64_t cpu_start;
+  uint64_t cpu_elapsed;
+  size_t total_published = 0u;
+  int *input = NULL;
+  int status = SALTS_OK;
+
+  if (!flow || !stage_plan || batch_size == 0u || fail_index >= batch_size ||
+      iterations == 0u)
+    return;
+  latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
+  check_not_null(latencies);
+  if (!latencies) return;
+
+  turbo_flow_msg_init(&source);
+  input = (int *)malloc(sizeof(*input));
+  check_not_null(input);
+  if (!input) goto cleanup;
+  *input = 17;
+  check_equal(
+      turbo_flow_msg_bind_typed_projection(
+          &source, &bench_cflow_region_int_schema, &cmeta_data_int, input,
+          bench_cflow_batch_failure_clone, bench_cflow_batch_failure_destroy,
+          &projection),
+      SALTS_OK);
+  input = NULL;
+
+  prepare.source = &source;
+  prepare.fail_index = fail_index;
+  config.message_count = batch_size;
+  config.prepare = bench_cflow_batch_failure_prepare;
+  config.ctx = &prepare;
+
+  projection.clones = 0u;
+  projection.destroys = 0u;
+  cpu_start = bench_process_cpu_ns();
+  wall_start = salts_hrtime();
+  for (size_t i = 0u; i < iterations; ++i) {
+    size_t published = 0u;
+    const uint64_t started = salts_hrtime();
+    status = turbo_flow_publish_batch(flow, "input", &config, &published);
+    latencies[i] = salts_hrtime() - started;
+    check_equal(status, SALTS_EIO);
+    check_equal(published, fail_index);
+    total_published += published;
+  }
+  wall_elapsed = salts_hrtime() - wall_start;
+  cpu_elapsed = bench_process_cpu_ns() - cpu_start;
+
+  check_equal(total_published, fail_index * iterations);
+  check_equal(projection.clones, total_published);
+  check_equal(projection.destroys, total_published);
+  qsort(latencies, iterations, sizeof(*latencies), bench_u64_compare);
+
+  printf(
+      "BENCH_RESULT stage_plan=%s executor=cflow-bounded-workspace-failure "
+      "workers=1 batch_size=%zu failure_index=%zu iterations=%zu "
+      "published_prefix_total=%zu failure_status=%d "
+      "throughput_prefix_msg_s=%.2f p50_failure_batch_ns=%" PRIu64
+      " p95_failure_batch_ns=%" PRIu64 " p99_failure_batch_ns=%" PRIu64
+      " cpu_ns_per_failure_batch=%.2f cpu_ns_per_published_prefix_msg=%.2f "
+      "projection_clones_per_prefix_msg=1.00 "
+      "projection_destroys_per_prefix_msg=1.00\n",
+      stage_plan, batch_size, fail_index, iterations, total_published,
+      SALTS_EIO,
+      wall_elapsed > 0u
+          ? ((double)total_published * 1000000000.0) / (double)wall_elapsed
+          : 0.0,
+      bench_percentile(latencies, iterations, 50),
+      bench_percentile(latencies, iterations, 95),
+      bench_percentile(latencies, iterations, 99),
+      (double)cpu_elapsed / (double)iterations,
+      total_published
+          ? (double)cpu_elapsed / (double)total_published
+          : 0.0);
+
+cleanup:
+  turbo_flow_msg_cleanup(&source);
+  free(input);
   free(latencies);
 }
 
@@ -1733,6 +1890,9 @@ spec("Turbo Flow Bench") {
     bench_report_cflow_region_batch(
         cflow_flow, "typed-identity-2-stage-cflow-batch",
         FLOW_BENCH_EXECUTOR_ITERS, 64u, 1u);
+    bench_report_cflow_region_batch_failure(
+        cflow_flow, "typed-identity-2-stage-cflow-batch-failure",
+        64u, 63u, 1000u);
 
     bench_destroy_started_flow(cflow_flow);
     bench_destroy_started_flow(native_flow);

@@ -453,7 +453,7 @@ const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
 
 static int flow_cflow_aligned_array_allocate(
     const cmeta_type_desc *type, size_t count, void **allocation_out,
-    void **data_out) {
+    void **data_out, size_t *allocation_bytes_out) {
   size_t bytes;
   size_t total;
   void *allocation;
@@ -461,6 +461,7 @@ static int flow_cflow_aligned_array_allocate(
   uintptr_t aligned;
   if (allocation_out) *allocation_out = NULL;
   if (data_out) *data_out = NULL;
+  if (allocation_bytes_out) *allocation_bytes_out = 0u;
   if (!cmeta_type_desc_valid(type) || !allocation_out || !data_out ||
       count == 0u || type->size == 0u || type->align == 0u ||
       (type->align & (type->align - 1u)) != 0u ||
@@ -480,6 +481,7 @@ static int flow_cflow_aligned_array_allocate(
   aligned = (begin + type->align - 1u) & ~((uintptr_t)type->align - 1u);
   *allocation_out = allocation;
   *data_out = (void *)aligned;
+  if (allocation_bytes_out) *allocation_bytes_out = total;
   return SALTS_OK;
 }
 
@@ -497,7 +499,7 @@ int flow_cflow_region_batch_workspace_init(
 
   rc = flow_cflow_aligned_array_allocate(
       region->plan.input_type, capacity, &workspace->input_allocation,
-      (void **)&workspace->input_values);
+      (void **)&workspace->input_values, &workspace->input_allocation_bytes);
   if (rc != SALTS_OK) return rc;
   if (!cflow_plan_batch_workspace_init(
           &workspace->plan, &region->plan, capacity)) {
@@ -515,6 +517,16 @@ void flow_cflow_region_batch_workspace_destroy(
   cflow_plan_batch_workspace_destroy(&workspace->plan);
   free(workspace->input_allocation);
   memset(workspace, 0, sizeof(*workspace));
+}
+
+size_t flow_cflow_region_batch_workspace_bytes(
+    const flow_cflow_region_batch_workspace_t *workspace) {
+  const size_t plan_bytes =
+      workspace ? cflow_plan_batch_workspace_bytes(&workspace->plan) : 0u;
+  if (!workspace) return 0u;
+  if (workspace->input_allocation_bytes > SIZE_MAX - plan_bytes)
+    return SIZE_MAX;
+  return workspace->input_allocation_bytes + plan_bytes;
 }
 
 int flow_cflow_region_batch_stage_message(
