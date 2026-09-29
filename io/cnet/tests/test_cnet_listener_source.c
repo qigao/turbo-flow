@@ -262,6 +262,7 @@ spec("CNet listener source owner") {
     char uri[96];
     uint64_t deadline;
     int terminal_status = SALTS_ENOENT;
+    bool terminal_seen = false;
 
     check_not_null(flow);
     config.max_connections = 1u;
@@ -325,7 +326,11 @@ spec("CNet listener source owner") {
            salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
-      terminal_status = turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+      if (!terminal_seen) {
+        terminal_status =
+            turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+        terminal_seen = terminal_status == SALTS_OK;
+      }
     }
     check_equal(client_probe.received, (size_t)1u);
     check_equal(client_probe.received_payloads[0], "reply");
@@ -520,6 +525,7 @@ spec("CNet listener source owner") {
       turbo_flow_cnet_listener_reply_terminal_t terminal =
           TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
       int terminal_status = SALTS_ENOENT;
+      bool terminal_seen = false;
       check_equal(cnet_receive(&client, connection, 1u), SALTS_OK);
       reply.connection = graph_probe.connections[0];
       reply.data = "tls-reply";
@@ -531,8 +537,11 @@ spec("CNet listener source owner") {
              salts_monotonic_ms() < deadline) {
         check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
         check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
-        terminal_status =
-            turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+        if (!terminal_seen) {
+          terminal_status =
+              turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+          terminal_seen = terminal_status == SALTS_OK;
+        }
       }
       check_equal(client_probe.received, (size_t)1u);
       check_equal(client_probe.received_payloads[0], "tls-reply");
@@ -1100,6 +1109,7 @@ spec("CNet listener source owner") {
     char uri[96];
     uint64_t deadline;
     int terminal_status = SALTS_ENOENT;
+    bool terminal_seen = false;
 
     check_not_null(flow);
     config.max_connections = 1u;
@@ -1132,6 +1142,12 @@ spec("CNet listener source owner") {
     old_server = graph_probe.connections[0];
 
     check_equal(cnet_close(&client, first), SALTS_OK);
+    /*
+     * Peer EOF is observed through an armed CNet receive. The next downstream
+     * demand retires the closed generation, then remains available for the
+     * replacement connection instead of bypassing source backpressure.
+     */
+    check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (snapshot.active_connections != 0u && salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
@@ -1140,7 +1156,6 @@ spec("CNet listener source owner") {
     check_equal(snapshot.active_connections, (size_t)0u);
 
     check_equal(cnet_connect(&client, &connect, &second), SALTS_OK);
-    check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while ((client_probe.connected < 2u || snapshot.active_connections == 0u) &&
            salts_monotonic_ms() < deadline) {
@@ -1175,8 +1190,11 @@ spec("CNet listener source owner") {
            salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
-      terminal_status =
-          turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+      if (!terminal_seen) {
+        terminal_status =
+            turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal);
+        terminal_seen = terminal_status == SALTS_OK;
+      }
     }
     check_equal(client_probe.received, (size_t)1u);
     check_equal(client_probe.received_payloads[0], "fresh");
