@@ -167,7 +167,7 @@ endif()
 if(_TurboFlow_needs_turbodb)
   _TurboFlow_require_dependency_root(Orm TURBODB_ROOT Orm::C)
   file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" _TurboFlow_TurboDb_root)
-  find_dependency(Orm 1.0.0 EXACT CONFIG REQUIRED
+  find_dependency(Orm 2.1.0 EXACT CONFIG REQUIRED
                   PATHS "${_TurboFlow_TurboDb_root}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
 endif()
