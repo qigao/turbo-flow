@@ -367,6 +367,158 @@ static void cnet_plugin_source_shutdown(void *ctx) {
   }
 }
 
+_Static_assert(sizeof(cnet_connection) <= TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES,
+               "CNet connection must fit generic reply token");
+_Static_assert(sizeof(cnet_packet_session) <= TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES,
+               "CNet packet session must fit generic reply token");
+
+static int cnet_plugin_reply_session_pack(turbo_flow_transport_reply_session_t *out,
+                                          const void *value, size_t value_size) {
+  if (!out || !value || value_size == 0u ||
+      value_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES)
+    return SALTS_EINVAL;
+  *out = (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+  out->token_size = value_size;
+  memcpy(out->token, value, value_size);
+  return SALTS_OK;
+}
+
+static int cnet_plugin_reply_session_unpack(
+    const turbo_flow_transport_reply_session_t *session, void *out, size_t value_size) {
+  if (!session || !out || session->size != sizeof(*session) ||
+      session->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      session->token_size != value_size)
+    return SALTS_EINVAL;
+  memcpy(out, session->token, value_size);
+  return SALTS_OK;
+}
+
+static int cnet_plugin_transport_reply_capture(
+    void *ctx, const turbo_flow_msg_t *message, turbo_flow_transport_reply_session_t *session) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  if (!owner || !message || !session) return SALTS_EINVAL;
+  switch (owner->config.kind) {
+  case TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE: {
+    const turbo_flow_cnet_listener_message_context_t *transport =
+        turbo_flow_cnet_listener_message_context(message);
+    return transport
+               ? cnet_plugin_reply_session_pack(session, &transport->connection,
+                                                sizeof(transport->connection))
+               : SALTS_ENOENT;
+  }
+  case TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE: {
+    const turbo_flow_cnet_packet_message_context_t *transport =
+        turbo_flow_cnet_packet_message_context(message);
+    return transport
+               ? cnet_plugin_reply_session_pack(session, &transport->session,
+                                                sizeof(transport->session))
+               : SALTS_ENOENT;
+  }
+  default:
+    return SALTS_ENOTSUP;
+  }
+}
+
+static int cnet_plugin_transport_reply_send(
+    void *ctx, const turbo_flow_transport_reply_request_t *request) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  if (!owner || !request) return SALTS_EINVAL;
+  switch (owner->config.kind) {
+  case TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE: {
+    cnet_connection connection = {0};
+    turbo_flow_cnet_listener_reply_request_t cnet_request =
+        TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
+    int rc = cnet_plugin_reply_session_unpack(&request->session, &connection, sizeof(connection));
+    if (rc != SALTS_OK) return rc;
+    cnet_request.connection = connection;
+    cnet_request.data = request->data;
+    cnet_request.data_size = request->data_size;
+    cnet_request.tag = request->tag;
+    return owner->handle.listener_source
+               ? turbo_flow_cnet_listener_source_reply_send(owner->handle.listener_source,
+                                                            &cnet_request)
+               : SALTS_EBUSY;
+  }
+  case TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE: {
+    cnet_packet_session session = {0};
+    int rc = cnet_plugin_reply_session_unpack(&request->session, &session, sizeof(session));
+    if (rc != SALTS_OK) return rc;
+    return owner->handle.packet_source
+               ? turbo_flow_cnet_packet_source_reply_send(owner->handle.packet_source, session,
+                                                          request->data, request->data_size,
+                                                          request->tag)
+               : SALTS_EBUSY;
+  }
+  default:
+    return SALTS_ENOTSUP;
+  }
+}
+
+static int cnet_plugin_transport_reply_take_terminal(
+    void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  if (!owner || !terminal) return SALTS_EINVAL;
+  switch (owner->config.kind) {
+  case TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE: {
+    turbo_flow_cnet_listener_reply_terminal_t cnet_terminal =
+        TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
+    int rc;
+    if (!owner->handle.listener_source) return SALTS_EBUSY;
+    rc = turbo_flow_cnet_listener_source_reply_take_terminal(owner->handle.listener_source,
+                                                              &cnet_terminal);
+    if (rc != SALTS_OK) return rc;
+    *terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    rc = cnet_plugin_reply_session_pack(&terminal->session, &cnet_terminal.connection,
+                                        sizeof(cnet_terminal.connection));
+    if (rc != SALTS_OK) return rc;
+    terminal->data_size = cnet_terminal.data_size;
+    terminal->status = cnet_terminal.status;
+    terminal->tag = cnet_terminal.tag;
+    switch (cnet_terminal.kind) {
+    case TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_SENT:
+      terminal->kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+      break;
+    case TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_CLOSED:
+      terminal->kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_PEER_CLOSED;
+      break;
+    case TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_STOPPED:
+      terminal->kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_STOPPED;
+      break;
+    case TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_PEER_FAILED:
+      terminal->kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_FAILED;
+      break;
+    default:
+      return SALTS_EPROTO;
+    }
+    return SALTS_OK;
+  }
+  case TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE: {
+    turbo_flow_cnet_packet_reply_terminal_t cnet_terminal =
+        TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT;
+    int rc;
+    if (!owner->handle.packet_source) return SALTS_EBUSY;
+    rc = turbo_flow_cnet_packet_source_reply_take_terminal(owner->handle.packet_source,
+                                                            &cnet_terminal);
+    if (rc != SALTS_OK) return rc;
+    *terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    rc = cnet_plugin_reply_session_pack(&terminal->session, &cnet_terminal.session,
+                                        sizeof(cnet_terminal.session));
+    if (rc != SALTS_OK) return rc;
+    terminal->kind = cnet_terminal.status == SALTS_OK
+                         ? TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT
+                         : (cnet_terminal.status == SALTS_ECANCELED
+                                ? TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_STOPPED
+                                : TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_FAILED);
+    terminal->data_size = cnet_terminal.data_size;
+    terminal->status = cnet_terminal.status;
+    terminal->tag = cnet_terminal.tag;
+    return SALTS_OK;
+  }
+  default:
+    return SALTS_ENOTSUP;
+  }
+}
+
 static int cnet_plugin_register_source(cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
   turbo_flow_adapter_ops_t ops = {0};
   turbo_flow_adapter_schema_t schema = {0};
@@ -392,7 +544,20 @@ static int cnet_plugin_register_source(cnet_plugin_owner_t *owner, turbo_flow_t 
   registration.owner_name = owner->name;
   registration.boundary_ops = &boundary;
   registration.ctx = owner;
-  return turbo_flow_register_managed_source_adapter(flow, &registration);
+  {
+    int rc = turbo_flow_register_managed_source_adapter(flow, &registration);
+    if (rc != SALTS_OK) return rc;
+    if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE ||
+        owner->config.kind == TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE) {
+      turbo_flow_transport_reply_provider_ops_t reply =
+          TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+      reply.capture = cnet_plugin_transport_reply_capture;
+      reply.send = cnet_plugin_transport_reply_send;
+      reply.take_terminal = cnet_plugin_transport_reply_take_terminal;
+      rc = turbo_flow_register_adapter_transport_reply(flow, owner->name, &reply, owner);
+    }
+    return rc;
+  }
 }
 
 static int cnet_plugin_register_sink(cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
