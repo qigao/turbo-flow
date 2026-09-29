@@ -223,6 +223,16 @@ static int flow_cflow_region_successor(const flow_compiled_plan_t *plan,
   return SALTS_OK;
 }
 
+static int flow_cflow_stage_batch_safe(
+    const flow_stage_semantic_plan_t *semantics) {
+  const cmeta_callable *callable;
+  if (!semantics || semantics->effects != CMETA_EFFECT_PURE) return 0;
+  callable = semantics->reflected_typed_adapter
+                 ? &semantics->typed_adapter_projection.callable
+                 : &semantics->callable;
+  return cmeta_properties_include(callable->meta.properties, CMETA_PROP_TOTAL);
+}
+
 static int flow_cflow_region_compile(const turbo_flow_t *flow,
                                      const flow_compiled_plan_t *plan,
                                      uint32_t candidate_region,
@@ -243,6 +253,7 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
   region.entry_stage = entry_stage;
   region.exit_stage = exit_stage;
   region.stage_count = stage_count;
+  region.batch_safe = 1;
   surface.root = CMETA_INVALID_ID;
 
   {
@@ -277,6 +288,7 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
       rc = SALTS_EPROTO;
       goto cleanup;
     }
+    if (!flow_cflow_stage_batch_safe(semantics)) region.batch_safe = 0;
     if (semantics->reflected_typed_adapter) {
       if (!cflow_graph_add_function_typed_adapter_projection(
               &surface, &semantics->typed_adapter_projection)) {
@@ -339,6 +351,19 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
   } else {
     rc = SALTS_ENOTSUP;
     goto cleanup;
+  }
+
+  /*
+   * Batch evaluation uses one contiguous native array. Restrict the first
+   * runtime slice to trivial same-type boundaries whose C stride preserves
+   * every element's alignment. Managed MOVE remains on the scalar path.
+   */
+  if (region.value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region.value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY ||
+      region.plan.input_type->size == 0u ||
+      region.plan.input_type->align == 0u ||
+      region.plan.input_type->size % region.plan.input_type->align != 0u) {
+    region.batch_safe = 0;
   }
 
   *region_out = region;
@@ -421,6 +446,115 @@ const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     return NULL;
   if (region_index_out) *region_index_out = *region_index;
   return region;
+}
+
+static int flow_cflow_aligned_array_allocate(
+    const cmeta_type_desc *type, size_t count, void **allocation_out,
+    void **data_out) {
+  size_t bytes;
+  size_t total;
+  void *allocation;
+  uintptr_t begin;
+  uintptr_t aligned;
+  if (allocation_out) *allocation_out = NULL;
+  if (data_out) *data_out = NULL;
+  if (!cmeta_type_desc_valid(type) || !allocation_out || !data_out ||
+      count == 0u || type->size == 0u || type->align == 0u ||
+      (type->align & (type->align - 1u)) != 0u ||
+      type->size % type->align != 0u ||
+      count > SIZE_MAX / type->size)
+    return SALTS_EINVAL;
+  bytes = count * type->size;
+  if (bytes > SIZE_MAX - (type->align - 1u)) return SALTS_ERANGE;
+  total = bytes + type->align - 1u;
+  allocation = malloc(total);
+  if (!allocation) return SALTS_ENOMEM;
+  begin = (uintptr_t)allocation;
+  if (begin > UINTPTR_MAX - (type->align - 1u)) {
+    free(allocation);
+    return SALTS_ERANGE;
+  }
+  aligned = (begin + type->align - 1u) & ~((uintptr_t)type->align - 1u);
+  *allocation_out = allocation;
+  *data_out = (void *)aligned;
+  return SALTS_OK;
+}
+
+int flow_cflow_region_execute_batch(
+    turbo_flow_t *flow, const flow_cflow_region_plan_t *region,
+    turbo_flow_msg_t *messages, size_t message_count) {
+  cflow_result result = {0};
+  const cmeta_type_desc *type;
+  void *input_allocation = NULL;
+  unsigned char *input_values = NULL;
+  int rc = SALTS_OK;
+
+  if (!flow || !region || !messages || message_count == 0u ||
+      region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT ||
+      !region->batch_safe || !region->input_data || !region->output_data ||
+      region->value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region->value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY)
+    return SALTS_EINVAL;
+  type = region->plan.input_type;
+  if (!cmeta_type_equal(type, region->plan.output_type))
+    return SALTS_EPROTO;
+
+  rc = flow_cflow_aligned_array_allocate(
+      type, message_count, &input_allocation, (void **)&input_values);
+  if (rc != SALTS_OK) return rc;
+
+  /*
+   * Preflight every message before evaluating the Plan. From this point the
+   * only per-message commit is a memcpy into already-owned trivial storage.
+   */
+  for (size_t i = 0u; i < message_count; ++i) {
+    const cmeta_data_desc *input_data =
+        turbo_flow_msg_projection_data(&messages[i]);
+    const void *input_value =
+        turbo_flow_msg_projection(&messages[i], NULL);
+    if (!input_value || !input_data ||
+        !cmeta_data_desc_equal(input_data, region->input_data)) {
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    rc = flow_msg_trivial_projection_commit_ready(
+        &messages[i], region->input_data, region->output_data);
+    if (rc != SALTS_OK) goto cleanup;
+    memcpy(input_values + i * type->size, input_value, type->size);
+  }
+
+  if (!cflow_plan_eval_array(
+          &region->plan, input_values, message_count, &result)) {
+    /*
+     * PURE + TOTAL is a compile-time guarantee. A runtime evaluation failure
+     * therefore signals a violated CFlow/adapter invariant, not an item-level
+     * user failure whose prefix could be guessed.
+     */
+    rc = SALTS_EPROTO;
+    goto cleanup;
+  }
+  if (result.count != message_count || !result.data ||
+      !cmeta_type_equal(result.type, region->plan.output_type)) {
+    rc = SALTS_EPROTO;
+    goto cleanup;
+  }
+
+  for (size_t i = 0u; i < message_count; ++i) {
+    rc = flow_msg_commit_trivial_projection_in_place(
+        &messages[i], region->input_data, region->output_data,
+        (const unsigned char *)result.data + i * result.type->size);
+    if (rc != SALTS_OK) {
+      /* Preflight made this path no-fail; any error is an internal invariant. */
+      rc = SALTS_EPROTO;
+      goto cleanup;
+    }
+    messages[i].execution_attempt = 1u;
+  }
+
+cleanup:
+  cflow_result_destroy(&result);
+  free(input_allocation);
+  return rc;
 }
 
 int flow_cflow_region_execute(
