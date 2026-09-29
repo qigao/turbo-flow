@@ -320,6 +320,18 @@ typedef enum flow_cflow_region_backend_e {
   FLOW_CFLOW_REGION_BACKEND_DIRECT
 } flow_cflow_region_backend_t;
 
+typedef enum flow_cflow_value_slot_mode_e {
+  FLOW_CFLOW_VALUE_SLOT_NONE = 0,
+  FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT
+} flow_cflow_value_slot_mode_t;
+
+typedef struct flow_cflow_value_slot_plan_s {
+  flow_cflow_value_slot_mode_t mode;
+  size_t extent;
+  size_t alignment;
+  cmeta_trait_flags required_traits;
+} flow_cflow_value_slot_plan_t;
+
 typedef struct flow_cflow_region_plan_s {
   uint32_t candidate_region;
   uint32_t entry_stage;
@@ -328,6 +340,7 @@ typedef struct flow_cflow_region_plan_s {
   flow_cflow_region_backend_t backend;
   const cmeta_data_desc *input_data;
   const cmeta_data_desc *output_data;
+  flow_cflow_value_slot_plan_t value_slot;
   cflow_plan plan;
   cflow_plan_compile_stats stats;
 } flow_cflow_region_plan_t;
@@ -790,7 +803,7 @@ const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out);
 int flow_cflow_region_execute(
     turbo_flow_t *flow, const flow_cflow_region_plan_t *region, turbo_flow_msg_t *message);
-int flow_msg_replace_trivial_projection(
+int flow_msg_commit_trivial_projection_in_place(
     turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
     const cmeta_data_desc *output_data, const void *output_value);
 int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count);

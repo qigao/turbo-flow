@@ -423,6 +423,8 @@ suite("TurboFlow reflected operation semantics") {
     int second_stage;
     const flow_executor_plan_t *first_executor;
     const flow_executor_plan_t *second_executor;
+    const flow_cflow_region_plan_t *region;
+    const void *projection_before;
 
     check_not_null(flow);
     check_true(register_unary_reflected_mode(
@@ -455,16 +457,19 @@ suite("TurboFlow reflected operation semantics") {
     check_null(first_executor->fn);
     check_null(second_executor->fn);
     check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
-    {
-      const flow_cflow_region_plan_t *region =
-          (const flow_cflow_region_plan_t *)vec_at_const(
-              &flow->compiled_plan.cflow_regions, 0u);
-      check_not_null(region);
-      check_equal(region->backend, FLOW_CFLOW_REGION_BACKEND_DIRECT);
-      check_equal(region->stage_count, (uint32_t)2u);
-      check_true(cmeta_data_desc_equal(region->input_data, &cmeta_data_int));
-      check_true(cmeta_data_desc_equal(region->output_data, &cmeta_data_int));
-    }
+    region = (const flow_cflow_region_plan_t *)vec_at_const(
+        &flow->compiled_plan.cflow_regions, 0u);
+    check_not_null(region);
+    check_equal(region->backend, FLOW_CFLOW_REGION_BACKEND_DIRECT);
+    check_equal(region->stage_count, (uint32_t)2u);
+    check_true(cmeta_data_desc_equal(region->input_data, &cmeta_data_int));
+    check_true(cmeta_data_desc_equal(region->output_data, &cmeta_data_int));
+    check_equal(region->value_slot.mode, FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT);
+    check_equal(region->value_slot.extent, sizeof(int));
+    check_equal(region->value_slot.alignment, cmeta_type_int.align);
+    check_equal(
+        region->value_slot.required_traits,
+        (cmeta_trait_flags)(CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY));
 
     observer.size = sizeof(observer);
     observer.stage_complete = reflected_test_stage_observer;
@@ -483,6 +488,24 @@ suite("TurboFlow reflected operation semantics") {
                     reflected_test_clone_int, reflected_test_destroy_int, NULL),
                 SALTS_OK);
     input = NULL;
+
+    projection_before = turbo_flow_msg_projection(&message, NULL);
+    check_not_null(projection_before);
+    check_equal(flow_cflow_region_execute(flow, region, &message), SALTS_OK);
+    check_true(turbo_flow_msg_projection(&message, NULL) == projection_before);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 9);
+
+    turbo_flow_msg_cleanup(&message);
+    turbo_flow_msg_init(&message);
+    input = (int *)malloc(sizeof(*input));
+    check_not_null(input);
+    *input = 7;
+    check_equal(turbo_flow_msg_bind_typed_projection(
+                    &message, &schema, &cmeta_data_int, input,
+                    reflected_test_clone_int, reflected_test_destroy_int, NULL),
+                SALTS_OK);
+    input = NULL;
+
     check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
     check_equal(probe.calls, (size_t)1u);
     check_equal(probe.value, 9);
