@@ -261,7 +261,7 @@ spec("CNet listener source owner") {
     cnet_connection stale;
     char uri[96];
     uint64_t deadline;
-    int terminal_status = SALTS_EAGAIN;
+    int terminal_status = SALTS_ENOENT;
 
     check_not_null(flow);
     config.max_connections = 1u;
@@ -321,7 +321,7 @@ spec("CNet listener source owner") {
     check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_EBUSY);
 
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while ((client_probe.received == 0u || terminal_status == SALTS_EAGAIN) &&
+    while ((client_probe.received == 0u || terminal_status == SALTS_ENOENT) &&
            salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
@@ -339,7 +339,7 @@ spec("CNet listener source owner") {
     terminal = (turbo_flow_cnet_listener_reply_terminal_t)
         TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
     check_equal(turbo_flow_cnet_listener_source_reply_take_terminal(source, &terminal),
-                SALTS_EAGAIN);
+                SALTS_ENOENT);
 
     check_equal(turbo_flow_cnet_listener_source_stop(source, TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
@@ -519,7 +519,7 @@ spec("CNet listener source owner") {
           TURBO_FLOW_CNET_LISTENER_REPLY_REQUEST_INIT;
       turbo_flow_cnet_listener_reply_terminal_t terminal =
           TURBO_FLOW_CNET_LISTENER_REPLY_TERMINAL_INIT;
-      int terminal_status = SALTS_EAGAIN;
+      int terminal_status = SALTS_ENOENT;
       check_equal(cnet_receive(&client, connection, 1u), SALTS_OK);
       reply.connection = graph_probe.connections[0];
       reply.data = "tls-reply";
@@ -527,7 +527,7 @@ spec("CNet listener source owner") {
       reply.tag = 301u;
       check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_OK);
       deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-      while ((client_probe.received == 0u || terminal_status == SALTS_EAGAIN) &&
+      while ((client_probe.received == 0u || terminal_status == SALTS_ENOENT) &&
              salts_monotonic_ms() < deadline) {
         check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
         check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
@@ -881,7 +881,7 @@ spec("CNet listener source owner") {
           ++terminals;
         }
       } while (terminal_status == SALTS_OK);
-      check_equal(terminal_status, SALTS_EAGAIN);
+      check_equal(terminal_status, SALTS_ENOENT);
     }
     check_equal(client_probe.received, (size_t)2u);
     check_equal(terminals, (size_t)2u);
@@ -930,7 +930,7 @@ spec("CNet listener source owner") {
     cnet_connect_options connect = {0};
     char uri[96];
     uint64_t deadline;
-    int terminal_status = SALTS_EAGAIN;
+    int terminal_status = SALTS_ENOENT;
 
     check_not_null(flow);
     config.max_connections = 1u;
@@ -971,7 +971,7 @@ spec("CNet listener source owner") {
     check_equal(cnet_close(&client, connection), SALTS_OK);
 
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (terminal_status == SALTS_EAGAIN && salts_monotonic_ms() < deadline) {
+    while (terminal_status == SALTS_ENOENT && salts_monotonic_ms() < deadline) {
       int client_status = listener_source_poll_client(&client, 1u);
       check_true(client_status == SALTS_OK || client_status == SALTS_ESHUTDOWN);
       {
@@ -1099,7 +1099,7 @@ spec("CNet listener source owner") {
     cnet_connection new_server = {0};
     char uri[96];
     uint64_t deadline;
-    int terminal_status = SALTS_EAGAIN;
+    int terminal_status = SALTS_ENOENT;
 
     check_not_null(flow);
     config.max_connections = 1u;
@@ -1171,7 +1171,7 @@ spec("CNet listener source owner") {
     reply.tag = 502u;
     check_equal(turbo_flow_cnet_listener_source_reply_send(source, &reply), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while ((client_probe.received == 0u || terminal_status == SALTS_EAGAIN) &&
+    while ((client_probe.received == 0u || terminal_status == SALTS_ENOENT) &&
            salts_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);

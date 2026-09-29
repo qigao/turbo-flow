@@ -745,7 +745,7 @@ int turbo_flow_cnet_listener_source_reply_take_terminal(
     listener_source_reply_clear_terminal(slot);
     return SALTS_OK;
   }
-  return SALTS_EAGAIN;
+  return SALTS_ENOENT;
 }
 
 int turbo_flow_cnet_listener_source_request(turbo_flow_cnet_listener_source_t *source,

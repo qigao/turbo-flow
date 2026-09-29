@@ -333,7 +333,7 @@ TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_send(
 /**
  * Consume one completed listener reply terminal.
  *
- * Returns SALTS_EAGAIN when no terminal is ready. A closed connection slot with
+ * Returns SALTS_ENOENT when no terminal is ready. A closed connection slot with
  * an unconsumed terminal is not reused until this call consumes that terminal.
  */
 TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_take_terminal(
