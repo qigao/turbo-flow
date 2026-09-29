@@ -85,6 +85,50 @@ spec("real CoAP UDP protocol intake") {
     protocol_network_e2e_destroy(&fixture);
   }
 
+  it("sends codec-owned CoAP ACK on the original UDP session only under explicit durable-admission policy") {
+    static const uint8_t coap_get[] = {0x40u, 0x01u, 0x12u, 0x34u};
+    protocol_network_e2e_fixture_t fixture;
+    turbo_flow_protocol_network_intake_snapshot_t intake =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    unsigned port = 0u;
+    uint64_t deadline;
+
+    check_equal(protocol_network_e2e_coap_init_reply(
+                    &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND,
+                    FLOW_E2E_STORAGE_PATH()),
+                SALTS_OK);
+    check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
+    check_equal(sscanf(intake.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
+    check_true(port > 0u && port <= UINT16_MAX);
+    check_equal(protocol_network_e2e_udp_send_frame(
+                    &fixture, intake.source_endpoint, coap_get, sizeof(coap_get)),
+                SALTS_OK);
+
+    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+    while ((intake.frames_admitted == 0u || fixture.udp.received == 0u) &&
+           salts_monotonic_ms() < deadline)
+      check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
+
+    check_equal(intake.frames_admitted, (uint64_t)1u);
+    check_equal(fixture.business.stage_completions, (size_t)0u);
+    check_equal(fixture.udp.received, (size_t)1u);
+    check_equal(fixture.udp.last_payload_size, (size_t)4u);
+    check_equal(fixture.udp.last_payload[0], (uint8_t)0x60u);
+    check_equal(fixture.udp.last_payload[1], (uint8_t)0x45u);
+    check_equal(fixture.udp.last_payload[2], (uint8_t)0x12u);
+    check_equal(fixture.udp.last_payload[3], (uint8_t)0x34u);
+
+    check_equal(protocol_network_e2e_business_request_and_drive(
+                    &fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(fixture.business.stage_completions, (size_t)1u);
+    check_equal(fixture.business.failed_completions, (size_t)0u);
+    check_equal(fixture.udp.received, (size_t)2u);
+
+    protocol_network_e2e_destroy(&fixture);
+  }
+
   it("keeps the same Sink provider type independent across two explicit destination peers") {
     static const uint8_t coap_a[] = {0x40u, 0x01u, 0x00u, 0x11u};
     static const uint8_t coap_b[] = {0x40u, 0x01u, 0x00u, 0x22u};

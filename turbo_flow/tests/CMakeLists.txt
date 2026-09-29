@@ -183,6 +183,15 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 
 cmake_add_test(
+  test_flow_transport_reply
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_transport_reply.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/transport_reply_header_cpp.cpp
+  LIBS TurboFlow::Graph Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_transport_reply
+  PROPERTIES LABELS "graph;core;transport-reply" TIMEOUT 30)
+
+cmake_add_test(
   test_flow_managed_async_terminal
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_managed_async_terminal.c
   LIBS TurboFlow::Graph Salts::TinyTest

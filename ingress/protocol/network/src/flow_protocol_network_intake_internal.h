@@ -2,6 +2,7 @@
 #define FLOW_PROTOCOL_NETWORK_INTAKE_INTERNAL_H
 
 #include "turbo_flow_durable_buffer.h"
+#include "turbo_flow_protocol_network_intake.h"
 #include "turbo_flow_protocol_source.h"
 #include "turbo_flow_protocol_mapper.h"
 #include "turbo_flow_resolved_config.h"
@@ -38,6 +39,8 @@ typedef struct flow_protocol_network_intake_settings_s {
   size_t max_pending_bytes;
   size_t source_scheduler_max_steps;
   size_t source_max_message_bytes;
+  turbo_flow_protocol_network_reply_point_t reply_point;
+  size_t reply_max_encoded_bytes;
 } flow_protocol_network_intake_settings_t;
 
 typedef struct flow_protocol_network_intake_sink_s flow_protocol_network_intake_sink_t;
@@ -47,6 +50,10 @@ typedef struct flow_protocol_network_intake_sink_metrics_s {
   size_t pending_claims;
   size_t pending_bytes;
   uint64_t frames_admitted;
+  uint64_t replies_admitted;
+  uint64_t reply_terminals;
+  uint64_t reply_failures;
+  size_t pending_replies;
   int backpressured;
   int terminal_status;
 } flow_protocol_network_intake_sink_metrics_t;

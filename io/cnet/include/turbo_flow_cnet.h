@@ -595,6 +595,35 @@ TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_send(turbo_flow_cnet_packet_s
                                                         cnet_packet_session session,
                                                         const void *data, size_t size);
 
+#define TURBO_FLOW_CNET_PACKET_REPLY_API_VERSION 1u
+
+/** Authoritative terminal for one tagged packet-source logical send. */
+typedef struct turbo_flow_cnet_packet_reply_terminal_s {
+  size_t size;
+  uint32_t version;
+  cnet_packet_session session;
+  size_t data_size;
+  int status;
+  uint64_t tag;
+} turbo_flow_cnet_packet_reply_terminal_t;
+
+#define TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT                                                 \
+  {sizeof(turbo_flow_cnet_packet_reply_terminal_t), TURBO_FLOW_CNET_PACKET_REPLY_API_VERSION,       \
+   {0u, 0u}, 0u, SALTS_OK, 0u}
+
+/**
+ * Copy and admit one tagged packet reply on the exact generation-checked
+ * session. Success guarantees exactly one later terminal.
+ */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_reply_send(
+    turbo_flow_cnet_packet_source_t *source, cnet_packet_session session,
+    const void *data, size_t size, uint64_t tag);
+
+/** Consume one authoritative tagged-send terminal; SALTS_ENOENT means none is ready. */
+TURBO_FLOW_C_API int turbo_flow_cnet_packet_source_reply_take_terminal(
+    turbo_flow_cnet_packet_source_t *source,
+    turbo_flow_cnet_packet_reply_terminal_t *terminal);
+
 /**
  * Return packet identity owned by `message->buffer`, or NULL for another
  * transport or a malformed/borrowed context. The pointer lives with `message`.

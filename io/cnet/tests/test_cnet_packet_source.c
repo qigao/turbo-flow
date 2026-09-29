@@ -231,6 +231,94 @@ spec("CNet packet source owner") {
     check_equal(cnet_packet_source_header_cpp_probe(), 0);
   }
 
+  it("sends tagged UDP reply on the exact session generation and retains terminal evidence across stop") {
+    static const char request[] = "request";
+    static const char reply_payload[] = "reply";
+    cnet_packet_endpoint_config left_endpoint = packet_source_endpoint_config(CNET_PACKET_UDP);
+    cnet_packet_endpoint_config right_endpoint = packet_source_endpoint_config(CNET_PACKET_UDP);
+    packet_source_graph_probe_t left_probe = {0};
+    packet_source_graph_probe_t right_probe = {0};
+    turbo_flow_t *left_flow = packet_source_started_flow(&left_probe);
+    turbo_flow_t *right_flow = packet_source_started_flow(&right_probe);
+    turbo_flow_cnet_packet_source_config_t left_config =
+        packet_source_config(left_flow, &left_endpoint);
+    turbo_flow_cnet_packet_source_config_t right_config =
+        packet_source_config(right_flow, &right_endpoint);
+    turbo_flow_cnet_packet_source_t *left = NULL;
+    turbo_flow_cnet_packet_source_t *right = NULL;
+    turbo_flow_cnet_packet_source_snapshot_t right_snapshot =
+        TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_packet_reply_terminal_t terminal =
+        TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT;
+    cnet_packet_session left_session = {0};
+    cnet_packet_session right_session = {0};
+    cnet_packet_session stale = {0};
+    cnet_datagram_peer right_peer;
+    uint64_t deadline;
+
+    check_not_null(left_flow);
+    check_not_null(right_flow);
+    check_equal(turbo_flow_cnet_packet_source_open(&left_config, &left), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_open(&right_config, &right), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_snapshot(right, &right_snapshot), SALTS_OK);
+    right_peer = packet_source_peer(right_snapshot.bound_port);
+    check_equal(turbo_flow_cnet_packet_source_session_open(left, &right_peer, 0u, &left_session),
+                SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_request(right, 1u), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_send(left, left_session, request, sizeof(request)),
+                SALTS_OK);
+
+    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (right_probe.count == 0u && salts_monotonic_ms() < deadline) {
+      check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
+      check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot), SALTS_OK);
+    }
+    check_equal(right_probe.count, (size_t)1u);
+    right_session = right_probe.contexts[0].session;
+    check_true(cnet_packet_session_valid(right_session));
+
+    stale = right_session;
+    ++stale.generation;
+    check_equal(turbo_flow_cnet_packet_source_reply_send(
+                    right, stale, "stale", sizeof("stale"), UINT64_C(40)),
+                SALTS_ENOENT);
+
+    check_equal(turbo_flow_cnet_packet_source_request(left, 1u), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_reply_send(
+                    right, right_session, reply_payload, sizeof(reply_payload), UINT64_C(41)),
+                SALTS_OK);
+
+    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (left_probe.count == 0u && salts_monotonic_ms() < deadline) {
+      check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, NULL), SALTS_OK);
+      check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
+    }
+    check_equal(left_probe.count, (size_t)1u);
+    check_equal(left_probe.payloads[0], reply_payload, sizeof(reply_payload));
+
+    check_equal(turbo_flow_cnet_packet_source_stop(right, PACKET_SOURCE_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_destroy(right), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_packet_source_reply_take_terminal(right, &terminal), SALTS_OK);
+    check_equal(terminal.session.slot, right_session.slot);
+    check_equal(terminal.session.generation, right_session.generation);
+    check_equal(terminal.data_size, sizeof(reply_payload));
+    check_equal(terminal.status, SALTS_OK);
+    check_equal(terminal.tag, UINT64_C(41));
+    terminal = (turbo_flow_cnet_packet_reply_terminal_t)
+        TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT;
+    check_equal(turbo_flow_cnet_packet_source_reply_take_terminal(right, &terminal),
+                SALTS_ENOENT);
+    check_equal(turbo_flow_cnet_packet_source_destroy(right), SALTS_OK);
+    right = NULL;
+
+    packet_source_stop_destroy(left);
+    check_equal(turbo_flow_stop(right_flow), SALTS_OK);
+    check_equal(turbo_flow_stop(left_flow), SALTS_OK);
+    turbo_flow_destroy(right_flow);
+    turbo_flow_destroy(left_flow);
+  }
+
   it("rejects invalid endpoint, queue, message and session bounds before publishing") {
     cnet_packet_endpoint_config endpoint = packet_source_endpoint_config(CNET_PACKET_UDP);
     packet_source_graph_probe_t probe = {0};

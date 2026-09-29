@@ -12,6 +12,28 @@ extern "C" {
 
 typedef struct turbo_flow_protocol_network_intake_s turbo_flow_protocol_network_intake_t;
 
+#define TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_API_VERSION 1u
+
+typedef enum turbo_flow_protocol_network_reply_point_e {
+  /** Preserve the existing explicit no-reply behavior. */
+  TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE = 0,
+  /** Authorize codec reply only after canonical durable business admission succeeds. */
+  TURBO_FLOW_PROTOCOL_NETWORK_REPLY_DURABLE_ADMISSION = 1
+} turbo_flow_protocol_network_reply_point_t;
+
+typedef struct turbo_flow_protocol_network_reply_policy_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_protocol_network_reply_point_t point;
+  /** Hard caller-selected bound for one codec-produced reply frame. */
+  size_t max_encoded_bytes;
+} turbo_flow_protocol_network_reply_policy_t;
+
+#define TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_INIT                                               \
+  {sizeof(turbo_flow_protocol_network_reply_policy_t),                                              \
+   TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_API_VERSION,                                            \
+   TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE, 0u}
+
 typedef struct turbo_flow_protocol_network_intake_config_s {
   size_t size;
   uint32_t version;
@@ -25,11 +47,20 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   const char *source_adapter_name;
   const char *decoder_adapter_name;
   const char *decoded_source_name;
+  /**
+   * Optional additive reply policy. NULL preserves the historical no-reply
+   * contract. Old v2 callers whose config size ends before this field remain
+   * valid and are treated identically to NULL.
+   */
+  const turbo_flow_protocol_network_reply_policy_t *reply_policy;
 } turbo_flow_protocol_network_intake_config_t;
+
+#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE                                         \
+  offsetof(turbo_flow_protocol_network_intake_config_t, reply_policy)
 
 #define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT                                             \
   {sizeof(turbo_flow_protocol_network_intake_config_t),                                            \
-   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, NULL, NULL, NULL, NULL, NULL, NULL}
+   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 typedef enum turbo_flow_protocol_network_intake_state_e {
   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED = 1,

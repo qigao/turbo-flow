@@ -93,6 +93,8 @@ typedef struct flow_adapter_registration_s {
   turbo_flow_async_terminal_adapter_ops_t async_terminal_ops;
   turbo_flow_async_emit_adapter_ops_t async_emit_ops;
   turbo_flow_adapter_consume_batch_fn consume_batch;
+  turbo_flow_transport_reply_provider_ops_t transport_reply_ops;
+  void *transport_reply_ctx;
   void *ctx;
   turbo_flow_settlement_owner_ops_t settlement_ops;
   void *settlement_ctx;
