@@ -160,8 +160,33 @@ static int flow_plan_owned_resources_transfer(
   return SALTS_OK;
 }
 
+static void flow_plan_owned_resources_return_to_flow(
+    turbo_flow_t *flow, flow_compiled_plan_t *plan) {
+  vec_t replacement = {0};
+  if (!flow || !plan || vec_empty(&plan->owned_resources)) return;
+
+  /*
+   * The operation registry still borrows FunctionDesc/DataDesc/callable code
+   * after a runtime plan is cleared for reset/recompile. Return plan resources
+   * to the mutable flow rather than releasing them here; registry teardown is
+   * the final borrow boundary.
+   */
+  if (turbo_flow_stl_error(
+          vec_init_bytes(&replacement, sizeof(flow_plan_owned_resource_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK)
+    return;
+  if (!vec_empty(&flow->pending_plan_resources)) {
+    vec_destroy(&replacement);
+    return;
+  }
+  vec_destroy(&flow->pending_plan_resources);
+  flow->pending_plan_resources = plan->owned_resources;
+  plan->owned_resources = replacement;
+}
+
 void flow_clear_runtime_plan(turbo_flow_t *flow) {
   if (!flow) return;
+  flow_plan_owned_resources_return_to_flow(flow, &flow->compiled_plan);
   flow_compiled_plan_destroy(&flow->compiled_plan);
   (void)flow_compiled_plan_init(&flow->compiled_plan);
   (void)turbo_flow_stl_error(vec_clear(&flow->runtime_stage_configs));
