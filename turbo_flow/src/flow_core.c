@@ -215,6 +215,7 @@ void flow_clear_plan(turbo_flow_t *flow) {
   flow_clear_reorder_states(flow);
   flow_stop_executor_adapters(flow);
   flow_clear_runtime_plan(flow);
+  flow_plan_owned_resources_clear_pending(flow);
   for (i = 0; i < vec_size(&flow->stages); ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, i);
     flow_stage_impl_destroy(stage);
@@ -354,6 +355,9 @@ turbo_flow_t *turbo_flow_create(void) {
           SALTS_OK ||
       flow_compiled_plan_init(&flow->compiled_plan) != SALTS_OK ||
       turbo_flow_stl_error(
+          vec_init_bytes(&flow->pending_plan_resources, sizeof(flow_plan_owned_resource_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
           vec_init_bytes(&flow->runtime_stage_configs, sizeof(flow_runtime_stage_config_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
@@ -444,6 +448,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   vec_destroy(&flow->stages);
   vec_destroy(&flow->edges);
   flow_compiled_plan_destroy(&flow->compiled_plan);
+  vec_destroy(&flow->pending_plan_resources);
   vec_destroy(&flow->runtime_stage_configs);
   vec_destroy(&flow->threadpool_adapters);
   vec_destroy(&flow->threadpool_adapter_by_stage);
