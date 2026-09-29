@@ -119,6 +119,13 @@ elif args.protocol_intake:
         "  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest\n"
         "  INCLUDES ${CMAKE_SOURCE_DIR}/ingress/protocol/network/src\n"
         '  FOLDER "ingress/protocol/tests")\n'
+        "cmake_add_test(\n"
+        "  test_turbo_flow\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_turbo_flow.c\n"
+        "          ${CMAKE_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c\n"
+        "  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/turbo_flow/src\n"
+        '  FOLDER "turbo_flow/tests")\n'
     )
 elif args.materializer:
     children = (
