@@ -8,6 +8,9 @@
 #include "salts_thread.h"
 
 #include <cflow/publishers.h>
+#include <cflow/function_projection.h>
+#include <cmeta/data.h>
+#include <cmeta/function.h>
 
 #include <inttypes.h>
 #include <stdatomic.h>
@@ -34,6 +37,24 @@
 #define FLOW_BENCH_REACHABILITY_ITERS 500
 
 static atomic_size_t g_flow_bench_count = 0;
+static atomic_size_t g_flow_bench_region_native_callbacks = 0;
+static atomic_size_t g_flow_bench_region_projection_clones = 0;
+
+FunctionDecl(value, int, bench_cflow_region_identity,
+    (int, input, CMETA_PARAM_IN));
+int bench_cflow_region_identity(int input) { return input; }
+CFLOW_REFLECTED_ADAPTER(bench_cflow_region_identity);
+
+static const turbo_flow_data_schema_t bench_cflow_region_int_schema = {
+    sizeof(turbo_flow_data_schema_t),
+    TURBO_FLOW_DOMAIN_DATA,
+    TURBO_FLOW_DATA_ENCODING_OPAQUE,
+    "cmeta.int.data",
+    "Integer",
+    "int",
+    7u,
+    3u,
+    NULL};
 
 static void bench_security_copy(char *output, size_t capacity, const char *value) {
   size_t size = strlen(value);
@@ -436,6 +457,255 @@ static void bench_register_operation(turbo_flow_t *flow,
   provider.ctx = (void *)&g_flow_bench_count;
   check_equal(turbo_flow_register_operation(flow, operation), SALTS_OK);
   check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
+}
+
+static int bench_u64_compare(const void *lhs, const void *rhs);
+static uint64_t bench_percentile(const uint64_t *sorted, size_t count, size_t percent);
+static uint64_t bench_process_cpu_ns(void);
+
+static turbo_flow_operation_descriptor_t
+bench_cflow_region_native_descriptor(const char *name) {
+  turbo_flow_operation_descriptor_t operation = {0};
+  operation.size = sizeof(operation);
+  operation.name = name;
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_type = "Message";
+  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.output_type = "Message";
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+  operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
+  return operation;
+}
+
+static int bench_cflow_region_native_identity_stage(turbo_flow_msg_t *message, void *ctx) {
+  atomic_size_t *callbacks = (atomic_size_t *)ctx;
+  const cmeta_data_desc *data = turbo_flow_msg_projection_data(message);
+  const int *value = (const int *)turbo_flow_msg_projection(message, NULL);
+  if (!callbacks || !data || !value ||
+      !cmeta_data_desc_equal(data, &cmeta_data_int))
+    return SALTS_EPROTO;
+  atomic_fetch_add_explicit(callbacks, 1u, memory_order_relaxed);
+  return SALTS_OK;
+}
+
+static int bench_cflow_region_clone_int(const void *value, void *ctx, void **out) {
+  int *copy;
+  (void)ctx;
+  if (!value || !out) return SALTS_EINVAL;
+  *out = NULL;
+  copy = (int *)malloc(sizeof(*copy));
+  if (!copy) return SALTS_ENOMEM;
+  *copy = *(const int *)value;
+  *out = copy;
+  atomic_fetch_add_explicit(
+      &g_flow_bench_region_projection_clones, 1u, memory_order_relaxed);
+  return SALTS_OK;
+}
+
+static void bench_cflow_region_destroy_int(void *value, void *ctx) {
+  (void)ctx;
+  free(value);
+}
+
+static int bench_cflow_region_register_native(
+    turbo_flow_t *flow, const char *name) {
+  turbo_flow_operation_descriptor_t operation =
+      bench_cflow_region_native_descriptor(name);
+  turbo_flow_operation_provider_registration_t provider =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  if (turbo_flow_register_operation(flow, &operation) != SALTS_OK) return 0;
+  provider.operation_name = name;
+  provider.fn = bench_cflow_region_native_identity_stage;
+  provider.ctx = &g_flow_bench_region_native_callbacks;
+  return turbo_flow_register_operation_provider(flow, &provider) == SALTS_OK;
+}
+
+static int bench_cflow_region_register_reflected(
+    turbo_flow_t *flow, const char *name) {
+  turbo_flow_operation_descriptor_t operation = {0};
+  turbo_flow_operation_port_binding_t ports[2];
+  turbo_flow_reflected_operation_registration_t registration =
+      TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+
+  operation.size = sizeof(operation);
+  operation.name = name;
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+  operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
+
+  ports[0] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[0].port_index = 0u;
+  ports[0].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[0].direction = TURBO_FLOW_OPERATION_PORT_INPUT;
+  ports[0].value_kind = TURBO_FLOW_OPERATION_VALUE_PARAMETER;
+  ports[0].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[0].parameter_index = 0u;
+  ports[0].data = &cmeta_data_int;
+
+  ports[1] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[1].port_index = 0u;
+  ports[1].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[1].direction = TURBO_FLOW_OPERATION_PORT_OUTPUT;
+  ports[1].value_kind = TURBO_FLOW_OPERATION_VALUE_RETURN;
+  ports[1].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[1].parameter_index = SIZE_MAX;
+  ports[1].data = &cmeta_data_int;
+
+  registration.operation = &operation;
+  registration.function = FunctionMeta(bench_cflow_region_identity);
+  registration.abi = FunctionAbi(bench_cflow_region_identity);
+  registration.adapter = CFLOW_REFLECTED_CALLABLE(bench_cflow_region_identity);
+  registration.ports = ports;
+  registration.port_count = 2u;
+  registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP;
+  return turbo_flow_register_reflected_operation(flow, &registration) == SALTS_OK;
+}
+
+static turbo_flow_t *bench_cflow_region_create_flow(int cflow_region) {
+  static const char graph[] =
+      "source input\n"
+      "stage first operation bench.region.first\n"
+      "stage second operation bench.region.second\n"
+      "stage main {\n"
+      "  input -> first -> second\n"
+      "}\n";
+  turbo_flow_t *flow = turbo_flow_create();
+
+  check_not_null(flow);
+  if (!flow) return NULL;
+  if (cflow_region) {
+    check_true(bench_cflow_region_register_reflected(flow, "bench.region.first"));
+    check_true(bench_cflow_region_register_reflected(flow, "bench.region.second"));
+  } else {
+    check_true(bench_cflow_region_register_native(flow, "bench.region.first"));
+    check_true(bench_cflow_region_register_native(flow, "bench.region.second"));
+  }
+  check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+  check_equal(turbo_flow_compile(flow), SALTS_OK);
+  if (cflow_region) {
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+  } else {
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)0u);
+  }
+  check_equal(turbo_flow_start(flow), SALTS_OK);
+  if (cflow_region) check_null(flow->broadcast_ring);
+  return flow;
+}
+
+static void bench_report_cflow_region_publish(
+    turbo_flow_t *flow, const char *stage_plan, const char *executor,
+    size_t iterations, size_t expected_callbacks_per_message) {
+  turbo_flow_msg_t message;
+  uint64_t *latencies = NULL;
+  uint64_t wall_start;
+  uint64_t wall_elapsed;
+  uint64_t cpu_start;
+  uint64_t cpu_elapsed;
+  size_t completed = 0u;
+  size_t callback_count;
+  size_t clone_count;
+  double throughput;
+  double cpu_ns_per_message;
+  double callbacks_per_message;
+  double clone_allocs_per_message;
+  int status = SALTS_OK;
+  int *input = NULL;
+
+  latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
+  check_not_null(latencies);
+  if (!latencies) return;
+
+  turbo_flow_msg_init(&message);
+  input = (int *)malloc(sizeof(*input));
+  check_not_null(input);
+  if (!input) {
+    free(latencies);
+    return;
+  }
+  *input = 17;
+  check_equal(
+      turbo_flow_msg_bind_typed_projection(
+          &message, &bench_cflow_region_int_schema, &cmeta_data_int, input,
+          bench_cflow_region_clone_int, bench_cflow_region_destroy_int, NULL),
+      SALTS_OK);
+  input = NULL;
+
+  for (size_t i = 0u; i < FLOW_BENCH_WARMUP_ITERS; ++i) {
+    status = turbo_flow_publish(flow, "input", &message);
+    if (status != SALTS_OK) break;
+  }
+  check_equal(status, SALTS_OK);
+  atomic_store_explicit(
+      &g_flow_bench_region_native_callbacks, 0u, memory_order_relaxed);
+  atomic_store_explicit(
+      &g_flow_bench_region_projection_clones, 0u, memory_order_relaxed);
+
+  cpu_start = bench_process_cpu_ns();
+  wall_start = salts_hrtime();
+  for (size_t i = 0u; i < iterations && status == SALTS_OK; ++i) {
+    const uint64_t started = salts_hrtime();
+    status = turbo_flow_publish(flow, "input", &message);
+    latencies[i] = salts_hrtime() - started;
+    if (status == SALTS_OK) ++completed;
+  }
+  wall_elapsed = salts_hrtime() - wall_start;
+  cpu_elapsed = bench_process_cpu_ns() - cpu_start;
+
+  check_equal(status, SALTS_OK);
+  check_equal(completed, iterations);
+  check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 17);
+  callback_count = atomic_load_explicit(
+      &g_flow_bench_region_native_callbacks, memory_order_relaxed);
+  clone_count = atomic_load_explicit(
+      &g_flow_bench_region_projection_clones, memory_order_relaxed);
+  check_equal(callback_count, expected_callbacks_per_message * completed);
+  check_equal(clone_count, completed);
+  if (status != SALTS_OK || completed == 0u) goto cleanup;
+
+  qsort(latencies, completed, sizeof(*latencies), bench_u64_compare);
+  throughput =
+      wall_elapsed > 0u
+          ? ((double)completed * 1000000000.0) / (double)wall_elapsed
+          : 0.0;
+  cpu_ns_per_message =
+      completed ? (double)cpu_elapsed / (double)completed : 0.0;
+  callbacks_per_message =
+      completed ? (double)callback_count / (double)completed : 0.0;
+  clone_allocs_per_message =
+      completed ? (double)clone_count / (double)completed : 0.0;
+
+  printf(
+      "BENCH_RESULT stage_plan=%s executor=%s workers=1 payload_bytes=0 "
+      "projection_bytes=%zu iterations=%zu throughput_msg_s=%.2f p50_ns=%" PRIu64
+      " p95_ns=%" PRIu64 " p99_ns=%" PRIu64
+      " cpu_ns_per_msg=%.2f stage_callbacks_per_msg=%.2f "
+      "projection_clone_allocs_per_msg=%.2f\n",
+      stage_plan, executor, sizeof(int), completed, throughput,
+      bench_percentile(latencies, completed, 50),
+      bench_percentile(latencies, completed, 95),
+      bench_percentile(latencies, completed, 99),
+      cpu_ns_per_message, callbacks_per_message, clone_allocs_per_message);
+
+cleanup:
+  turbo_flow_msg_cleanup(&message);
+  free(latencies);
 }
 
 static int bench_u64_compare(const void *lhs, const void *rhs) {
@@ -1327,6 +1597,31 @@ spec("Turbo Flow Bench") {
     }
 
     turbo_flow_msg_cleanup(&msg);
+  }
+
+  bench("cflow regions") {
+    turbo_flow_t *native_flow;
+    turbo_flow_t *cflow_flow;
+
+    atomic_store_explicit(
+        &g_flow_bench_region_native_callbacks, 0u, memory_order_relaxed);
+    atomic_store_explicit(
+        &g_flow_bench_region_projection_clones, 0u, memory_order_relaxed);
+
+    native_flow = bench_cflow_region_create_flow(0);
+    cflow_flow = bench_cflow_region_create_flow(1);
+    check_not_null(native_flow);
+    check_not_null(cflow_flow);
+
+    bench_report_cflow_region_publish(
+        native_flow, "typed-identity-2-stage-native",
+        "native-stage-dispatch", FLOW_BENCH_EXECUTOR_ITERS, 2u);
+    bench_report_cflow_region_publish(
+        cflow_flow, "typed-identity-2-stage-cflow-region",
+        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u);
+
+    bench_destroy_started_flow(cflow_flow);
+    bench_destroy_started_flow(native_flow);
   }
 
   bench("async ingress") {
