@@ -683,6 +683,65 @@ int turbo_flow_msg_bind_typed_projection(turbo_flow_msg_t *msg,
   return rc;
 }
 
+static void *flow_msg_managed_storage_allocate(const cmeta_type_desc *type) {
+  const size_t pointer_align = _Alignof(void *);
+  size_t alignment;
+  size_t total;
+  void *allocation;
+  uintptr_t begin;
+  uintptr_t aligned;
+
+  if (!cmeta_type_desc_valid(type) || type->size == 0u || type->align == 0u ||
+      (type->align & (type->align - 1u)) != 0u)
+    return NULL;
+  alignment = type->align > pointer_align ? type->align : pointer_align;
+  if (type->size > SIZE_MAX - sizeof(void *) ||
+      type->size + sizeof(void *) > SIZE_MAX - (alignment - 1u))
+    return NULL;
+  total = sizeof(void *) + type->size + alignment - 1u;
+  allocation = malloc(total);
+  if (!allocation) return NULL;
+  begin = (uintptr_t)allocation + sizeof(void *);
+  if (begin > UINTPTR_MAX - (alignment - 1u)) {
+    free(allocation);
+    return NULL;
+  }
+  aligned = (begin + alignment - 1u) & ~((uintptr_t)alignment - 1u);
+  ((void **)aligned)[-1] = allocation;
+  return (void *)aligned;
+}
+
+static void flow_msg_managed_storage_free(void *value) {
+  if (!value) return;
+  free(((void **)value)[-1]);
+}
+
+static int flow_msg_cmeta_managed_clone(const void *value, void *ctx, void **out) {
+  const cmeta_type_desc *type = (const cmeta_type_desc *)ctx;
+  void *copy;
+  if (out) *out = NULL;
+  if (!value || !out || !cmeta_type_desc_valid(type) ||
+      cmeta_type_require_traits(type, CMETA_TRAIT_COPY | CMETA_TRAIT_DESTROY) != CMETA_OK)
+    return SALTS_EINVAL;
+  copy = flow_msg_managed_storage_allocate(type);
+  if (!copy) return SALTS_ENOMEM;
+  if (!type->traits->copy_construct(copy, value)) {
+    flow_msg_managed_storage_free(copy);
+    return SALTS_EIO;
+  }
+  *out = copy;
+  return SALTS_OK;
+}
+
+static void flow_msg_cmeta_managed_destroy(void *value, void *ctx) {
+  const cmeta_type_desc *type = (const cmeta_type_desc *)ctx;
+  if (!value || !cmeta_type_desc_valid(type) ||
+      cmeta_type_require_traits(type, CMETA_TRAIT_DESTROY) != CMETA_OK)
+    return;
+  type->traits->destroy(value);
+  flow_msg_managed_storage_free(value);
+}
+
 int flow_msg_commit_trivial_projection_in_place(
     turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
     const cmeta_data_desc *output_data, const void *output_value) {
@@ -714,6 +773,51 @@ int flow_msg_commit_trivial_projection_in_place(
    * introduced at the TurboFlow boundary.
    */
   memcpy(projection->value, output_value, output_data->storage_type->size);
+  projection->data = output_data;
+  return SALTS_OK;
+}
+
+int flow_msg_commit_managed_projection_move(
+    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, void *output_value) {
+  flow_msg_projection_t *projection;
+  const cmeta_type_desc *type;
+  void *destination;
+  const cmeta_trait_flags required =
+      CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY;
+
+  if (!message || !cmeta_data_desc_valid(expected_input) ||
+      !cmeta_data_desc_valid(output_data) || !output_value ||
+      !cmeta_data_desc_equal(expected_input, output_data) ||
+      !output_data->storage_type)
+    return SALTS_EINVAL;
+  type = output_data->storage_type;
+  if (cmeta_type_require_traits(type, required) != CMETA_OK)
+    return SALTS_ENOTSUP;
+
+  projection = (flow_msg_projection_t *)flow_msg_projection(message);
+  if (!projection || !projection->value || !projection->schema || !projection->data ||
+      !projection->destroy)
+    return SALTS_EPROTO;
+  if (projection->owner || projection->claim_active || projection->result_value)
+    return SALTS_ENOTSUP;
+  if (!cmeta_data_desc_equal(projection->data, expected_input))
+    return SALTS_EPROTO;
+
+  /*
+   * All fallible work is complete before the move. CMeta MOVE and DESTROY are
+   * no-fail contracts. The CFlow result keeps ownership of the moved-from
+   * source storage and will destroy it after this commit returns.
+   */
+  destination = flow_msg_managed_storage_allocate(type);
+  if (!destination) return SALTS_ENOMEM;
+  type->traits->move_construct(destination, output_value);
+
+  projection->destroy(projection->value, projection->ctx);
+  projection->value = destination;
+  projection->clone = flow_msg_cmeta_managed_clone;
+  projection->destroy = flow_msg_cmeta_managed_destroy;
+  projection->ctx = (void *)type;
   projection->data = output_data;
   return SALTS_OK;
 }
