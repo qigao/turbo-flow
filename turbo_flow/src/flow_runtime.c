@@ -144,6 +144,12 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled runtime plan is not available");
   }
+  if (!vec_empty(&flow->compiled_plan.cflow_regions) &&
+      flow_observer_has_handlers(flow)) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "observer state changed after CFlow region compilation; recompile before start");
+  }
   if (vec_empty(&flow->compiled_plan.data_segments) && !vec_empty(&flow->compiled_plan.edges)) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled data plan is not available");
