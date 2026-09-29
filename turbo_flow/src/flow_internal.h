@@ -841,6 +841,7 @@ int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
+int flow_plan_owned_resources_reserve(turbo_flow_t *flow, size_t additional);
 int flow_plan_owned_resource_stage(turbo_flow_t *flow, void *ctx,
                                    flow_plan_owned_resource_release_fn release);
 void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow);
