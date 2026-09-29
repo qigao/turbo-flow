@@ -382,6 +382,13 @@ typedef struct flow_cflow_region_batch_workspace_s {
  * Single-owner compiled graph plan. The compiler is the only writer; runtime
  * code may read the contained storage only after sealed becomes nonzero.
  */
+typedef void (*flow_plan_owned_resource_release_fn)(void *ctx);
+
+typedef struct flow_plan_owned_resource_s {
+  void *ctx;
+  flow_plan_owned_resource_release_fn release;
+} flow_plan_owned_resource_t;
+
 typedef struct flow_compiled_plan_s {
   vec_t nodes;
   vec_t edges;
@@ -397,6 +404,8 @@ typedef struct flow_compiled_plan_s {
   vec_t cflow_regions;
   /** Compiled CFlow region vector index for a stage, or FLOW_PLAN_INDEX_NONE. */
   vec_t cflow_region_by_stage;
+  /** Opaque compile-time resources retained for the complete sealed-plan lifetime. */
+  vec_t owned_resources;
   const cmeta_type_desc *message_type;
   const cmeta_type_desc *operation_type;
   uint32_t candidate_region_count;
@@ -697,6 +706,8 @@ struct turbo_flow_s {
   vec_t stages;
   vec_t edges;
   flow_compiled_plan_t compiled_plan;
+  /** Resources staged before compile and transferred only into a successful plan. */
+  vec_t pending_plan_resources;
   flow_plan_backend_requirement_t required_backend;
   vec_t runtime_stage_configs;
   vec_t threadpool_adapters;
@@ -830,6 +841,9 @@ int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
+int flow_plan_owned_resource_stage(turbo_flow_t *flow, void *ctx,
+                                   flow_plan_owned_resource_release_fn release);
+void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
