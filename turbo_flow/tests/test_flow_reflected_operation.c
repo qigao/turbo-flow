@@ -188,6 +188,17 @@ static void reflected_test_destroy_int(void *value, void *ctx) {
   free(value);
 }
 
+static void reflected_test_stage_observer(
+    void *ctx, const char *stage_name, const char *adapter_name,
+    const turbo_flow_msg_t *message, uint64_t duration_ns, int status) {
+  (void)ctx;
+  (void)stage_name;
+  (void)adapter_name;
+  (void)message;
+  (void)duration_ns;
+  (void)status;
+}
+
 static const flow_stage_semantic_plan_t *
 compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
   static const char prefix[] =
@@ -374,6 +385,7 @@ suite("TurboFlow reflected operation semantics") {
         TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
         "int", 7u, 3u, NULL};
     reflected_runtime_sink_probe_t probe = {0};
+    turbo_flow_observer_ops_t observer = {0};
     turbo_flow_msg_t message;
     int *input = NULL;
     int first_stage;
@@ -422,6 +434,12 @@ suite("TurboFlow reflected operation semantics") {
       check_true(cmeta_data_desc_equal(region->input_data, &cmeta_data_int));
       check_true(cmeta_data_desc_equal(region->output_data, &cmeta_data_int));
     }
+
+    observer.size = sizeof(observer);
+    observer.stage_complete = reflected_test_stage_observer;
+    check_equal(turbo_flow_set_observer(flow, &observer, NULL), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_EBUSY);
+    check_equal(turbo_flow_set_observer(flow, NULL, NULL), SALTS_OK);
 
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_null(flow->broadcast_ring);
