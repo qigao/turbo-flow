@@ -10,7 +10,11 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { STREAM_SINK_TEST_TIMEOUT_MS = 5000, STREAM_SINK_NATIVE_PENDING_BYTES = 64u * 1024u };
+enum {
+  STREAM_SINK_TEST_TIMEOUT_MS = 5000,
+  /* Must exceed ordinary FIFO/pipe buffering so stop observes a native pending write. */
+  STREAM_SINK_NATIVE_PENDING_BYTES = 256u * 1024u
+};
 
 static const char STREAM_SINK_GRAPH[] = "source input\n"
                                         "stage output adapter cnet.pipe.out\n"
@@ -431,9 +435,11 @@ spec("TurboFlow CNet stream sink") {
     salts_thread_destroy(&observer);
     check_equal(atomic_load_explicit(&race.status, memory_order_acquire), SALTS_OK);
     check_true(atomic_load_explicit(&race.snapshots, memory_order_relaxed) > 0u);
-    check_true((atomic_load_explicit(&race.states, memory_order_relaxed) &
-                ((UINT64_C(1) << TURBO_FLOW_MANAGED_BOUNDARY_DRAINING) |
-                 (UINT64_C(1) << TURBO_FLOW_MANAGED_BOUNDARY_STOPPING))) != 0u);
+    /*
+     * Snapshot readers race the stop transition. They must remain coherent,
+     * but are not required to observe a transient DRAINING/STOPPING state:
+     * a fast stop may move from RUNNING to STOPPED between two snapshots.
+     */
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ECANCELED);
     check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
