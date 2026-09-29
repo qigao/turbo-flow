@@ -176,6 +176,16 @@ elif args.materializer:
         "set_target_properties(test_flow_operation_fixture_TWO_NAMES PROPERTIES C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)\n"
         'cmake_add_test(test_materializer_binding_config SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_materializer_binding_config.c LIBS TurboFlow::Config Salts::TinyTest FOLDER "turbo_flow/tests")\n'
         'cmake_add_test(test_flow_plugin_materializer_generation SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_plugin_materializer_generation.c LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")\n'
+        "cmake_add_test(\n"
+        "  test_flow_reflected_operation\n"
+        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_reflected_operation.c\n"
+        "          ${CMAKE_SOURCE_DIR}/turbo_flow/tests/reflected_operation_header_cpp.cpp\n"
+        "  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest\n"
+        "  INCLUDES ${CMAKE_SOURCE_DIR}/turbo_flow/src\n"
+        '  FOLDER "turbo_flow/tests")\n'
+        "set_target_properties(test_flow_reflected_operation PROPERTIES\n"
+        "  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF\n"
+        "  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)\n"
         "target_compile_definitions(test_flow_plugin_materializer_generation PRIVATE\n"
         "  FLOW_OPERATION_OK=\\\"$<TARGET_FILE:test_flow_operation_fixture_OK>\\\"\n"
         "  FLOW_OPERATION_TWO_NAMES=\\\"$<TARGET_FILE:test_flow_operation_fixture_TWO_NAMES>\\\"\n"
