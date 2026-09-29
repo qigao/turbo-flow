@@ -1227,6 +1227,10 @@ TURBO_FLOW_C_API int turbo_flow_register_adapter_transport_reply(
     turbo_flow_t *flow, const char *adapter_name,
     const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx);
 
+/** Return SALTS_OK only when the named Source owns a transport-reply provider. */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_supported(
+    const turbo_flow_t *flow, const char *adapter_name);
+
 /** Capture the exact transport generation carried by one Source-owned ingress message. */
 TURBO_FLOW_C_API int turbo_flow_transport_reply_capture(
     const turbo_flow_t *flow, const char *adapter_name, const turbo_flow_msg_t *message,
