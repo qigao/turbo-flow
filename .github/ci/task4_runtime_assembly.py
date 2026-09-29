@@ -119,13 +119,16 @@ elif args.protocol_intake:
         "  LIBS tf_protocol_network_intake_core TurboFlow::CNetAdapter Salts::TinyTest\n"
         "  INCLUDES ${CMAKE_SOURCE_DIR}/ingress/protocol/network/src\n"
         '  FOLDER "ingress/protocol/tests")\n'
-        "cmake_add_test(\n"
-        "  test_turbo_flow\n"
-        "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_turbo_flow.c\n"
-        "          ${CMAKE_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c\n"
-        "  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest\n"
-        "  INCLUDES ${CMAKE_SOURCE_DIR}/turbo_flow/src\n"
-        '  FOLDER "turbo_flow/tests")\n'
+        "add_executable(test_turbo_flow_focus\n"
+        "  ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_turbo_flow.c\n"
+        "  ${CMAKE_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c)\n"
+        "target_link_libraries(test_turbo_flow_focus PRIVATE TurboFlow::Graph Salts::CFlow Salts::TinyTest)\n"
+        "target_include_directories(test_turbo_flow_focus PRIVATE ${CMAKE_SOURCE_DIR}/turbo_flow/src)\n"
+        "set_target_properties(test_turbo_flow_focus PROPERTIES FOLDER \"turbo_flow/tests\")\n"
+        "add_test(NAME test_turbo_flow_transport_vectors COMMAND test_turbo_flow_focus --filter \"transport vectors\")\n"
+        "add_test(NAME test_turbo_flow_use_aliases COMMAND test_turbo_flow_focus --filter \"use aliases\")\n"
+        "add_test(NAME test_turbo_flow_legacy_cflow_boundary COMMAND test_turbo_flow_focus --filter \"legacy typed operations\")\n"
+        "add_test(NAME test_turbo_flow_source_only_cflow COMMAND test_turbo_flow_focus --filter \"source-only plan\")\n"
     )
 elif args.materializer:
     children = (
