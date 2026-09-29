@@ -230,9 +230,16 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
     if (!region || !region->plan.impl || region->stage_count == 0u ||
         region->entry_stage >= stage_count || region->exit_stage >= stage_count ||
         region->candidate_region >= plan->candidate_region_count ||
+        region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT ||
+        !region->input_data || !region->output_data ||
+        !cmeta_data_desc_valid(region->input_data) ||
+        !cmeta_data_desc_valid(region->output_data) ||
+        !cmeta_data_desc_equal(region->input_data, region->output_data) ||
         !region->plan.input_type || !region->plan.output_type ||
         !cmeta_type_desc_valid(region->plan.input_type) ||
-        !cmeta_type_desc_valid(region->plan.output_type)) {
+        !cmeta_type_desc_valid(region->plan.output_type) ||
+        !cmeta_type_equal(region->input_data->storage_type, region->plan.input_type) ||
+        !cmeta_type_equal(region->output_data->storage_type, region->plan.output_type)) {
       return SALTS_EPROTO;
     }
   }
@@ -255,10 +262,13 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
         (const flow_runtime_node_plan_t *)vec_at_const(&candidate->nodes, stage_index);
     const flow_stage_semantic_plan_t *semantics =
         (const flow_stage_semantic_plan_t *)vec_at_const(&candidate->stage_semantics, stage_index);
+    const uint32_t *region_index =
+        (const uint32_t *)vec_at_const(&candidate->cflow_region_by_stage, stage_index);
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
+    const flow_cflow_region_plan_t *region = NULL;
 
-    if (!node || !semantics || !stage) {
+    if (!node || !semantics || !stage || !region_index) {
       return flow_set_error(flow, SALTS_EPROTO, 0, 0,
                             "required CFlow backend received an invalid candidate plan");
     }
@@ -266,13 +276,18 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
                         FLOW_RUNTIME_NODE_BUFFER)) != 0u) {
       continue;
     }
-    if (!semantics->typed || semantics->barriers != FLOW_LOWERING_BARRIER_NONE) {
+    if (*region_index != FLOW_PLAN_INDEX_NONE &&
+        *region_index < vec_size(&candidate->cflow_regions)) {
+      region = (const flow_cflow_region_plan_t *)vec_at_const(
+          &candidate->cflow_regions, *region_index);
+    }
+    if (!semantics->typed || semantics->barriers != FLOW_LOWERING_BARRIER_NONE ||
+        !region || region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT) {
       return flow_set_error(flow, SALTS_ENOTSUP, stage->line, stage->column,
                             "required CFlow backend cannot lower this stage");
     }
   }
-  return flow_set_error(flow, SALTS_ENOTSUP, 0, 0,
-                        "required CFlow backend execution is not implemented");
+  return SALTS_OK;
 }
 
 int flow_build_runtime_plan(turbo_flow_t *flow) {
