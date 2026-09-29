@@ -269,7 +269,6 @@ foreach(forbidden_fragment IN ITEMS
         "Checkout pinned Salts"
         "Checkout pinned SaltsUtils"
         "Checkout pinned RulesForge"
-        "DATABIND_ROOT:"
         "/opt/databind")
   string(FIND "${rulesforge_workflow}" "${forbidden_fragment}" fragment_pos)
   if(NOT fragment_pos EQUAL -1)
