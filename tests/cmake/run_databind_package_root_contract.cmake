@@ -258,7 +258,8 @@ file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/rulesforge-provider.yml"
 foreach(required_fragment IN ITEMS
         "restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
         "VCPKG_INSTALL_OPTIONS=--only-binarycaching"
-        "TURBO_FLOW_IDLC_HOST_EXECUTABLE")
+        "TURBO_FLOW_IDLC_HOST_EXECUTABLE"
+        "test -z \"\${DATABIND_ROOT:-}\"")
   string(FIND "${rulesforge_workflow}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "RulesForge provider gate missing published dependency fragment: ${required_fragment}")
@@ -268,7 +269,8 @@ foreach(forbidden_fragment IN ITEMS
         "Checkout pinned Salts"
         "Checkout pinned SaltsUtils"
         "Checkout pinned RulesForge"
-        "DATABIND_ROOT")
+        "DATABIND_ROOT:"
+        "/opt/databind")
   string(FIND "${rulesforge_workflow}" "${forbidden_fragment}" fragment_pos)
   if(NOT fragment_pos EQUAL -1)
     message(FATAL_ERROR "RulesForge provider gate retains stale dependency path: ${forbidden_fragment}")
