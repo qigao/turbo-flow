@@ -323,7 +323,8 @@ typedef struct turbo_flow_cnet_listener_reply_terminal_s {
  * Copy and admit one reply to an exact accepted listener connection generation.
  *
  * At most one native write and one unconsumed terminal are allowed per
- * connection. The bytes are copied by CNet before SALTS_OK is returned.
+ * connection. This legacy raw-pointer surface copies into retained Salts backing,
+ * then admits that backing through CNet scatter/gather before SALTS_OK returns.
  * No reconnect, peer selection, or generation fallback is performed.
  */
 TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_reply_send(
