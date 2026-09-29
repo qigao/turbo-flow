@@ -598,7 +598,9 @@ suite("TurboFlow reflected operation semantics") {
     static const char graph[] =
         "source input\n"
         "stage op operation test.reflected.provider_free_deadline\n"
-        "stage main { input -> op }\n";
+        "stage main {\n"
+        "  input -> op\n"
+        "}\n";
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         reflected_operation_descriptor("test.reflected.provider_free_deadline");
