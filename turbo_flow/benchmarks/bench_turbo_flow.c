@@ -611,7 +611,8 @@ static turbo_flow_t *bench_cflow_region_create_flow(int cflow_region) {
 
 static void bench_report_cflow_region_publish(
     turbo_flow_t *flow, const char *stage_plan, const char *executor,
-    size_t iterations, size_t expected_callbacks_per_message) {
+    size_t iterations, size_t expected_callbacks_per_message,
+    size_t expected_clones_per_message) {
   turbo_flow_msg_t message;
   uint64_t *latencies = NULL;
   uint64_t wall_start;
@@ -676,7 +677,7 @@ static void bench_report_cflow_region_publish(
   clone_count = atomic_load_explicit(
       &g_flow_bench_region_projection_clones, memory_order_relaxed);
   check_equal(callback_count, expected_callbacks_per_message * completed);
-  check_equal(clone_count, completed);
+  check_equal(clone_count, expected_clones_per_message * completed);
   if (status != SALTS_OK || completed == 0u) goto cleanup;
 
   qsort(latencies, completed, sizeof(*latencies), bench_u64_compare);
@@ -1615,10 +1616,10 @@ spec("Turbo Flow Bench") {
 
     bench_report_cflow_region_publish(
         native_flow, "typed-identity-2-stage-native",
-        "native-stage-dispatch", FLOW_BENCH_EXECUTOR_ITERS, 2u);
+        "native-stage-dispatch", FLOW_BENCH_EXECUTOR_ITERS, 2u, 2u);
     bench_report_cflow_region_publish(
         cflow_flow, "typed-identity-2-stage-cflow-region",
-        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u);
+        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u, 1u);
 
     bench_destroy_started_flow(cflow_flow);
     bench_destroy_started_flow(native_flow);
