@@ -424,6 +424,7 @@ suite("TurboFlow reflected operation semantics") {
     }
 
     check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_null(flow->broadcast_ring);
     turbo_flow_msg_init(&message);
     input = (int *)malloc(sizeof(*input));
     check_not_null(input);
