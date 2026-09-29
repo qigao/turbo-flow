@@ -54,6 +54,7 @@ struct flow_protocol_network_intake_sink_s {
   intake_parser_slot_t *parser_slots;
   intake_pending_claim_t *pending;
   intake_pending_reply_t *replies;
+  intake_pending_reply_t *inflight_replies;
   uint8_t *reply_bytes;
   size_t pending_head;
   size_t pending_count;
@@ -266,6 +267,34 @@ static void intake_reply_commit(flow_protocol_network_intake_sink_t *sink,
   if (sink->next_reply_tag == 0u) sink->next_reply_tag = 1u;
 }
 
+static int intake_reply_session_equal(
+    const turbo_flow_transport_reply_session_t *lhs,
+    const turbo_flow_transport_reply_session_t *rhs) {
+  if (!lhs || !rhs || lhs->size != sizeof(*lhs) || rhs->size != sizeof(*rhs) ||
+      lhs->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      rhs->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      lhs->token_size == 0u || lhs->token_size != rhs->token_size ||
+      lhs->token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES)
+    return 0;
+  return memcmp(lhs->token, rhs->token, lhs->token_size) == 0;
+}
+
+static intake_pending_reply_t *intake_reply_inflight_reserve(
+    flow_protocol_network_intake_sink_t *sink) {
+  if (!sink || !sink->inflight_replies) return NULL;
+  for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i)
+    if (sink->inflight_replies[i].tag == 0u) return &sink->inflight_replies[i];
+  return NULL;
+}
+
+static intake_pending_reply_t *intake_reply_inflight_find(
+    flow_protocol_network_intake_sink_t *sink, uint64_t tag) {
+  if (!sink || !sink->inflight_replies || tag == 0u) return NULL;
+  for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i)
+    if (sink->inflight_replies[i].tag == tag) return &sink->inflight_replies[i];
+  return NULL;
+}
+
 static int intake_reply_drain_terminals(flow_protocol_network_intake_sink_t *sink) {
   if (!sink) return SALTS_EINVAL;
   if (sink->settings.reply_point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) return SALTS_OK;
@@ -274,9 +303,16 @@ static int intake_reply_drain_terminals(flow_protocol_network_intake_sink_t *sin
         TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
     int rc = turbo_flow_transport_reply_take_terminal(
         sink->flow, sink->settings.source_adapter_name, &terminal);
+    intake_pending_reply_t *expected;
     if (rc == SALTS_ENOENT) return SALTS_OK;
     if (rc != SALTS_OK) return rc;
     if (sink->pending_replies == 0u) return SALTS_EPROTO;
+    expected = intake_reply_inflight_find(sink, terminal.tag);
+    if (!expected ||
+        !intake_reply_session_equal(&expected->session, &terminal.session) ||
+        expected->data_size != terminal.data_size)
+      return SALTS_EPROTO;
+    *expected = (intake_pending_reply_t){0};
     --sink->pending_replies;
     intake_counter_add(&sink->reply_terminals, 1u);
     if (terminal.kind != TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT ||
@@ -312,6 +348,11 @@ static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
       sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
       --sink->reply_count;
       continue;
+    }
+    {
+      intake_pending_reply_t *inflight = intake_reply_inflight_reserve(sink);
+      if (!inflight) return SALTS_EPROTO;
+      *inflight = *reply;
     }
     intake_counter_add(&sink->replies_admitted, 1u);
     ++sink->pending_replies;
@@ -362,7 +403,9 @@ static int intake_decoded_admit(void *ctx,
 
   if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
     if (!sink->active_reply_session_valid) return SALTS_EPROTO;
-    if (sink->reply_count >= sink->settings.max_pending_claims) return SALTS_ENOBUFS;
+    if (sink->reply_count > sink->settings.max_pending_claims - sink->pending_replies ||
+        sink->reply_count + sink->pending_replies >= sink->settings.max_pending_claims)
+      return SALTS_ENOBUFS;
   }
 
   buffer = mem_wrap_external((void *)payload_data, encoded_size, NULL, NULL);
@@ -875,6 +918,8 @@ int flow_protocol_network_intake_sink_create(
   if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
     sink->replies =
         (intake_pending_reply_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->replies));
+    sink->inflight_replies = (intake_pending_reply_t *)calloc(
+        sink->settings.max_pending_claims, sizeof(*sink->inflight_replies));
     sink->reply_bytes = (uint8_t *)calloc(
         sink->settings.max_pending_claims, sink->settings.reply_max_encoded_bytes);
   }
@@ -884,7 +929,7 @@ int flow_protocol_network_intake_sink_create(
       (sink->mapper_bound && !sink->mapped_scratch) ||
       !sink->parser_slots || !sink->pending ||
       (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE &&
-       (!sink->replies || !sink->reply_bytes))) {
+       (!sink->replies || !sink->inflight_replies || !sink->reply_bytes))) {
     tstr_free(sink->adapter_name);
     tstr_free(sink->decoded_source_name);
     free(sink->envelope_scratch);
@@ -892,6 +937,7 @@ int flow_protocol_network_intake_sink_create(
     free(sink->parser_slots);
     free(sink->pending);
     free(sink->replies);
+    free(sink->inflight_replies);
     free(sink->reply_bytes);
     free(sink);
     return SALTS_ENOMEM;
@@ -918,6 +964,7 @@ fail:
   free(sink->parser_slots);
   free(sink->pending);
   free(sink->replies);
+  free(sink->inflight_replies);
   free(sink->reply_bytes);
   free(sink);
   return rc;
@@ -1024,6 +1071,7 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
   free(sink->parser_slots);
   free(sink->pending);
   free(sink->replies);
+  free(sink->inflight_replies);
   free(sink->reply_bytes);
   free(sink);
 }
