@@ -139,7 +139,7 @@ endmacro()
 
 _TurboFlow_require_dependency_root(Salts SALTS_ROOT Salts::Core)
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _TurboFlow_Salts_root)
-find_dependency(Salts 1.8.3 EXACT CONFIG REQUIRED
+find_dependency(Salts CONFIG REQUIRED
                 PATHS "${_TurboFlow_Salts_root}" NO_DEFAULT_PATH)
 _TurboFlow_verify_dependency_root(Salts SALTS_ROOT)
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCNet.cmake")
@@ -147,27 +147,27 @@ turbo_flow_require_cnet_stop_drain_contract()
 if(_TurboFlow_needs_salts_utils)
   _TurboFlow_require_dependency_root(SaltsUtils SALTS_UTILS_ROOT Salts::JsonParser)
   file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" _TurboFlow_SaltsUtils_root)
-  find_dependency(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+  find_dependency(SaltsUtils CONFIG REQUIRED
                   PATHS "${_TurboFlow_SaltsUtils_root}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(SaltsUtils SALTS_UTILS_ROOT)
   if(NOT TARGET Salts::DataBind)
     set(TurboFlow_FOUND FALSE)
     set(TurboFlow_NOT_FOUND_MESSAGE
-        "SaltsUtils 4.1.3 package is missing Salts::DataBind")
+        "resolved SaltsUtils package is missing Salts::DataBind")
     return()
   endif()
 endif()
 if(_TurboFlow_needs_rules_forge)
   _TurboFlow_require_dependency_root(RulesForge RULES_FORGE_ROOT RulesForge::RulesForge)
   file(TO_CMAKE_PATH "$ENV{RULES_FORGE_ROOT}" _TurboFlow_RulesForge_root)
-  find_dependency(RulesForge 0.9.0 EXACT CONFIG REQUIRED
+  find_dependency(RulesForge CONFIG REQUIRED
                   PATHS "${_TurboFlow_RulesForge_root}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(RulesForge RULES_FORGE_ROOT)
 endif()
 if(_TurboFlow_needs_turbodb)
   _TurboFlow_require_dependency_root(Orm TURBODB_ROOT Orm::C)
   file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" _TurboFlow_TurboDb_root)
-  find_dependency(Orm 2.1.0 EXACT CONFIG REQUIRED
+  find_dependency(Orm CONFIG REQUIRED
                   PATHS "${_TurboFlow_TurboDb_root}" NO_DEFAULT_PATH)
   _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
 endif()
