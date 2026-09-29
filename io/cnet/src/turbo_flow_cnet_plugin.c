@@ -674,11 +674,33 @@ static int cnet_plugin_owner_quiesce(void *ctx, uint64_t timeout_ms) {
 
 static int cnet_plugin_owner_drain(void *ctx, uint64_t timeout_ms) {
   cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  int rc;
   (void)timeout_ms;
   if (!owner) return SALTS_EINVAL;
   if (owner->config.kind <= TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE && owner->handle.any &&
       owner->state != TURBO_FLOW_MANAGED_BOUNDARY_STOPPED)
     return owner->last_status == SALTS_OK ? SALTS_EBUSY : owner->last_status;
+
+  /*
+   * Reply-capable Sources retain authoritative terminal evidence after stop.
+   * Destruction is the canonical quiescence probe: SALTS_EBUSY pins the Product
+   * owner (and therefore the plugin generation) until the consumer drains those
+   * terminals. Success transfers the handle to the drained state early so the
+   * later void destroy callback cannot silently discard evidence.
+   */
+  if (owner->state == TURBO_FLOW_MANAGED_BOUNDARY_STOPPED &&
+      owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE &&
+      owner->handle.listener_source) {
+    rc = turbo_flow_cnet_listener_source_destroy(owner->handle.listener_source);
+    if (rc != SALTS_OK) return rc;
+    owner->handle.listener_source = NULL;
+  } else if (owner->state == TURBO_FLOW_MANAGED_BOUNDARY_STOPPED &&
+             owner->config.kind == TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE &&
+             owner->handle.packet_source) {
+    rc = turbo_flow_cnet_packet_source_destroy(owner->handle.packet_source);
+    if (rc != SALTS_OK) return rc;
+    owner->handle.packet_source = NULL;
+  }
   return SALTS_OK;
 }
 
@@ -695,12 +717,18 @@ static void cnet_plugin_owner_destroy(void *ctx) {
       (void)turbo_flow_cnet_stream_source_destroy(owner->handle.stream_source);
     break;
   case TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE:
-    if (owner->handle.listener_source)
-      (void)turbo_flow_cnet_listener_source_destroy(owner->handle.listener_source);
+    if (owner->handle.listener_source) {
+      if (turbo_flow_cnet_listener_source_destroy(owner->handle.listener_source) != SALTS_OK)
+        return;
+      owner->handle.listener_source = NULL;
+    }
     break;
   case TURBO_FLOW_CNET_PLUGIN_PACKET_SOURCE:
-    if (owner->handle.packet_source)
-      (void)turbo_flow_cnet_packet_source_destroy(owner->handle.packet_source);
+    if (owner->handle.packet_source) {
+      if (turbo_flow_cnet_packet_source_destroy(owner->handle.packet_source) != SALTS_OK)
+        return;
+      owner->handle.packet_source = NULL;
+    }
     break;
   case TURBO_FLOW_CNET_PLUGIN_STREAM_SINK:
     if (owner->handle.stream_sink)
