@@ -2,6 +2,7 @@
 #define FLOW_PROTOCOL_NETWORK_INTAKE_INTERNAL_H
 
 #include "turbo_flow_durable_buffer.h"
+#include "turbo_flow_protocol_network_intake.h"
 #include "turbo_flow_protocol_source.h"
 #include "turbo_flow_protocol_mapper.h"
 #include "turbo_flow_resolved_config.h"
