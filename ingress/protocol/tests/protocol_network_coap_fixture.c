@@ -217,6 +217,8 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
                               "}\n";
   turbo_flow_protocol_network_intake_config_t config =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
+  turbo_flow_protocol_network_reply_policy_t reply =
+      TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_t *flow = turbo_flow_create();
   int rc;
@@ -233,6 +235,11 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
   config.source_adapter_name = "udp.input";
   config.decoder_adapter_name = "protocol.decode";
   config.decoded_source_name = "decoded";
+  if (fixture->reply_enabled) {
+    reply.point = TURBO_FLOW_PROTOCOL_NETWORK_REPLY_DURABLE_ADMISSION;
+    reply.max_encoded_bytes = 1024u;
+    config.reply_policy = &reply;
+  }
   rc = turbo_flow_protocol_network_intake_create(&config, &flow, &fixture->intake, &error);
   if (rc != SALTS_OK)
     (void)fprintf(stderr, "coap e2e intake create rc=%d path=%s reason=%s\n",
@@ -281,11 +288,12 @@ fail:
   return rc;
 }
 
-int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
-                                   const char *cnet_module, const char *coap_module,
-                                   const char *durable_module,
-                                   protocol_network_e2e_storage_kind_t storage,
-                                   char *turbodb_path) {
+static int protocol_network_e2e_coap_init_mode(
+    protocol_network_e2e_fixture_t *fixture,
+    const char *cnet_module, const char *coap_module,
+    const char *durable_module,
+    protocol_network_e2e_storage_kind_t storage,
+    char *turbodb_path, int reply_enabled) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
@@ -293,6 +301,7 @@ int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
       !durable_module || !durable_module[0])
     return SALTS_EINVAL;
   memset(fixture, 0, sizeof(*fixture));
+  fixture->reply_enabled = reply_enabled ? 1 : 0;
   rc = protocol_network_e2e_storage_prepare(fixture, storage, turbodb_path);
   if (rc == SALTS_OK) rc = protocol_network_coap_receiver_open(fixture);
   if (rc == SALTS_OK)
@@ -305,6 +314,24 @@ int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
   if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
   if (rc != SALTS_OK) protocol_network_e2e_destroy(fixture);
   return rc;
+}
+
+int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
+                                   const char *cnet_module, const char *coap_module,
+                                   const char *durable_module,
+                                   protocol_network_e2e_storage_kind_t storage,
+                                   char *turbodb_path) {
+  return protocol_network_e2e_coap_init_mode(
+      fixture, cnet_module, coap_module, durable_module, storage, turbodb_path, 0);
+}
+
+int protocol_network_e2e_coap_init_reply(protocol_network_e2e_fixture_t *fixture,
+                                         const char *cnet_module, const char *coap_module,
+                                         const char *durable_module,
+                                         protocol_network_e2e_storage_kind_t storage,
+                                         char *turbodb_path) {
+  return protocol_network_e2e_coap_init_mode(
+      fixture, cnet_module, coap_module, durable_module, storage, turbodb_path, 1);
 }
 
 int protocol_network_e2e_udp_send_frame(protocol_network_e2e_fixture_t *fixture,
