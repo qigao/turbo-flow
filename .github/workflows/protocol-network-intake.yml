@@ -132,8 +132,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/protocol-network-runtime --target test_protocol_network_intake_config test_protocol_network_intake_core test_flow_applicant_mapper_plugin test_cnet_listener_source test_cnet_stream_sink test_turbo_flow_focus test_flow_transport_reply -j2 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
-          ctest --test-dir build/protocol-network-runtime -R '^(test_protocol_network_intake_(config|core)|test_flow_applicant_mapper_plugin|test_cnet_(listener_source|stream_sink)|test_turbo_flow_(transport_vectors|use_aliases|legacy_cflow_boundary|source_only_cflow)|test_flow_transport_reply)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
+          cmake --build build/protocol-network-runtime --target test_protocol_network_intake_config test_protocol_network_intake_core test_flow_applicant_mapper_plugin test_cnet_listener_source test_cnet_stream_sink test_turbo_flow_focus test_flow_transport_reply test_protocol_network_jtt808 -j2 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
+          ctest --test-dir build/protocol-network-runtime -R '^(test_protocol_network_intake_(config|core)|test_flow_applicant_mapper_plugin|test_cnet_(listener_source|stream_sink)|test_turbo_flow_(transport_vectors|use_aliases|legacy_cflow_boundary|source_only_cflow)|test_flow_transport_reply|test_protocol_network_jtt808)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
 
       - name: Verify sanitizer instrumentation flags
         shell: bash

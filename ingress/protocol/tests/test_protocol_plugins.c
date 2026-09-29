@@ -581,9 +581,16 @@ spec("protocol plugin conformance") {
 
     {
       uint8_t jtt808[64];
-      turbo_flow_protocol_frame_slices_output_t unsupported =
+      uint8_t generated[128];
+      uint8_t decoded_payload[128];
+      size_t generated_size = 0u;
+      mem_slice_t spans[5] = {{0}};
+      turbo_flow_protocol_frame_slices_output_t vector =
           TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
-      mem_slice_t one[1] = {{0}};
+      turbo_flow_protocol_frame_view_t generated_frame =
+          TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+      turbo_flow_protocol_message_output_t decoded =
+          TURBO_FLOW_PROTOCOL_MESSAGE_OUTPUT_INIT;
       check_true(protocol_jtt808_frame(jtt808, sizeof(jtt808)) > 0u);
       host = NULL;
       registry = NULL;
@@ -597,11 +604,32 @@ spec("protocol plugin conformance") {
       request.data = jtt808;
       request.data_size = protocol_jtt808_frame(jtt808, sizeof(jtt808));
       request.protocol_version = "2019-A1";
-      unsupported.segments = one;
-      unsupported.segment_capacity = 1u;
+      vector.segments = spans;
+      vector.segment_capacity = 5u;
       check_equal(turbo_flow_protocol_reply_slices(
-                      protocol, &request, SALTS_OK, &unsupported),
-                  SALTS_ENOTSUP);
+                      protocol, &request, SALTS_OK, &vector),
+                  SALTS_OK);
+      check_equal(vector.segment_count, (size_t)5u);
+      check_equal(spans[0].length, (size_t)1u);
+      check_equal(spans[4].length, (size_t)1u);
+      check_equal(((const uint8_t *)spans[0].data)[0], (uint8_t)0x7eu);
+      check_equal(((const uint8_t *)spans[4].data)[0], (uint8_t)0x7eu);
+      for (size_t i = 0u; i < vector.segment_count; ++i) {
+        check_true(spans[i].length <= sizeof(generated) - generated_size);
+        memcpy(generated + generated_size, spans[i].data, spans[i].length);
+        generated_size += spans[i].length;
+      }
+      check_equal(generated_size, vector.data_size);
+      generated_frame.data = generated;
+      generated_frame.data_size = generated_size;
+      generated_frame.protocol_version = "2019-A1";
+      decoded.payload = decoded_payload;
+      decoded.payload_capacity = sizeof(decoded_payload);
+      check_equal(turbo_flow_protocol_decode(protocol, &generated_frame, &decoded),
+                  SALTS_OK);
+      check_equal(decoded.metadata.message_type, UINT32_C(0x8001));
+      check_equal(decoded.metadata.operation, "platform-ack");
+      turbo_flow_protocol_frame_slices_output_release(&vector);
       protocol_close_one(host, registry, owner);
     }
   }
