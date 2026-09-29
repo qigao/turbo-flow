@@ -77,6 +77,30 @@ static cmeta_callable reflected_increment_out_adapter(void) {
   adapter.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
   return adapter;
 }
+FunctionDecl(value, void, reflected_inout,
+    (int *, value, CMETA_PARAM_INOUT,
+     &cmeta_type_int_ptr, CMETA_ABI_OBJECT_POINTER));
+void reflected_inout(int *value) {
+  if (value) ++*value;
+}
+
+static bool reflected_inout_invoke(
+    const cmeta_callable *self, void *out, const void *const *args) {
+  (void)self;
+  if (!out || !args || !args[0]) return false;
+  *(int *)out = *(const int *)args[0] + 1;
+  return true;
+}
+
+static cmeta_callable reflected_inout_adapter(void) {
+  cmeta_callable adapter = {0};
+  const cmeta_function_desc *function = FunctionMeta(reflected_inout);
+  adapter.meta.effects = function->effects;
+  adapter.meta.properties = function->properties;
+  adapter.invoke = reflected_inout_invoke;
+  adapter.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
+  return adapter;
+}
 
 static int reflected_noop_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
@@ -833,6 +857,36 @@ suite("TurboFlow reflected operation semantics") {
 
     turbo_flow_msg_cleanup(&message);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("keeps INOUT reflected parameters outside CFlow lowering") {
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.inout");
+    turbo_flow_operation_port_binding_t ports[2];
+    turbo_flow_reflected_operation_registration_t registration =
+        TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+
+    check_not_null(flow);
+    ports[0] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_INPUT, 0u,
+        TURBO_FLOW_OPERATION_STORAGE_POINTEE);
+    ports[1] = reflected_param_port(
+        0u, TURBO_FLOW_OPERATION_PORT_OUTPUT, 0u,
+        TURBO_FLOW_OPERATION_STORAGE_POINTEE);
+    registration.operation = &operation;
+    registration.function = FunctionMeta(reflected_inout);
+    registration.abi = FunctionAbi(reflected_inout);
+    registration.adapter = reflected_inout_adapter();
+    registration.ports = ports;
+    registration.port_count = 2u;
+    registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_CFLOW_MAP;
+
+    check_equal(turbo_flow_register_reflected_operation(
+                    flow, &registration),
+                SALTS_EINVAL);
+    check_equal(turbo_flow_operation_count(flow), (size_t)0u);
     turbo_flow_destroy(flow);
   }
 
