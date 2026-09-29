@@ -1619,7 +1619,7 @@ spec("Turbo Flow Bench") {
         "native-stage-dispatch", FLOW_BENCH_EXECUTOR_ITERS, 2u, 2u);
     bench_report_cflow_region_publish(
         cflow_flow, "typed-identity-2-stage-cflow-region",
-        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u, 1u);
+        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u, 2u);
 
     bench_destroy_started_flow(cflow_flow);
     bench_destroy_started_flow(native_flow);
