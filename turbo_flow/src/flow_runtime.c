@@ -1143,85 +1143,77 @@ static const flow_cflow_region_plan_t *flow_publish_batch_cflow_region(
     source_edge = edge;
   }
   if (!source_edge) return NULL;
+
   region = flow_cflow_region_for_entry(flow, source_edge->to_stage, NULL);
   if (!region || !region->batch_safe) return NULL;
   entry_node = (const flow_runtime_node_plan_t *)vec_at_const(
       &flow->compiled_plan.nodes, region->entry_stage);
   if (!entry_node || entry_node->incoming_count != 1u)
     return NULL;
+
+  /*
+   * This first public batch slice is terminal-only. Preparing a later message
+   * before an earlier fallible downstream stage completes would violate the
+   * documented first-failure lifecycle of turbo_flow_publish_batch().
+   */
+  for (size_t i = 0u; i < vec_size(&flow->compiled_plan.edges); ++i) {
+    const flow_runtime_edge_plan_t *edge =
+        (const flow_runtime_edge_plan_t *)vec_at_const(
+            &flow->compiled_plan.edges, i);
+    if (edge && edge->from_stage == region->exit_stage)
+      return NULL;
+  }
   return region;
-}
-
-static int flow_publish_batch_prepare_owned(
-    turbo_flow_publish_batch_prepare_fn prepare, void *prepare_ctx,
-    size_t index, turbo_flow_msg_t *message) {
-  turbo_flow_msg_t prepared;
-  int rc;
-  if (!prepare || !message) return SALTS_EINVAL;
-  turbo_flow_msg_init(message);
-  turbo_flow_msg_init(&prepared);
-  rc = prepare(prepare_ctx, index, &prepared);
-  if (rc != SALTS_OK) goto cleanup;
-  if (flow_msg_payload_validate(&prepared) != SALTS_OK) {
-    rc = SALTS_EINVAL;
-    goto cleanup;
-  }
-  rc = prepared.owned_payload || prepared._content_handle
-           ? turbo_flow_msg_clone(message, &prepared)
-           : turbo_flow_msg_retain_view(message, &prepared);
-cleanup:
-  turbo_flow_msg_cleanup(&prepared);
-  return rc;
-}
-
-static int flow_publish_batch_messages_region_ready(
-    const flow_cflow_region_plan_t *region, turbo_flow_msg_t *messages,
-    size_t message_count) {
-  if (!region || !messages || message_count == 0u) return 0;
-  for (size_t i = 0u; i < message_count; ++i) {
-    const cmeta_data_desc *data = turbo_flow_msg_projection_data(&messages[i]);
-    if (!data || !cmeta_data_desc_equal(data, region->input_data) ||
-        flow_msg_trivial_projection_commit_ready(
-            &messages[i], region->input_data, region->output_data) != SALTS_OK)
-      return 0;
-  }
-  return 1;
 }
 
 static int flow_publish_batch_cflow(
     turbo_flow_t *flow, const flow_cflow_region_plan_t *region,
-    uint32_t source_index, turbo_flow_publish_batch_prepare_fn prepare,
-    void *prepare_ctx, size_t message_count, size_t *published) {
-  turbo_flow_msg_t messages[FLOW_CFLOW_PUBLISH_BATCH_MAX_ITEMS];
+    turbo_flow_publish_batch_prepare_fn prepare, void *prepare_ctx,
+    size_t message_count, size_t *published) {
+  flow_cflow_region_batch_workspace_t workspace;
+  const size_t capacity =
+      message_count < FLOW_CFLOW_PUBLISH_BATCH_MAX_ITEMS
+          ? message_count
+          : FLOW_CFLOW_PUBLISH_BATCH_MAX_ITEMS;
   size_t base = 0u;
-  int rc = SALTS_OK;
+  int rc;
+
+  memset(&workspace, 0, sizeof(workspace));
+  rc = flow_cflow_region_batch_workspace_init(region, capacity, &workspace);
+  if (rc != SALTS_OK) {
+    return flow_set_error_keep_state(
+        flow, rc, 0u, 0u,
+        "bounded CFlow batch workspace initialization failed");
+  }
 
   while (base < message_count) {
     const size_t remaining = message_count - base;
     const size_t chunk_count =
-        remaining < FLOW_CFLOW_PUBLISH_BATCH_MAX_ITEMS
-            ? remaining
-            : FLOW_CFLOW_PUBLISH_BATCH_MAX_ITEMS;
+        remaining < workspace.capacity ? remaining : workspace.capacity;
     size_t prepared_count = 0u;
     int prepare_status = SALTS_OK;
-    int use_batch;
-
-    for (size_t i = 0u; i < chunk_count; ++i)
-      turbo_flow_msg_init(&messages[i]);
 
     for (; prepared_count < chunk_count; ++prepared_count) {
-      prepare_status = flow_publish_batch_prepare_owned(
-          prepare, prepare_ctx, base + prepared_count,
-          &messages[prepared_count]);
+      turbo_flow_msg_t prepared;
+      turbo_flow_msg_init(&prepared);
+      prepare_status =
+          prepare(prepare_ctx, base + prepared_count, &prepared);
+      if (prepare_status == SALTS_OK &&
+          flow_msg_payload_validate(&prepared) != SALTS_OK) {
+        prepare_status = SALTS_EINVAL;
+      }
+      if (prepare_status == SALTS_OK) {
+        prepare_status = flow_cflow_region_batch_stage_message(
+            region, &workspace, prepared_count, &prepared);
+      }
+      turbo_flow_msg_cleanup(&prepared);
       if (prepare_status != SALTS_OK) break;
     }
 
-    use_batch = prepared_count > 0u &&
-                flow_publish_batch_messages_region_ready(
-                    region, messages, prepared_count);
-    if (use_batch) {
+    if (prepared_count > 0u) {
+      cflow_plan_batch_result result = {0};
       rc = flow_cflow_region_execute_batch(
-          flow, region, messages, prepared_count);
+          region, &workspace, prepared_count, &result);
       if (rc != SALTS_OK) {
         const flow_stage_plan_impl_t *exit_stage =
             (const flow_stage_plan_impl_t *)vec_at_const(
@@ -1230,37 +1222,30 @@ static int flow_publish_batch_cflow(
             flow, rc,
             exit_stage ? exit_stage->line : 0u,
             exit_stage ? exit_stage->column : 0u,
-            "batched CFlow region execution violated its TOTAL contract");
+            "batched CFlow region execution violated its PURE TOTAL MAP contract");
+        goto cleanup;
       }
+      if (published) *published += prepared_count;
+      base += prepared_count;
     }
 
-    if (rc == SALTS_OK) {
-      for (size_t i = 0u; i < prepared_count; ++i) {
-        if (use_batch)
-          rc = flow_run_message_from_stage(
-              flow, region->exit_stage, &messages[i]);
-        else
-          rc = flow_run_message_from_stage(
-              flow, source_index, &messages[i]);
-        if (rc != SALTS_OK) break;
-        if (published) ++*published;
-      }
-    }
-
-    for (size_t i = 0u; i < prepared_count; ++i)
-      turbo_flow_msg_cleanup(&messages[i]);
-
-    if (rc != SALTS_OK) return rc;
     if (prepare_status != SALTS_OK) {
-      return flow_set_error_keep_state(
+      rc = flow_set_error_keep_state(
           flow, prepare_status, 0u, 0u,
           prepare_status == SALTS_EINVAL
-              ? "batch prepared an invalid payload or uncloneable message"
-              : "batch message preparation failed");
+              ? "batch prepared an invalid payload"
+              : prepare_status == SALTS_EPROTO
+                    ? "batch message does not match the compiled CFlow region"
+                    : "batch message preparation failed");
+      goto cleanup;
     }
-    base += prepared_count;
   }
-  return SALTS_OK;
+
+  rc = SALTS_OK;
+
+cleanup:
+  flow_cflow_region_batch_workspace_destroy(&workspace);
+  return rc;
 }
 
 static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
@@ -1347,8 +1332,7 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
         flow_publish_batch_cflow_region(flow, source_index);
     if (batch_region) {
       rc = flow_publish_batch_cflow(
-          flow, batch_region, source_index, prepare, prepare_ctx,
-          message_count, published);
+          flow, batch_region, prepare, prepare_ctx, message_count, published);
       goto cleanup;
     }
   }
