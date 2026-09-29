@@ -279,21 +279,26 @@ static int flow_jtt808_bcd_write(const char *digits, size_t digit_count, uint8_t
   return SALTS_OK;
 }
 
-static int flow_jtt808_frame_write(uint16_t message_id, const char *device_id, int version_2019,
-                                   uint16_t serial, const uint8_t *body, size_t body_size,
-                                   turbo_flow_protocol_frame_output_t *output) {
-  uint8_t header[FLOW_JTT808_2019_HEADER_SIZE];
+static int flow_jtt808_frame_header(
+    uint16_t message_id, const char *device_id, int version_2019,
+    uint16_t serial, size_t body_size, uint8_t *header,
+    size_t header_capacity, size_t *header_size_out) {
   uint16_t properties;
-  size_t header_size = version_2019 ? FLOW_JTT808_2019_HEADER_SIZE : FLOW_JTT808_LEGACY_HEADER_SIZE;
-  size_t raw_size;
-  size_t offset = 0u;
-  uint8_t checksum = 0u;
+  const size_t header_size =
+      version_2019 ? FLOW_JTT808_2019_HEADER_SIZE
+                   : FLOW_JTT808_LEGACY_HEADER_SIZE;
   int rc;
-  if (!device_id || serial == 0u || (!body && body_size != 0u) || !output || !output->data)
+  if (header_size_out) *header_size_out = 0u;
+  if (!device_id || serial == 0u || !header || !header_size_out ||
+      header_capacity < header_size)
     return SALTS_EINVAL;
-  if (body_size > 0x03ffu || strlen(device_id) != (version_2019 ? 20u : 12u)) return SALTS_EMSGSIZE;
+  if (body_size > 0x03ffu ||
+      strlen(device_id) != (version_2019 ? 20u : 12u))
+    return SALTS_EMSGSIZE;
+
   properties = (uint16_t)body_size;
   if (version_2019) properties |= UINT16_C(0x4000);
+  memset(header, 0, header_size);
   header[0] = (uint8_t)(message_id >> 8u);
   header[1] = (uint8_t)message_id;
   header[2] = (uint8_t)(properties >> 8u);
@@ -309,58 +314,253 @@ static int flow_jtt808_frame_write(uint16_t message_id, const char *device_id, i
     header[11] = (uint8_t)serial;
   }
   if (rc != SALTS_OK) return rc;
-  raw_size = header_size + body_size + 1u;
-  if (raw_size > (SIZE_MAX - 2u) / 2u || raw_size * 2u + 2u > output->capacity)
-    return SALTS_EMSGSIZE;
-  output->data[offset++] = UINT8_C(0x7e);
-  for (size_t i = 0u; i <= header_size + body_size; ++i) {
-    uint8_t value;
-    if (i < header_size) value = header[i];
-    else if (i < header_size + body_size) value = body[i - header_size];
-    else {
-      value = checksum;
-    }
-    if (i < header_size + body_size) checksum ^= value;
+  *header_size_out = header_size;
+  return SALTS_OK;
+}
+
+static size_t flow_jtt808_escaped_size(const uint8_t *data, size_t size) {
+  size_t encoded = 0u;
+  if (!data && size != 0u) return SIZE_MAX;
+  for (size_t i = 0u; i < size; ++i) {
+    if (encoded == SIZE_MAX) return SIZE_MAX;
+    encoded += data[i] == UINT8_C(0x7e) || data[i] == UINT8_C(0x7d)
+                   ? 2u
+                   : 1u;
+  }
+  return encoded;
+}
+
+static int flow_jtt808_escape_write(const uint8_t *data, size_t size,
+                                    uint8_t *out, size_t capacity,
+                                    size_t *written_out) {
+  size_t written = 0u;
+  if (written_out) *written_out = 0u;
+  if ((!data && size != 0u) || !out || !written_out) return SALTS_EINVAL;
+  for (size_t i = 0u; i < size; ++i) {
+    const uint8_t value = data[i];
+    const size_t needed =
+        value == UINT8_C(0x7e) || value == UINT8_C(0x7d) ? 2u : 1u;
+    if (needed > capacity - written) return SALTS_EMSGSIZE;
     if (value == UINT8_C(0x7e)) {
-      output->data[offset++] = UINT8_C(0x7d);
-      output->data[offset++] = UINT8_C(0x02);
+      out[written++] = UINT8_C(0x7d);
+      out[written++] = UINT8_C(0x02);
     } else if (value == UINT8_C(0x7d)) {
-      output->data[offset++] = UINT8_C(0x7d);
-      output->data[offset++] = UINT8_C(0x01);
+      out[written++] = UINT8_C(0x7d);
+      out[written++] = UINT8_C(0x01);
     } else {
-      output->data[offset++] = value;
+      out[written++] = value;
     }
   }
+  *written_out = written;
+  return SALTS_OK;
+}
+
+static int flow_jtt808_frame_write(uint16_t message_id, const char *device_id,
+                                   int version_2019, uint16_t serial,
+                                   const uint8_t *body, size_t body_size,
+                                   turbo_flow_protocol_frame_output_t *output) {
+  uint8_t header[FLOW_JTT808_2019_HEADER_SIZE];
+  size_t header_size = 0u;
+  size_t offset = 0u;
+  size_t written = 0u;
+  size_t escaped_header;
+  size_t escaped_body;
+  size_t escaped_checksum;
+  uint8_t checksum = 0u;
+  int rc;
+  if ((!body && body_size != 0u) || !output || !output->data)
+    return SALTS_EINVAL;
+  rc = flow_jtt808_frame_header(message_id, device_id, version_2019,
+                                serial, body_size, header, sizeof(header),
+                                &header_size);
+  if (rc != SALTS_OK) return rc;
+  for (size_t i = 0u; i < header_size; ++i) checksum ^= header[i];
+  for (size_t i = 0u; i < body_size; ++i) checksum ^= body[i];
+
+  escaped_header = flow_jtt808_escaped_size(header, header_size);
+  escaped_body = flow_jtt808_escaped_size(body, body_size);
+  escaped_checksum = flow_jtt808_escaped_size(&checksum, 1u);
+  if (escaped_header == SIZE_MAX || escaped_body == SIZE_MAX ||
+      escaped_checksum == SIZE_MAX ||
+      escaped_header > SIZE_MAX - escaped_body ||
+      escaped_header + escaped_body > SIZE_MAX - escaped_checksum ||
+      escaped_header + escaped_body + escaped_checksum > SIZE_MAX - 2u)
+    return SALTS_ERANGE;
+  if (escaped_header + escaped_body + escaped_checksum + 2u >
+      output->capacity)
+    return SALTS_EMSGSIZE;
+
+  output->data[offset++] = UINT8_C(0x7e);
+  rc = flow_jtt808_escape_write(header, header_size, output->data + offset,
+                                output->capacity - offset, &written);
+  if (rc != SALTS_OK) return rc;
+  offset += written;
+  if (body_size != 0u) {
+    rc = flow_jtt808_escape_write(body, body_size, output->data + offset,
+                                  output->capacity - offset, &written);
+    if (rc != SALTS_OK) return rc;
+    offset += written;
+  }
+  rc = flow_jtt808_escape_write(&checksum, 1u, output->data + offset,
+                                output->capacity - offset, &written);
+  if (rc != SALTS_OK) return rc;
+  offset += written;
   output->data[offset++] = UINT8_C(0x7e);
   output->data_size = offset;
   return SALTS_OK;
 }
 
-static int flow_jtt808_reply(void *ctx, const char *configured_version,
-                             const turbo_flow_protocol_frame_view_t *request, int status,
-                             turbo_flow_protocol_frame_output_t *output) {
+static int flow_jtt808_frame_slices_write(
+    uint16_t message_id, const char *device_id, int version_2019,
+    uint16_t serial, const uint8_t *body, size_t body_size,
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  uint8_t header[FLOW_JTT808_2019_HEADER_SIZE];
+  uint8_t checksum = 0u;
+  size_t header_size = 0u;
+  size_t escaped_header;
+  size_t escaped_body;
+  size_t escaped_checksum;
+  size_t needed_segments;
+  size_t count = 0u;
+  size_t total = 0u;
+  mem_buffer_t *delimiter_buffer = NULL;
+  mem_buffer_t *header_buffer = NULL;
+  mem_buffer_t *body_buffer = NULL;
+  mem_buffer_t *checksum_buffer = NULL;
+  mem_slice_t slices[5] = {{0}};
+  size_t written = 0u;
+  int rc;
+
+  if ((!body && body_size != 0u) || !output || !output->segments)
+    return SALTS_EINVAL;
+  rc = flow_jtt808_frame_header(message_id, device_id, version_2019,
+                                serial, body_size, header, sizeof(header),
+                                &header_size);
+  if (rc != SALTS_OK) return rc;
+
+  for (size_t i = 0u; i < header_size; ++i) checksum ^= header[i];
+  for (size_t i = 0u; i < body_size; ++i) checksum ^= body[i];
+  escaped_header = flow_jtt808_escaped_size(header, header_size);
+  escaped_body = flow_jtt808_escaped_size(body, body_size);
+  escaped_checksum = flow_jtt808_escaped_size(&checksum, 1u);
+  if (escaped_header == SIZE_MAX || escaped_body == SIZE_MAX ||
+      escaped_checksum == SIZE_MAX)
+    return SALTS_ERANGE;
+  needed_segments = body_size != 0u ? 5u : 4u;
+  if (output->segment_capacity < needed_segments) return SALTS_ENOSPC;
+
+  delimiter_buffer = mem_get_buffer(mem_global(), 2u);
+  header_buffer = mem_get_buffer(mem_global(), escaped_header);
+  if (body_size != 0u)
+    body_buffer = mem_get_buffer(mem_global(), escaped_body);
+  checksum_buffer = mem_get_buffer(mem_global(), escaped_checksum);
+  if (!delimiter_buffer || !header_buffer ||
+      (body_size != 0u && !body_buffer) || !checksum_buffer) {
+    rc = SALTS_ENOMEM;
+    goto fail;
+  }
+
+  ((uint8_t *)mem_buffer_data(delimiter_buffer))[0] = UINT8_C(0x7e);
+  ((uint8_t *)mem_buffer_data(delimiter_buffer))[1] = UINT8_C(0x7e);
+  mem_set_used(delimiter_buffer, 2u);
+
+  rc = flow_jtt808_escape_write(
+      header, header_size, (uint8_t *)mem_buffer_data(header_buffer),
+      escaped_header, &written);
+  if (rc != SALTS_OK || written != escaped_header) {
+    rc = rc != SALTS_OK ? rc : SALTS_EPROTO;
+    goto fail;
+  }
+  mem_set_used(header_buffer, written);
+
+  if (body_size != 0u) {
+    rc = flow_jtt808_escape_write(
+        body, body_size, (uint8_t *)mem_buffer_data(body_buffer),
+        escaped_body, &written);
+    if (rc != SALTS_OK || written != escaped_body) {
+      rc = rc != SALTS_OK ? rc : SALTS_EPROTO;
+      goto fail;
+    }
+    mem_set_used(body_buffer, written);
+  }
+
+  rc = flow_jtt808_escape_write(
+      &checksum, 1u, (uint8_t *)mem_buffer_data(checksum_buffer),
+      escaped_checksum, &written);
+  if (rc != SALTS_OK || written != escaped_checksum) {
+    rc = rc != SALTS_OK ? rc : SALTS_EPROTO;
+    goto fail;
+  }
+  mem_set_used(checksum_buffer, written);
+
+  slices[count++] = mem_slice(delimiter_buffer, 0u, 1u);
+  slices[count++] = mem_slice(header_buffer, 0u, escaped_header);
+  if (body_size != 0u)
+    slices[count++] = mem_slice(body_buffer, 0u, escaped_body);
+  slices[count++] = mem_slice(checksum_buffer, 0u, escaped_checksum);
+  slices[count++] = mem_slice(delimiter_buffer, 1u, 1u);
+  for (size_t i = 0u; i < count; ++i) {
+    if (!slices[i].buffer || slices[i].length == 0u) {
+      rc = SALTS_EPROTO;
+      goto fail;
+    }
+    if (total > SIZE_MAX - slices[i].length) {
+      rc = SALTS_ERANGE;
+      goto fail;
+    }
+    total += slices[i].length;
+  }
+
+  for (size_t i = 0u; i < count; ++i) {
+    output->segments[i] = slices[i];
+    slices[i] = (mem_slice_t){0};
+  }
+  output->segment_count = count;
+  output->data_size = total;
+  mem_buffer_release(checksum_buffer);
+  mem_buffer_release(body_buffer);
+  mem_buffer_release(header_buffer);
+  mem_buffer_release(delimiter_buffer);
+  return SALTS_OK;
+
+fail:
+  for (size_t i = 0u; i < sizeof(slices) / sizeof(slices[0]); ++i)
+    mem_slice_release(&slices[i]);
+  mem_buffer_release(checksum_buffer);
+  mem_buffer_release(body_buffer);
+  mem_buffer_release(header_buffer);
+  mem_buffer_release(delimiter_buffer);
+  return rc;
+}
+
+static int flow_jtt808_reply_prepare(
+    void *ctx, const turbo_flow_protocol_frame_view_t *request, int status,
+    char device_id[21], int *version_2019_out, uint8_t body[5],
+    uint16_t *next_out) {
   uint8_t header[FLOW_JTT808_CAPTURE_SIZE] = {0};
-  uint8_t body[5];
   uint8_t checksum = 0u;
   size_t decoded_size = 0u;
   size_t phone_offset;
   size_t phone_size;
   size_t serial_offset;
   uint16_t properties;
-  char device_id[21];
   uint16_t next;
   int version_2019;
   int rc;
-  (void)configured_version;
-  if (!ctx) return SALTS_EINVAL;
-  rc = flow_jtt808_unescape(request, header, sizeof(header), &decoded_size, &checksum);
-  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u) return SALTS_EPROTO;
+  if (!ctx || !request || !device_id || !version_2019_out || !body ||
+      !next_out)
+    return SALTS_EINVAL;
+  rc = flow_jtt808_unescape(request, header, sizeof(header), &decoded_size,
+                            &checksum);
+  if (rc != SALTS_OK || checksum != 0u || decoded_size < 5u)
+    return SALTS_EPROTO;
   properties = ((uint16_t)header[2] << 8u) | header[3];
   version_2019 = (properties & UINT16_C(0x4000)) != 0u;
   phone_offset = version_2019 ? 5u : 4u;
   phone_size = version_2019 ? 10u : 6u;
   serial_offset = version_2019 ? 15u : 10u;
-  rc = flow_jtt808_device_id(header + phone_offset, phone_size, device_id, sizeof(device_id));
+  rc = flow_jtt808_device_id(header + phone_offset, phone_size, device_id,
+                             21u);
   if (rc != SALTS_OK) return rc;
   body[0] = header[serial_offset];
   body[1] = header[serial_offset + 1u];
@@ -369,8 +569,51 @@ static int flow_jtt808_reply(void *ctx, const char *configured_version,
   body[4] = status == SALTS_OK ? 0u : status == SALTS_ENOTSUP ? 3u : 1u;
   next = flow_jtt808_next_serial((atomic_uint *)ctx);
   if (next == 0u) return SALTS_ERANGE;
-  return flow_jtt808_frame_write(UINT16_C(0x8001), device_id, version_2019, next, body,
-                                 sizeof(body), output);
+  *version_2019_out = version_2019;
+  *next_out = next;
+  return SALTS_OK;
+}
+
+static int flow_jtt808_reply(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_output_t *output) {
+  uint8_t body[5];
+  char device_id[21];
+  uint16_t next = 0u;
+  int version_2019 = 0;
+  int rc;
+  (void)configured_version;
+  rc = flow_jtt808_reply_prepare(ctx, request, status, device_id,
+                                 &version_2019, body, &next);
+  if (rc != SALTS_OK) return rc;
+  return flow_jtt808_frame_write(UINT16_C(0x8001), device_id, version_2019,
+                                 next, body, sizeof(body), output);
+}
+
+static int flow_jtt808_reply_slices(
+    void *ctx, const char *configured_version,
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output) {
+  uint8_t body[5];
+  char device_id[21];
+  uint16_t next = 0u;
+  int version_2019 = 0;
+  int rc;
+  (void)configured_version;
+  rc = flow_jtt808_reply_prepare(ctx, request, status, device_id,
+                                 &version_2019, body, &next);
+  if (rc != SALTS_OK) return rc;
+  rc = flow_jtt808_frame_slices_write(
+      UINT16_C(0x8001), device_id, version_2019, next, body, sizeof(body),
+      output);
+  if (rc != SALTS_OK) return rc;
+  output->metadata.message_type = UINT32_C(0x8001);
+  output->metadata.sequence = next;
+  memcpy(output->metadata.device_id, device_id, strlen(device_id) + 1u);
+  memcpy(output->metadata.operation, "platform-ack",
+         sizeof("platform-ack"));
+  return SALTS_OK;
 }
 
 static int flow_jtt808_message_id(const char *operation, uint16_t *out) {
@@ -413,7 +656,8 @@ static const flow_protocol_plugin_descriptor_t FLOW_JTT808_DESCRIPTOR = {
     flow_jtt808_reply,
     flow_jtt808_encode,
     &FLOW_JTT808_NEXT_SERIAL,
-    flow_jtt808_decode_semantic};
+    flow_jtt808_decode_semantic,
+    flow_jtt808_reply_slices};
 
 static const turbo_flow_protocol_plugin_api_t FLOW_JTT808_API = {
     sizeof(turbo_flow_protocol_plugin_api_t),
