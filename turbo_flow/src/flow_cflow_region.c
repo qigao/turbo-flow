@@ -258,6 +258,11 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
       &region.input_data, &region.output_data);
   if (rc != SALTS_OK) goto cleanup;
   region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
+  region.value_slot.mode = FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT;
+  region.value_slot.extent = region.plan.output_type->size;
+  region.value_slot.alignment = region.plan.output_type->align;
+  region.value_slot.required_traits =
+      CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
 
   *region_out = region;
   memset(&region, 0, sizeof(region));
@@ -368,7 +373,16 @@ int flow_cflow_region_execute(
     return SALTS_EPROTO;
   }
 
-  rc = flow_msg_replace_trivial_projection(
+  if (region->value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region->value_slot.extent != region->plan.output_type->size ||
+      region->value_slot.alignment != region->plan.output_type->align ||
+      region->value_slot.required_traits !=
+          (CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY)) {
+    cflow_result_destroy(&result);
+    return SALTS_EPROTO;
+  }
+
+  rc = flow_msg_commit_trivial_projection_in_place(
       message, region->input_data, region->output_data, result.data);
   cflow_result_destroy(&result);
   return rc;
