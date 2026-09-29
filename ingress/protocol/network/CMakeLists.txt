@@ -9,7 +9,8 @@ set_target_properties(
              FOLDER "ingress/protocol/network/internal")
 target_include_directories(
   tf_protocol_network_intake_core
-  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(
   tf_protocol_network_intake_core
   PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngress TurboFlow::PluginHost
