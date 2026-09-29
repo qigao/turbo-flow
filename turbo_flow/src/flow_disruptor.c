@@ -211,6 +211,15 @@ static int flow_has_reorder_stage(const turbo_flow_t *flow) {
 }
 
 static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
+  /*
+   * A compiled CFlow region is one execution unit. The broadcast fast path
+   * independently dispatches every Graph stage as a consumer and therefore
+   * cannot preserve region entry/exit semantics. Select the region-aware
+   * scheduler path once at start rather than adding a second CFlow executor
+   * inside the broadcast plane.
+   */
+  if (flow && !vec_empty(&flow->compiled_plan.cflow_regions)) return 1;
+
   /* Whole-Graph broadcast consumers cannot cross execution cuts. Buffer admission
    * and its later continuation must use the region-aware execution path. */
   for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
