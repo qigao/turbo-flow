@@ -144,6 +144,12 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled runtime plan is not available");
   }
+  if (!vec_empty(&flow->compiled_plan.cflow_regions) &&
+      flow_observer_has_handlers(flow)) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "observer state changed after CFlow region compilation; recompile before start");
+  }
   if (vec_empty(&flow->compiled_plan.data_segments) && !vec_empty(&flow->compiled_plan.edges)) {
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "compiled data plan is not available");
@@ -665,6 +671,11 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
         stage->is_buffer) {
       continue;
     }
+    {
+      const uint32_t *region_index =
+          (const uint32_t *)vec_at_const(&flow->compiled_plan.cflow_region_by_stage, i);
+      if (region_index && *region_index != FLOW_PLAN_INDEX_NONE) continue;
+    }
     rc = flow_dispatch_validate_stage(flow, (uint32_t)i);
     if (rc != SALTS_OK) goto cleanup;
   }
@@ -730,6 +741,59 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
                                  queue, stage_count, &tail, skipped_queue, stage_count);
       if (rc != SALTS_OK) goto cleanup;
       continue;
+    }
+
+    {
+      uint32_t cflow_region_index = FLOW_PLAN_INDEX_NONE;
+      const flow_cflow_region_plan_t *region =
+          flow_cflow_region_for_entry(flow, stage_index, &cflow_region_index);
+      if (region) {
+        const flow_stage_plan_impl_t *exit_stage =
+            (const flow_stage_plan_impl_t *)vec_at_const(
+                &flow->stages, region->exit_stage);
+        if (!exit_stage || region->exit_stage >= stage_count) {
+          rc = SALTS_EPROTO;
+          goto cleanup;
+        }
+        memset(&completion, 0, sizeof(completion));
+        rc = flow_entry_header_init(
+            flow, &completion.entry, region->exit_stage,
+            FLOW_DATA_SEGMENT_DIRECT, 0u,
+            stage_sequences[region->exit_stage], message->id,
+            FLOW_ENTRY_OWNERSHIP_OWNED_MESSAGE, &completion);
+        if (rc != SALTS_OK) goto cleanup;
+
+        message->execution_attempt = 1u;
+        rc = flow_cflow_region_execute(flow, region, message);
+        completion.status = rc;
+        if (rc != SALTS_OK) {
+          message->status = rc;
+          (void)flow_set_error_keep_state(
+              flow, rc, exit_stage->line, exit_stage->column,
+              "compiled CFlow region execution failed");
+        }
+
+        /*
+         * No internal stage completion is published: the region is one
+         * execution unit. Mark every internal stage done, then let the normal
+         * exit-stage completion release only the external downstream edges.
+         */
+        for (size_t member = 0u; member < stage_count; ++member) {
+          const uint32_t *member_region =
+              (const uint32_t *)vec_at_const(
+                  &flow->compiled_plan.cflow_region_by_stage, member);
+          if (member_region && *member_region == cflow_region_index &&
+              member != region->exit_stage) {
+            done[member] = 1u;
+          }
+        }
+
+        rc = flow_apply_completion(
+            flow, &completion, message, done, reachable, remaining, activated,
+            queue, stage_count, &tail, skipped_queue, stage_count);
+        if (rc != SALTS_OK) goto cleanup;
+        continue;
+      }
     }
 
     {

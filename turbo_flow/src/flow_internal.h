@@ -272,7 +272,16 @@ typedef enum flow_lowering_barrier_e {
   /* Reflected FunctionDesc carries UNKNOWN effects: never fuse/speculate. */
   FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN = 1u << 11,
   /* Reflected OUT/INOUT parameters cross a native mutation/alias boundary. */
-  FLOW_LOWERING_BARRIER_NATIVE_MUTATION = 1u << 12
+  FLOW_LOWERING_BARRIER_NATIVE_MUTATION = 1u << 12,
+  /* Per-stage observer callbacks require native stage boundaries. */
+  FLOW_LOWERING_BARRIER_OBSERVER = 1u << 13,
+  /* CFlow bool failure cannot yet preserve TurboFlow stage status/reject semantics. */
+  FLOW_LOWERING_BARRIER_MAY_FAIL = 1u << 14,
+  /* Operation-level timing/cancellation/backpressure/error policies remain native. */
+  FLOW_LOWERING_BARRIER_DEADLINE = 1u << 15,
+  FLOW_LOWERING_BARRIER_CANCELLATION = 1u << 16,
+  FLOW_LOWERING_BARRIER_BACKPRESSURE = 1u << 17,
+  FLOW_LOWERING_BARRIER_ERROR_POLICY = 1u << 18
 } flow_lowering_barrier_t;
 
 typedef struct flow_semantic_type_plan_s {
@@ -306,11 +315,19 @@ typedef struct flow_stage_semantic_plan_s {
  * candidate region. The Plan owns its optimized executable tape; stage indices
  * remain TurboFlow topology coordinates.
  */
+typedef enum flow_cflow_region_backend_e {
+  FLOW_CFLOW_REGION_BACKEND_NONE = 0,
+  FLOW_CFLOW_REGION_BACKEND_DIRECT
+} flow_cflow_region_backend_t;
+
 typedef struct flow_cflow_region_plan_s {
   uint32_t candidate_region;
   uint32_t entry_stage;
   uint32_t exit_stage;
   uint32_t stage_count;
+  flow_cflow_region_backend_t backend;
+  const cmeta_data_desc *input_data;
+  const cmeta_data_desc *output_data;
   cflow_plan plan;
   cflow_plan_compile_stats stats;
 } flow_cflow_region_plan_t;
@@ -769,6 +786,13 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
+const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
+    const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out);
+int flow_cflow_region_execute(
+    turbo_flow_t *flow, const flow_cflow_region_plan_t *region, turbo_flow_msg_t *message);
+int flow_msg_replace_trivial_projection(
+    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, const void *output_value);
 int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count);
 const flow_runtime_stage_config_t *flow_runtime_stage_config_for_stage(const turbo_flow_t *flow,
                                                                        uint32_t stage_index);

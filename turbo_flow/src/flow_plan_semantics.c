@@ -94,6 +94,8 @@ uint32_t flow_function_semantic_barriers(
     barriers |= FLOW_LOWERING_BARRIER_ASYNC;
   if ((effects & CMETA_EFFECT_IO) != 0u)
     barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
+  if ((effects & CMETA_EFFECT_MAY_FAIL) != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_MAY_FAIL;
   if ((effects & CMETA_EFFECT_UNKNOWN) != 0u)
     barriers |= FLOW_LOWERING_BARRIER_SEMANTIC_UNKNOWN;
 
@@ -151,6 +153,14 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
     barriers |= FLOW_LOWERING_BARRIER_RETRY;
     if (!function) effects |= CMETA_EFFECT_MAY_FAIL;
   }
+  if (runtime && runtime->deadline_ms != 0u)
+    barriers |= FLOW_LOWERING_BARRIER_DEADLINE;
+  if (runtime && runtime->cancellation != TURBO_FLOW_CANCELLATION_NONE)
+    barriers |= FLOW_LOWERING_BARRIER_CANCELLATION;
+  if (runtime && runtime->backpressure != TURBO_FLOW_BACKPRESSURE_NONE)
+    barriers |= FLOW_LOWERING_BARRIER_BACKPRESSURE;
+  if (runtime && runtime->error_mode != TURBO_FLOW_ERROR_PROPAGATE)
+    barriers |= FLOW_LOWERING_BARRIER_ERROR_POLICY;
   if (runtime && runtime->settlement != 0u) {
     barriers |= FLOW_LOWERING_BARRIER_SETTLEMENT;
     if (!function) effects |= CMETA_EFFECT_IO;
@@ -376,6 +386,9 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
       semantics->barriers |= FLOW_LOWERING_BARRIER_DYNAMIC_ROUTE;
       if (!function) semantics->effects |= CMETA_EFFECT_MAY_FAIL;
     }
+    if (flow_observer_has_handlers(flow)) {
+      semantics->barriers |= FLOW_LOWERING_BARRIER_OBSERVER;
+    }
 
     if (registration && registration->reflected) {
       semantics->lowering_candidate =
@@ -384,10 +397,13 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
           semantics->barriers == FLOW_LOWERING_BARRIER_NONE &&
           (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
     } else {
-      semantics->lowering_candidate =
-          semantics->typed && !stage->is_source && !stage->is_port &&
-          (semantics->barriers & ~FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE) == 0u &&
-          (semantics->effects & CMETA_EFFECT_UNKNOWN) == 0u;
+      /*
+       * A legacy typed stage may carry domain type strings, but without an
+       * admitted CMeta callable there is no executable semantic authority.
+       * Treat it as a hard boundary rather than silently mixing it into a
+       * reflected CFlow region.
+       */
+      semantics->lowering_candidate = 0;
     }
   }
 
