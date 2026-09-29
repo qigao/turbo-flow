@@ -12,6 +12,7 @@ on:
       - 'turbo_flow/src/flow_cflow_region.c'
       - 'turbo_flow/src/flow_domain.c'
       - 'turbo_flow/src/flow_plan_semantics.c'
+      - 'turbo_flow/src/flow_plan.c'
       - 'turbo_flow/src/flow_internal.h'
       - 'turbo_flow/tests/test_flow_reflected_operation.c'
       - 'turbo_flow/tests/reflected_operation_header_cpp.cpp'
