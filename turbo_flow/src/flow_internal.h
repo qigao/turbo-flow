@@ -329,12 +329,27 @@ typedef enum flow_cflow_value_slot_mode_e {
   FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT
 } flow_cflow_value_slot_mode_t;
 
+typedef enum flow_cflow_value_transfer_mode_e {
+  FLOW_CFLOW_VALUE_TRANSFER_NONE = 0,
+  FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY,
+  FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT
+} flow_cflow_value_transfer_mode_t;
+
 typedef struct flow_cflow_value_slot_plan_s {
+  /* Actual runtime storage admission. NONE remains conservative. */
   flow_cflow_value_slot_mode_t mode;
+  /* CMeta-proven transfer capability; not by itself runtime permission. */
+  flow_cflow_value_transfer_mode_t transfer;
   size_t extent;
   size_t alignment;
+  cmeta_trait_flags available_traits;
   cmeta_trait_flags required_traits;
+  int source_destroy_after_transfer;
 } flow_cflow_value_slot_plan_t;
+
+int flow_cflow_value_slot_plan_classify(
+    const cmeta_type_desc *input_type, const cmeta_type_desc *output_type,
+    flow_cflow_value_slot_plan_t *out);
 
 typedef struct flow_cflow_region_plan_s {
   uint32_t candidate_region;
