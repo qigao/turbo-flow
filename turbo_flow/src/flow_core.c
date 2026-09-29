@@ -777,6 +777,11 @@ static const flow_adapter_registration_t *flow_transport_reply_adapter(
   return adapter && adapter->transport_reply_ops.capture ? adapter : NULL;
 }
 
+int turbo_flow_transport_reply_supported(
+    const turbo_flow_t *flow, const char *adapter_name) {
+  return flow_transport_reply_adapter(flow, adapter_name) ? SALTS_OK : SALTS_ENOTSUP;
+}
+
 int turbo_flow_transport_reply_capture(
     const turbo_flow_t *flow, const char *adapter_name, const turbo_flow_msg_t *message,
     turbo_flow_transport_reply_session_t *session) {
