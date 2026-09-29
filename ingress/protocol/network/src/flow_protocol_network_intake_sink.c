@@ -285,8 +285,7 @@ static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
         sink->protocol, &frame, SALTS_OK, &vector);
     if (rc == SALTS_OK) {
       if (vector.data_size > sink->settings.reply_max_encoded_bytes) {
-        vector.segment_count = vector.segment_count;
-        intake_reply_release_segments(reply);
+        turbo_flow_protocol_frame_slices_output_release(&vector);
         return SALTS_EMSGSIZE;
       }
       if (vector.segment_count == 0u) return SALTS_OK;
