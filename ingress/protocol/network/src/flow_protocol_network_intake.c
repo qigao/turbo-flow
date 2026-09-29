@@ -645,8 +645,19 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
     if (rc != SALTS_OK && first_status == SALTS_OK) first_status = rc;
   }
   if (intake->sink) {
+    flow_protocol_network_intake_sink_metrics_t metrics;
     rc = flow_protocol_network_intake_sink_retry(intake->sink);
-    if (rc != SALTS_OK && first_status == SALTS_OK) first_status = rc;
+    /*
+     * The async intake claims were deliberately canceled above. Preserve that
+     * historical cancellation status while still draining transport-reply
+     * terminals produced by Source stop.
+     */
+    if (rc != SALTS_OK && rc != SALTS_ECANCELED && first_status == SALTS_OK)
+      first_status = rc;
+    memset(&metrics, 0, sizeof(metrics));
+    flow_protocol_network_intake_sink_metrics(intake->sink, &metrics);
+    if (metrics.pending_replies != 0u && first_status == SALTS_OK)
+      first_status = SALTS_EBUSY;
   }
   if (first_status == SALTS_OK) {
     rc = intake->source_owner.drain(intake->source_owner.ctx, timeout_ms);
