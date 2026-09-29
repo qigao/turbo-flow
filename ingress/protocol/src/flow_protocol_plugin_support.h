@@ -17,6 +17,8 @@ typedef struct flow_protocol_plugin_descriptor_s {
   void *inspect_ctx;
   /** Optional append-only semantic ingress decoder; NULL preserves legacy raw-only decode. */
   turbo_flow_protocol_decode_semantic_fn decode_semantic;
+  /** Optional append-only retained reply producer. */
+  turbo_flow_protocol_reply_slices_fn reply_slices;
 } flow_protocol_plugin_descriptor_t;
 
 typedef struct flow_protocol_root_plugin_s {
@@ -117,6 +119,10 @@ int flow_protocol_coap_decode_semantic(
 int flow_protocol_coap_reply(const turbo_flow_protocol_frame_view_t *request, int status,
                              turbo_flow_protocol_frame_output_t *output, int lwm2m,
                              uint16_t separate_message_id);
+int flow_protocol_coap_reply_slices(
+    const turbo_flow_protocol_frame_view_t *request, int status,
+    turbo_flow_protocol_frame_slices_output_t *output, int lwm2m,
+    uint16_t separate_message_id);
 int flow_protocol_coap_encode(const turbo_flow_protocol_command_view_t *command,
                               turbo_flow_protocol_frame_output_t *output, int lwm2m);
 
