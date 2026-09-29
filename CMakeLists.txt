@@ -70,9 +70,9 @@ endforeach()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" TURBO_FLOW_SALTS_ROOT)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_ROOT)
 
-find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
+find_package(Salts CONFIG REQUIRED
              PATHS "${TURBO_FLOW_SALTS_ROOT}" NO_DEFAULT_PATH)
-find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+find_package(SaltsUtils CONFIG REQUIRED
              PATHS "${TURBO_FLOW_SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 
 file(REAL_PATH "${TURBO_FLOW_SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_REAL_ROOT)
@@ -87,7 +87,7 @@ endif()
 
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR
-          "SaltsUtils 4.1.3 package is missing required target Salts::DataBind")
+          "resolved SaltsUtils package is missing required target Salts::DataBind")
 endif()
 
 include(TurboFlowRequireCNet)
@@ -97,7 +97,7 @@ find_package(xxHash CONFIG REQUIRED)
 
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
   file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" TURBO_FLOW_TURBODB_ROOT)
-  find_package(Orm 2.1.0 EXACT CONFIG REQUIRED
+  find_package(Orm CONFIG REQUIRED
                PATHS "${TURBO_FLOW_TURBODB_ROOT}" NO_DEFAULT_PATH)
   file(REAL_PATH "${TURBO_FLOW_TURBODB_ROOT}" TURBO_FLOW_TURBODB_REAL_ROOT)
   file(REAL_PATH "${Orm_DIR}" TURBO_FLOW_ORM_REAL_DIR)
