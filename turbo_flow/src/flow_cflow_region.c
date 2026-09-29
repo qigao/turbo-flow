@@ -106,8 +106,10 @@ static int flow_cflow_direct_boundary_supported(
     const cmeta_data_desc **output_data_out) {
   const cmeta_data_desc *input_data = NULL;
   const cmeta_data_desc *output_data = NULL;
-  const cmeta_trait_flags required =
+  const cmeta_trait_flags trivial =
       CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
+  const cmeta_trait_flags managed =
+      CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY;
   int rc;
 
   if (!flow || !plan || !plan->input_type || !plan->output_type)
@@ -120,8 +122,11 @@ static int flow_cflow_direct_boundary_supported(
   if (!cmeta_data_desc_equal(input_data, output_data) ||
       !cmeta_type_equal(input_data->storage_type, plan->input_type) ||
       !cmeta_type_equal(output_data->storage_type, plan->output_type) ||
-      cmeta_type_require_traits(plan->input_type, required) != CMETA_OK ||
-      cmeta_type_require_traits(plan->output_type, required) != CMETA_OK) {
+      !cmeta_type_equal(plan->input_type, plan->output_type)) {
+    return SALTS_ENOTSUP;
+  }
+  if (cmeta_type_require_traits(plan->output_type, trivial) != CMETA_OK &&
+      cmeta_type_require_traits(plan->output_type, managed) != CMETA_OK) {
     return SALTS_ENOTSUP;
   }
   if (input_data_out) *input_data_out = input_data;
@@ -317,10 +322,22 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
   region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
   rc = flow_cflow_value_slot_plan_classify(
       region.plan.input_type, region.plan.output_type, &region.value_slot);
-  if (rc != SALTS_OK ||
-      region.value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
-      region.value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY) {
-    rc = rc != SALTS_OK ? rc : SALTS_ENOTSUP;
+  if (rc != SALTS_OK) goto cleanup;
+  if (region.value_slot.mode == FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT &&
+      region.value_slot.transfer == FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY) {
+    /* Trivial direct-region commit remains in-place. */
+  } else if (region.value_slot.mode == FLOW_CFLOW_VALUE_SLOT_NONE &&
+             region.value_slot.transfer == FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT &&
+             region.value_slot.source_destroy_after_transfer == 1 &&
+             region.value_slot.required_traits ==
+                 (CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY)) {
+    /*
+     * The runtime provides an independently allocated aligned destination
+     * before invoking the no-fail CMeta move contract.
+     */
+    region.value_slot.mode = FLOW_CFLOW_VALUE_SLOT_OWNED_OUTPUT;
+  } else {
+    rc = SALTS_ENOTSUP;
     goto cleanup;
   }
 
@@ -433,19 +450,29 @@ int flow_cflow_region_execute(
     return SALTS_EPROTO;
   }
 
-  if (region->value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
-      region->value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY ||
-      region->value_slot.extent != region->plan.output_type->size ||
-      region->value_slot.alignment != region->plan.output_type->align ||
-      region->value_slot.source_destroy_after_transfer != 0 ||
-      region->value_slot.required_traits !=
-          (CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY)) {
+  if (region->value_slot.extent != region->plan.output_type->size ||
+      region->value_slot.alignment != region->plan.output_type->align) {
     cflow_result_destroy(&result);
     return SALTS_EPROTO;
   }
 
-  rc = flow_msg_commit_trivial_projection_in_place(
-      message, region->input_data, region->output_data, result.data);
+  if (region->value_slot.mode == FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT &&
+      region->value_slot.transfer == FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY &&
+      region->value_slot.source_destroy_after_transfer == 0 &&
+      region->value_slot.required_traits ==
+          (CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY)) {
+    rc = flow_msg_commit_trivial_projection_in_place(
+        message, region->input_data, region->output_data, result.data);
+  } else if (region->value_slot.mode == FLOW_CFLOW_VALUE_SLOT_OWNED_OUTPUT &&
+             region->value_slot.transfer == FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT &&
+             region->value_slot.source_destroy_after_transfer == 1 &&
+             region->value_slot.required_traits ==
+                 (CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY)) {
+    rc = flow_msg_commit_managed_projection_move(
+        message, region->input_data, region->output_data, result.data);
+  } else {
+    rc = SALTS_EPROTO;
+  }
   cflow_result_destroy(&result);
   return rc;
 }
