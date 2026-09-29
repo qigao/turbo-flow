@@ -92,6 +92,7 @@ spec("real JT/T808 TCP protocol intake") {
     protocol_network_wait_admitted_frame(&fixture, &intake);
     check_equal(fixture.business.stage_completions, 0u);
     check_equal(fixture.udp.received, 0u);
+    check_equal(fixture.tcp.received, 0u);
 
     check_equal(protocol_network_e2e_business_request_and_drive(
                     &fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS),
@@ -101,6 +102,55 @@ spec("real JT/T808 TCP protocol intake") {
     check_equal(fixture.udp.received, 1u);
     check_true(fixture.udp.last_payload_size > 0u);
     check_equal(intake.frames_admitted, (uint64_t)1u);
+
+    protocol_network_e2e_destroy(&fixture);
+  }
+
+  it("sends codec-owned platform ACK on the exact TCP generation only when durable-admission reply policy is enabled") {
+    protocol_network_e2e_fixture_t fixture;
+    turbo_flow_protocol_network_intake_snapshot_t intake =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    uint8_t frame[64];
+    size_t frame_size;
+    uint64_t deadline;
+
+    check_equal(protocol_network_e2e_jtt808_init_reply(
+                    &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_JTT808_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND,
+                    FLOW_E2E_STORAGE_PATH()),
+                SALTS_OK);
+    check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
+    check_equal(protocol_network_e2e_tcp_connect(&fixture, intake.source_endpoint,
+                                                 PROTOCOL_NETWORK_E2E_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(cnet_receive(&fixture.client, fixture.connection, 1u), SALTS_OK);
+
+    frame_size = protocol_network_e2e_jtt808_frame(frame, sizeof(frame));
+    check_true(frame_size > 4u);
+    check_equal(protocol_network_e2e_tcp_send(&fixture, frame, frame_size), SALTS_OK);
+
+    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
+    while ((intake.frames_admitted == 0u || fixture.tcp.received == 0u) &&
+           salts_monotonic_ms() < deadline)
+      check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
+
+    check_equal(intake.frames_admitted, (uint64_t)1u);
+    check_equal(fixture.business.stage_completions, (size_t)0u);
+    check_equal(fixture.udp.received, (size_t)0u);
+    check_equal(fixture.tcp.received, (size_t)1u);
+    check_true(fixture.tcp.last_payload_size >= 5u);
+    check_equal(fixture.tcp.last_payload[0], (uint8_t)0x7eu);
+    check_equal(fixture.tcp.last_payload[1], (uint8_t)0x80u);
+    check_equal(fixture.tcp.last_payload[2], (uint8_t)0x01u);
+    check_equal(fixture.tcp.last_payload[fixture.tcp.last_payload_size - 1u],
+                (uint8_t)0x7eu);
+
+    check_equal(protocol_network_e2e_business_request_and_drive(
+                    &fixture, PROTOCOL_NETWORK_E2E_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(fixture.business.stage_completions, (size_t)1u);
+    check_equal(fixture.business.failed_completions, (size_t)0u);
+    check_equal(fixture.udp.received, (size_t)1u);
 
     protocol_network_e2e_destroy(&fixture);
   }
