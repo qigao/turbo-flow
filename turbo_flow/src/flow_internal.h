@@ -274,7 +274,14 @@ typedef enum flow_lowering_barrier_e {
   /* Reflected OUT/INOUT parameters cross a native mutation/alias boundary. */
   FLOW_LOWERING_BARRIER_NATIVE_MUTATION = 1u << 12,
   /* Per-stage observer callbacks require native stage boundaries. */
-  FLOW_LOWERING_BARRIER_OBSERVER = 1u << 13
+  FLOW_LOWERING_BARRIER_OBSERVER = 1u << 13,
+  /* CFlow bool failure cannot yet preserve TurboFlow stage status/reject semantics. */
+  FLOW_LOWERING_BARRIER_MAY_FAIL = 1u << 14,
+  /* Operation-level timing/cancellation/backpressure/error policies remain native. */
+  FLOW_LOWERING_BARRIER_DEADLINE = 1u << 15,
+  FLOW_LOWERING_BARRIER_CANCELLATION = 1u << 16,
+  FLOW_LOWERING_BARRIER_BACKPRESSURE = 1u << 17,
+  FLOW_LOWERING_BARRIER_ERROR_POLICY = 1u << 18
 } flow_lowering_barrier_t;
 
 typedef struct flow_semantic_type_plan_s {
