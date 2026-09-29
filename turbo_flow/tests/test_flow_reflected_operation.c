@@ -157,9 +157,18 @@ compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
       snprintf(source, sizeof(source), "%s%s%s",
                prefix, operation_name, suffix) < 0)
     return NULL;
-  if (turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_compile(flow) != SALTS_OK)
+  if (turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK)
     return NULL;
+  {
+    int compile_rc = turbo_flow_compile(flow);
+    if (compile_rc != SALTS_OK) {
+      const turbo_flow_error_t *error = turbo_flow_last_error(flow);
+      fprintf(stderr, "reflected compile failed: rc=%d error=%d message=%s\n",
+              compile_rc, error ? error->code : 0,
+              error ? error->message : "<none>");
+      return NULL;
+    }
+  }
   stage_index = turbo_flow_find_stage(flow, "reflected");
   if (stage_index < 0) return NULL;
   return (const flow_stage_semantic_plan_t *)vec_at_const(
@@ -210,6 +219,87 @@ suite("TurboFlow reflected operation semantics") {
         semantics->canonical_output_type, &cmeta_type_int));
     check_true(cmeta_callable_contract_valid(semantics->callable));
 
+    turbo_flow_destroy(flow);
+  }
+
+  it("compiles one maximal reflected chain into an executable CFlow Plan") {
+    static const char graph[] =
+        "source input\n"
+        "stage first operation test.reflected.region.first\n"
+        "stage second operation test.reflected.region.second\n"
+        "stage main {\n"
+        "  input -> first -> second\n"
+        "}\n";
+    const int inputs[] = {0, 4, -2};
+    const int expected[] = {2, 6, 0};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t first =
+        reflected_operation_descriptor("test.reflected.region.first");
+    turbo_flow_operation_descriptor_t second =
+        reflected_operation_descriptor("test.reflected.region.second");
+    cflow_result result = {0};
+    const flow_cflow_region_plan_t *region;
+    const uint32_t *first_region;
+    const uint32_t *second_region;
+    int first_stage;
+    int second_stage;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected(
+        flow, &first, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment)));
+    check_true(register_unary_reflected(
+        flow, &second, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment)));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    {
+      int compile_rc = turbo_flow_compile(flow);
+      if (compile_rc != SALTS_OK) {
+        const turbo_flow_error_t *error = turbo_flow_last_error(flow);
+        fprintf(stderr, "region compile failed: rc=%d error=%d message=%s\n",
+                compile_rc, error ? error->code : 0,
+                error ? error->message : "<none>");
+      }
+      check_equal(compile_rc, SALTS_OK);
+    }
+
+    first_stage = turbo_flow_find_stage(flow, "first");
+    second_stage = turbo_flow_find_stage(flow, "second");
+    check_true(first_stage >= 0);
+    check_true(second_stage >= 0);
+    check_equal(flow->compiled_plan.candidate_region_count, (uint32_t)1u);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+
+    first_region = (const uint32_t *)vec_at_const(
+        &flow->compiled_plan.cflow_region_by_stage, (size_t)first_stage);
+    second_region = (const uint32_t *)vec_at_const(
+        &flow->compiled_plan.cflow_region_by_stage, (size_t)second_stage);
+    check_not_null(first_region);
+    check_not_null(second_region);
+    check_equal(*first_region, (uint32_t)0u);
+    check_equal(*second_region, (uint32_t)0u);
+
+    region = (const flow_cflow_region_plan_t *)vec_at_const(
+        &flow->compiled_plan.cflow_regions, 0u);
+    check_not_null(region);
+    check_equal(region->entry_stage, (uint32_t)first_stage);
+    check_equal(region->exit_stage, (uint32_t)second_stage);
+    check_equal(region->stage_count, (uint32_t)2u);
+    check_true(region->plan.impl != NULL);
+    check_true(cmeta_type_equal(region->plan.input_type, &cmeta_type_int));
+    check_true(cmeta_type_equal(region->plan.output_type, &cmeta_type_int));
+    check_true(region->stats.graph_nodes >= (size_t)2u);
+    check_true(region->stats.instructions >= (size_t)1u);
+
+    check_true(cflow_plan_eval_array(
+        &region->plan, inputs, sizeof(inputs) / sizeof(inputs[0]), &result));
+    check_equal(result.count, sizeof(expected) / sizeof(expected[0]));
+    check_true(cmeta_type_equal(result.type, &cmeta_type_int));
+    check_equal(result.data, expected, sizeof(expected));
+
+    cflow_result_destroy(&result);
     turbo_flow_destroy(flow);
   }
 

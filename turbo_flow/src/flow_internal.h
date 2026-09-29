@@ -14,6 +14,8 @@
 
 #include <cflow/cflow.h>
 #include <cflow/function_projection.h>
+#include <cflow/graph.h>
+#include <cflow/plan.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -300,6 +302,20 @@ typedef struct flow_stage_semantic_plan_s {
 } flow_stage_semantic_plan_t;
 
 /**
+ * One immutable CFlow execution-region artifact compiled from a maximal
+ * candidate region. The Plan owns its optimized executable tape; stage indices
+ * remain TurboFlow topology coordinates.
+ */
+typedef struct flow_cflow_region_plan_s {
+  uint32_t candidate_region;
+  uint32_t entry_stage;
+  uint32_t exit_stage;
+  uint32_t stage_count;
+  cflow_plan plan;
+  cflow_plan_compile_stats stats;
+} flow_cflow_region_plan_t;
+
+/**
  * Single-owner compiled graph plan. The compiler is the only writer; runtime
  * code may read the contained storage only after sealed becomes nonzero.
  */
@@ -315,6 +331,9 @@ typedef struct flow_compiled_plan_s {
   vec_t data_segment_by_stage;
   vec_t semantic_types;
   vec_t stage_semantics;
+  vec_t cflow_regions;
+  /** Compiled CFlow region vector index for a stage, or FLOW_PLAN_INDEX_NONE. */
+  vec_t cflow_region_by_stage;
   const cmeta_type_desc *message_type;
   const cmeta_type_desc *operation_type;
   uint32_t candidate_region_count;
@@ -749,6 +768,7 @@ void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
+int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count);
 const flow_runtime_stage_config_t *flow_runtime_stage_config_for_stage(const turbo_flow_t *flow,
                                                                        uint32_t stage_index);

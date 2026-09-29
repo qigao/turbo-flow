@@ -39,7 +39,13 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
           SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&plan->stage_semantics, sizeof(flow_stage_semantic_plan_t),
-                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&plan->cflow_regions, sizeof(flow_cflow_region_plan_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&plan->cflow_region_by_stage, sizeof(uint32_t),
+                         _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK) {
     flow_compiled_plan_destroy(plan);
     return SALTS_ENOMEM;
   }
@@ -48,6 +54,11 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
 
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   if (!plan) return;
+  for (size_t i = 0u; i < vec_size(&plan->cflow_regions); ++i) {
+    flow_cflow_region_plan_t *region =
+        (flow_cflow_region_plan_t *)vec_at(&plan->cflow_regions, i);
+    if (region) cflow_plan_destroy(&region->plan);
+  }
   for (size_t i = 0u; i < vec_size(&plan->semantic_types); ++i) {
     flow_semantic_type_plan_t *type = (flow_semantic_type_plan_t *)vec_at(&plan->semantic_types, i);
     if (type) tstr_freep(&type->stable_id);
@@ -61,6 +72,8 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->data_segment_by_stage);
   vec_destroy(&plan->semantic_types);
   vec_destroy(&plan->stage_semantics);
+  vec_destroy(&plan->cflow_regions);
+  vec_destroy(&plan->cflow_region_by_stage);
   memset(plan, 0, sizeof(*plan));
 }
 
@@ -127,7 +140,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
       vec_size(&plan->executor_by_stage) != stage_count ||
       vec_size(&plan->adapter_by_stage) != stage_count ||
       vec_size(&plan->data_segment_by_stage) != stage_count ||
-      vec_size(&plan->stage_semantics) != stage_count || !plan->message_type ||
+      vec_size(&plan->stage_semantics) != stage_count ||
+      vec_size(&plan->cflow_region_by_stage) != stage_count || !plan->message_type ||
       !plan->operation_type || !cmeta_type_desc_valid(plan->message_type) ||
       !cmeta_type_desc_valid(plan->operation_type)) {
     return SALTS_EPROTO;
@@ -143,6 +157,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         (const uint32_t *)vec_at_const(&plan->data_segment_by_stage, stage_index);
     const flow_stage_semantic_plan_t *semantics =
         (const flow_stage_semantic_plan_t *)vec_at_const(&plan->stage_semantics, stage_index);
+    const uint32_t *cflow_region_index =
+        (const uint32_t *)vec_at_const(&plan->cflow_region_by_stage, stage_index);
     const flow_executor_plan_t *executor =
         executor_index && *executor_index != FLOW_PLAN_INDEX_NONE
             ? (const flow_executor_plan_t *)vec_at_const(&plan->executors, *executor_index)
@@ -151,7 +167,7 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         segment_index && *segment_index != FLOW_PLAN_INDEX_NONE
             ? (const flow_data_segment_plan_t *)vec_at_const(&plan->data_segments, *segment_index)
             : NULL;
-    if (!node || !executor_index || !adapter_index || !segment_index ||
+    if (!node || !executor_index || !adapter_index || !segment_index || !cflow_region_index ||
         node->stage_index != stage_index ||
         node->outgoing_begin > vec_size(&plan->edges) ||
         node->outgoing_count > vec_size(&plan->edges) - node->outgoing_begin ||
@@ -194,7 +210,9 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE &&
          semantics->candidate_region >= plan->candidate_region_count) ||
         (!!semantics->lowering_candidate !=
-         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE))) {
+         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE)) ||
+        (*cflow_region_index != FLOW_PLAN_INDEX_NONE &&
+         *cflow_region_index >= vec_size(&plan->cflow_regions))) {
       return SALTS_EPROTO;
     }
     for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
@@ -203,6 +221,19 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
       if (!edge || edge->from_stage != stage_index || edge->to_stage >= stage_count) {
         return SALTS_EPROTO;
       }
+    }
+  }
+  for (size_t region_index = 0u; region_index < vec_size(&plan->cflow_regions);
+       ++region_index) {
+    const flow_cflow_region_plan_t *region =
+        (const flow_cflow_region_plan_t *)vec_at_const(&plan->cflow_regions, region_index);
+    if (!region || !region->plan.impl || region->stage_count == 0u ||
+        region->entry_stage >= stage_count || region->exit_stage >= stage_count ||
+        region->candidate_region >= plan->candidate_region_count ||
+        !region->plan.input_type || !region->plan.output_type ||
+        !cmeta_type_desc_valid(region->plan.input_type) ||
+        !cmeta_type_desc_valid(region->plan.output_type)) {
+      return SALTS_EPROTO;
     }
   }
   for (size_t type_index = 0u; type_index < vec_size(&plan->semantic_types); ++type_index) {
@@ -418,6 +449,12 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     return flow_plan_fail(flow, &candidate, rc,
                           rc == SALTS_ENOMEM ? "out of memory"
                                              : "compiled semantic plan is inconsistent");
+  }
+  rc = flow_plan_build_cflow_regions(flow, &candidate);
+  if (rc != SALTS_OK) {
+    return flow_plan_fail(flow, &candidate, rc,
+                          rc == SALTS_ENOMEM ? "out of memory"
+                                             : "CFlow execution-region compilation failed");
   }
   rc = flow_verify_compiled_plan(&candidate, stage_count, vec_size(&flow->adapters));
   if (rc != SALTS_OK) {
