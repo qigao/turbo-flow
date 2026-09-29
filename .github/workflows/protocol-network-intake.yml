@@ -80,11 +80,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-      - name: Restore published Salts SDK pair
+      - name: Restore latest published native SDKs
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid linux-x64
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64
 
       - name: Verify published dependency boundary
         shell: bash

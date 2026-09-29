@@ -79,11 +79,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-      - name: Restore published ecosystem SDKs
+      - name: Restore latest published ecosystem SDKs
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithRulesForge
 
       - name: Verify published dependency boundary
         shell: bash

@@ -176,9 +176,9 @@ run_contract_case(
 file(READ "${TURBO_FLOW_SOURCE_DIR}/CMakeLists.txt" root_cmake)
 foreach(required_fragment IN ITEMS
         "SALTS_ROOT SALTS_UTILS_ROOT"
-        "find_package(Salts 1.8.3 EXACT CONFIG REQUIRED"
-        "find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED"
-        "SaltsUtils 4.1.3 package is missing required target Salts::DataBind")
+        "find_package(Salts CONFIG REQUIRED"
+        "find_package(SaltsUtils CONFIG REQUIRED"
+        "resolved SaltsUtils package is missing required target Salts::DataBind")
   string(FIND "${root_cmake}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "source package cut missing fragment: ${required_fragment}")
@@ -187,6 +187,9 @@ endforeach()
 foreach(forbidden_fragment IN ITEMS
         "DATABIND_ROOT"
         "find_package(DataBind"
+        "find_package(Salts 1."
+        "find_package(SaltsUtils 4."
+        " EXACT CONFIG REQUIRED"
         "Salts::TbeSchema")
   string(FIND "${root_cmake}" "${forbidden_fragment}" fragment_pos)
   if(NOT fragment_pos EQUAL -1)
@@ -196,9 +199,9 @@ endforeach()
 
 file(READ "${TURBO_FLOW_SOURCE_DIR}/cmake/TurboFlowConfig.cmake.in" config_template)
 foreach(required_fragment IN ITEMS
-        "find_dependency(Salts 1.8.3 EXACT CONFIG REQUIRED"
-        "find_dependency(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED"
-        "SaltsUtils 4.1.3 package is missing Salts::DataBind")
+        "find_dependency(Salts CONFIG REQUIRED"
+        "find_dependency(SaltsUtils CONFIG REQUIRED"
+        "resolved SaltsUtils package is missing Salts::DataBind")
   string(FIND "${config_template}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "installed config missing fragment: ${required_fragment}")
@@ -207,6 +210,11 @@ endforeach()
 foreach(forbidden_fragment IN ITEMS
         "DATABIND_ROOT"
         "find_dependency(DataBind"
+        "find_dependency(Salts 1."
+        "find_dependency(SaltsUtils 4."
+        "find_dependency(RulesForge 0."
+        "find_dependency(Orm 2."
+        " EXACT CONFIG REQUIRED"
         "Salts::TbeSchema")
   string(FIND "${config_template}" "${forbidden_fragment}" fragment_pos)
   if(NOT fragment_pos EQUAL -1)
@@ -256,7 +264,7 @@ endif()
 file(READ "${TURBO_FLOW_SOURCE_DIR}/.github/workflows/rulesforge-provider.yml"
           rulesforge_workflow)
 foreach(required_fragment IN ITEMS
-        "restore-versioned-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
+        "restore-native-sdks.ps1 -Rid linux-x64 -WithRulesForge"
         "VCPKG_INSTALL_OPTIONS=--only-binarycaching"
         "TURBO_FLOW_IDLC_HOST_EXECUTABLE"
         "test -z \"\${DATABIND_ROOT:-}\"")
@@ -266,6 +274,7 @@ foreach(required_fragment IN ITEMS
   endif()
 endforeach()
 foreach(forbidden_fragment IN ITEMS
+        "restore-versioned-native-sdks.ps1"
         "Checkout pinned Salts"
         "Checkout pinned SaltsUtils"
         "Checkout pinned RulesForge"
