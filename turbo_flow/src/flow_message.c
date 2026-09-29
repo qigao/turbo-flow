@@ -1,6 +1,7 @@
 #include "flow_internal.h"
 #include "flow_projection_owner_internal.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
