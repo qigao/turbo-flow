@@ -274,9 +274,15 @@ typedef struct turbo_flow_reflected_operation_registration_s {
   turbo_flow_reflected_lowering_t lowering;
 } turbo_flow_reflected_operation_registration_t;
 
+#ifdef __cplusplus
+#define TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT \
+  {sizeof(turbo_flow_reflected_operation_registration_t), NULL, NULL, NULL, {}, NULL, 0u, \
+   TURBO_FLOW_REFLECTED_LOWERING_NONE}
+#else
 #define TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT \
   {sizeof(turbo_flow_reflected_operation_registration_t), NULL, NULL, NULL, {0}, NULL, 0u, \
    TURBO_FLOW_REFLECTED_LOWERING_NONE}
+#endif
 
 typedef struct turbo_flow_reflected_operation_view_s {
   size_t size;
