@@ -413,6 +413,43 @@ static int bind_test_int_projection(
   return rc;
 }
 
+typedef struct reflected_batch_prepare_probe_s {
+  const turbo_flow_data_schema_t *schema;
+  size_t calls;
+  size_t clone_calls;
+  size_t fail_index;
+  int fail_status;
+} reflected_batch_prepare_probe_t;
+
+static int reflected_batch_clone_forbidden(
+    const void *value, void *ctx, void **out) {
+  reflected_batch_prepare_probe_t *probe =
+      (reflected_batch_prepare_probe_t *)ctx;
+  (void)value;
+  if (out) *out = NULL;
+  if (probe) ++probe->clone_calls;
+  return SALTS_EIO;
+}
+
+static int reflected_batch_prepare(
+    void *ctx, size_t index, turbo_flow_msg_t *message) {
+  reflected_batch_prepare_probe_t *probe =
+      (reflected_batch_prepare_probe_t *)ctx;
+  int *storage;
+  int rc;
+  if (!probe || !probe->schema || !message) return SALTS_EINVAL;
+  ++probe->calls;
+  if (index == probe->fail_index) return probe->fail_status;
+  storage = (int *)malloc(sizeof(*storage));
+  if (!storage) return SALTS_ENOMEM;
+  *storage = (int)index;
+  rc = turbo_flow_msg_bind_typed_projection(
+      message, probe->schema, &cmeta_data_int, storage,
+      reflected_batch_clone_forbidden, reflected_test_destroy_int, probe);
+  if (rc != SALTS_OK) free(storage);
+  return rc;
+}
+
 static const flow_stage_semantic_plan_t *
 compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
   static const char prefix[] =
@@ -822,6 +859,132 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 7);
 
     turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("executes a bounded PURE TOTAL MAP batch through one caller-owned CFlow workspace") {
+    static const char graph[] =
+        "source input\n"
+        "stage first operation test.reflected.batch.first\n"
+        "stage second operation test.reflected.batch.second\n"
+        "stage main {\n"
+        "  input -> first -> second\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t first =
+        reflected_operation_descriptor("test.reflected.batch.first");
+    turbo_flow_operation_descriptor_t second =
+        reflected_operation_descriptor("test.reflected.batch.second");
+    const flow_cflow_region_plan_t *region;
+    flow_cflow_region_batch_workspace_t workspace;
+    cflow_plan_batch_result result = {0};
+    turbo_flow_msg_t messages[4];
+    turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    const int expected[] = {2, 3, 4, 5};
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &first, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &second, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+    region = (const flow_cflow_region_plan_t *)vec_at_const(
+        &flow->compiled_plan.cflow_regions, 0u);
+    check_not_null(region);
+    check_true(region->batch_safe);
+    check_true(cflow_plan_batch_workspace_supported(&region->plan));
+
+    memset(&workspace, 0, sizeof(workspace));
+    check_equal(flow_cflow_region_batch_workspace_init(region, 4u, &workspace),
+                SALTS_OK);
+    check_equal(cflow_plan_batch_workspace_capacity(&workspace.plan), (size_t)4u);
+    check_true(cflow_plan_batch_workspace_bytes(&workspace.plan) > 0u);
+
+    for (size_t i = 0u; i < 4u; ++i) {
+      turbo_flow_msg_init(&messages[i]);
+      check_equal(bind_test_int_projection(&messages[i], &schema, (int)i), SALTS_OK);
+      check_equal(flow_cflow_region_batch_stage_message(
+                      region, &workspace, i, &messages[i]),
+                  SALTS_OK);
+    }
+    check_equal(flow_cflow_region_execute_batch(
+                    region, &workspace, 4u, &result),
+                SALTS_OK);
+    check_equal(result.count, (size_t)4u);
+    check_true(cmeta_type_equal(result.type, &cmeta_type_int));
+    check_equal(memcmp(result.data, expected, sizeof(expected)), 0);
+
+    for (size_t i = 0u; i < 4u; ++i) turbo_flow_msg_cleanup(&messages[i]);
+    flow_cflow_region_batch_workspace_destroy(&workspace);
+    check_equal(cflow_plan_batch_workspace_capacity(&workspace.plan), (size_t)0u);
+    turbo_flow_destroy(flow);
+  }
+
+  it("publishes terminal CFlow batches in bounded chunks without projection recloning") {
+    static const char graph[] =
+        "source input\n"
+        "stage first operation test.reflected.publish.batch.first\n"
+        "stage second operation test.reflected.publish.batch.second\n"
+        "stage main {\n"
+        "  input -> first -> second\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t first =
+        reflected_operation_descriptor("test.reflected.publish.batch.first");
+    turbo_flow_operation_descriptor_t second =
+        reflected_operation_descriptor("test.reflected.publish.batch.second");
+    turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    reflected_batch_prepare_probe_t probe = {
+        &schema, 0u, 0u, SIZE_MAX, SALTS_EIO};
+    turbo_flow_publish_batch_config_t config =
+        TURBO_FLOW_PUBLISH_BATCH_CONFIG_INIT;
+    size_t published = SIZE_MAX;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &first, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &second, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    config.message_count = 130u;
+    config.prepare = reflected_batch_prepare;
+    config.ctx = &probe;
+    check_equal(turbo_flow_publish_batch(flow, "input", &config, &published),
+                SALTS_OK);
+    check_equal(published, (size_t)130u);
+    check_equal(probe.calls, (size_t)130u);
+    check_equal(probe.clone_calls, (size_t)0u);
+
+    probe.calls = 0u;
+    probe.clone_calls = 0u;
+    probe.fail_index = 70u;
+    published = SIZE_MAX;
+    check_equal(turbo_flow_publish_batch(flow, "input", &config, &published),
+                SALTS_EIO);
+    check_equal(published, (size_t)70u);
+    check_equal(probe.calls, (size_t)71u);
+    check_equal(probe.clone_calls, (size_t)0u);
+
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
   }
