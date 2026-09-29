@@ -6,6 +6,7 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -271,6 +272,55 @@ static void stream_sink_operation_release(void *user) {
   free(operation);
 }
 
+static int stream_sink_send_message_sg(turbo_flow_cnet_stream_sink_t *sink,
+                                       const turbo_flow_msg_t *message) {
+  mem_buffer_t *materialized = NULL;
+  mem_slice_t segment = {0};
+  int status;
+
+  if (!sink || !message || !message->payload.data || message->payload.len == 0u)
+    return SALTS_EINVAL;
+
+  /*
+   * Prefer the message's retained Salts backing. This keeps a graph-owned
+   * payload zero-copy across the TurboFlow -> CNet boundary while CNet retains
+   * the slice vector until its logical-send terminal.
+   */
+  if (message->buffer) {
+    const char *base = mem_buffer_const_data(message->buffer);
+    const size_t used = mem_buffer_used(message->buffer);
+    const uintptr_t data_address = (uintptr_t)message->payload.data;
+    const uintptr_t base_address = (uintptr_t)base;
+    if (base && data_address >= base_address) {
+      const size_t offset = (size_t)(data_address - base_address);
+      if (offset < used && message->payload.len <= used - offset)
+        segment = mem_slice(message->buffer, offset, message->payload.len);
+    }
+  }
+
+  /*
+   * owned_payload has no mem_buffer owner. Materialize only that fallback so
+   * every native stream write still enters CNet through the retained SG API.
+   */
+  if (!segment.buffer) {
+    materialized = mem_get_buffer(mem_global(), message->payload.len);
+    if (!materialized) return SALTS_ENOMEM;
+    memcpy(mem_buffer_data(materialized), message->payload.data, message->payload.len);
+    mem_set_used(materialized, message->payload.len);
+    segment = mem_slice(materialized, 0u, message->payload.len);
+    if (!segment.buffer || segment.length != message->payload.len) {
+      mem_slice_release(&segment);
+      mem_buffer_release(materialized);
+      return SALTS_EPROTO;
+    }
+  }
+
+  status = cnet_send_slicev(&sink->client, sink->connection, &segment, 1u);
+  mem_slice_release(&segment);
+  mem_buffer_release(materialized);
+  return status;
+}
+
 static int stream_sink_backend_submit(void *user, cflow_io_actor *actor,
                                       cflow_io_request_id request_id, cflow_io_lease_id lease_id,
                                       void *operation_user) {
@@ -287,7 +337,7 @@ static int stream_sink_backend_submit(void *user, cflow_io_actor *actor,
     return SALTS_EPROTO;
   }
   sink->native_request = request_id;
-  rc = cnet_send(&sink->client, sink->connection, message->payload.data, message->payload.len);
+  rc = stream_sink_send_message_sg(sink, message);
   if (rc != SALTS_OK) sink->native_request = 0u;
   return rc;
 }
