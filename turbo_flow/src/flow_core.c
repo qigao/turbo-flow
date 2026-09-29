@@ -1,5 +1,6 @@
 #include "flow_internal.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -745,7 +746,8 @@ int turbo_flow_register_adapter_transport_reply(
   int index;
   flow_adapter_registration_t *adapter;
   if (!flow || !adapter_name || !adapter_name[0] || !ops ||
-      ops->size < sizeof(*ops) || ops->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      ops->size < TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_V1_SIZE ||
+      ops->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
       !ops->capture || !ops->send || !ops->take_terminal) {
     return SALTS_EINVAL;
   }
@@ -760,7 +762,11 @@ int turbo_flow_register_adapter_transport_reply(
   if (!adapter) return SALTS_ENOENT;
   if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u) return SALTS_EINVAL;
   if (adapter->transport_reply_ops.capture) return SALTS_EALREADY;
-  adapter->transport_reply_ops = *ops;
+  memset(&adapter->transport_reply_ops, 0, sizeof(adapter->transport_reply_ops));
+  memcpy(&adapter->transport_reply_ops, ops,
+         ops->size < sizeof(adapter->transport_reply_ops)
+             ? ops->size
+             : sizeof(adapter->transport_reply_ops));
   adapter->transport_reply_ops.size = sizeof(adapter->transport_reply_ops);
   adapter->transport_reply_ctx = ctx;
   return SALTS_OK;
@@ -825,6 +831,52 @@ int turbo_flow_transport_reply_send(
   adapter = flow_transport_reply_adapter(flow, adapter_name);
   if (!adapter) return SALTS_ENOTSUP;
   return adapter->transport_reply_ops.send(adapter->transport_reply_ctx, request);
+}
+
+static int flow_transport_reply_slice_valid(const mem_slice_t *slice) {
+  const char *base;
+  uintptr_t base_address;
+  uintptr_t data_address;
+  size_t used;
+  size_t offset;
+  if (!slice || !slice->buffer || !slice->data || slice->length == 0u) return 0;
+  base = mem_buffer_const_data(slice->buffer);
+  used = mem_buffer_used(slice->buffer);
+  if (!base || used == 0u) return 0;
+  base_address = (uintptr_t)base;
+  data_address = (uintptr_t)slice->data;
+  if (data_address < base_address) return 0;
+  offset = (size_t)(data_address - base_address);
+  return offset < used && slice->length <= used - offset;
+}
+
+int turbo_flow_transport_reply_send_slices(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_slices_request_t *request) {
+  const flow_adapter_registration_t *adapter;
+  size_t total = 0u;
+  if (!request || request->size != sizeof(*request) ||
+      request->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      request->session.size != sizeof(request->session) ||
+      request->session.version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
+      request->session.token_size == 0u ||
+      request->session.token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES ||
+      !request->segments || request->segment_count == 0u ||
+      request->segment_count > TURBO_FLOW_TRANSPORT_VECTOR_MAX_SEGMENTS ||
+      request->tag == 0u) {
+    return SALTS_EINVAL;
+  }
+  for (size_t i = 0u; i < request->segment_count; ++i) {
+    if (!flow_transport_reply_slice_valid(&request->segments[i]) ||
+        total > SIZE_MAX - request->segments[i].length) {
+      return SALTS_EINVAL;
+    }
+    total += request->segments[i].length;
+  }
+  if (total == 0u) return SALTS_EINVAL;
+  adapter = flow_transport_reply_adapter(flow, adapter_name);
+  if (!adapter || !adapter->transport_reply_ops.send_slices) return SALTS_ENOTSUP;
+  return adapter->transport_reply_ops.send_slices(adapter->transport_reply_ctx, request);
 }
 
 int turbo_flow_transport_reply_take_terminal(
