@@ -223,6 +223,18 @@ static int flow_cflow_region_successor(const flow_compiled_plan_t *plan,
   return SALTS_OK;
 }
 
+static int flow_cflow_stage_batch_safe(
+    const flow_stage_semantic_plan_t *semantics) {
+  const cmeta_callable *callable;
+  if (!semantics || semantics->effects != CMETA_EFFECT_PURE ||
+      semantics->cflow_operator != CFLOW_OP_MAP)
+    return 0;
+  callable = semantics->reflected_typed_adapter
+                 ? &semantics->typed_adapter_projection.callable
+                 : &semantics->callable;
+  return cmeta_properties_include(callable->meta.properties, CMETA_PROP_TOTAL);
+}
+
 static int flow_cflow_region_compile(const turbo_flow_t *flow,
                                      const flow_compiled_plan_t *plan,
                                      uint32_t candidate_region,
@@ -243,6 +255,7 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
   region.entry_stage = entry_stage;
   region.exit_stage = exit_stage;
   region.stage_count = stage_count;
+  region.batch_safe = 1;
   surface.root = CMETA_INVALID_ID;
 
   {
@@ -277,6 +290,7 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
       rc = SALTS_EPROTO;
       goto cleanup;
     }
+    if (!flow_cflow_stage_batch_safe(semantics)) region.batch_safe = 0;
     if (semantics->reflected_typed_adapter) {
       if (!cflow_graph_add_function_typed_adapter_projection(
               &surface, &semantics->typed_adapter_projection)) {
@@ -339,6 +353,20 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
   } else {
     rc = SALTS_ENOTSUP;
     goto cleanup;
+  }
+
+  /*
+   * Batch execution must use the canonical caller-owned CFlow workspace.
+   * Managed values, cardinality-changing operators, captured adapters, or
+   * non-raw-batch Plans stay on the scalar path.
+   */
+  if (region.value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region.value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY ||
+      region.plan.input_type->size == 0u ||
+      region.plan.input_type->align == 0u ||
+      region.plan.input_type->size % region.plan.input_type->align != 0u ||
+      !cflow_plan_batch_workspace_supported(&region.plan)) {
+    region.batch_safe = 0;
   }
 
   *region_out = region;
@@ -421,6 +449,120 @@ const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     return NULL;
   if (region_index_out) *region_index_out = *region_index;
   return region;
+}
+
+static int flow_cflow_aligned_array_allocate(
+    const cmeta_type_desc *type, size_t count, void **allocation_out,
+    void **data_out) {
+  size_t bytes;
+  size_t total;
+  void *allocation;
+  uintptr_t begin;
+  uintptr_t aligned;
+  if (allocation_out) *allocation_out = NULL;
+  if (data_out) *data_out = NULL;
+  if (!cmeta_type_desc_valid(type) || !allocation_out || !data_out ||
+      count == 0u || type->size == 0u || type->align == 0u ||
+      (type->align & (type->align - 1u)) != 0u ||
+      type->size % type->align != 0u ||
+      count > SIZE_MAX / type->size)
+    return SALTS_EINVAL;
+  bytes = count * type->size;
+  if (bytes > SIZE_MAX - (type->align - 1u)) return SALTS_ERANGE;
+  total = bytes + type->align - 1u;
+  allocation = malloc(total);
+  if (!allocation) return SALTS_ENOMEM;
+  begin = (uintptr_t)allocation;
+  if (begin > UINTPTR_MAX - (type->align - 1u)) {
+    free(allocation);
+    return SALTS_ERANGE;
+  }
+  aligned = (begin + type->align - 1u) & ~((uintptr_t)type->align - 1u);
+  *allocation_out = allocation;
+  *data_out = (void *)aligned;
+  return SALTS_OK;
+}
+
+int flow_cflow_region_batch_workspace_init(
+    const flow_cflow_region_plan_t *region, size_t capacity,
+    flow_cflow_region_batch_workspace_t *workspace) {
+  int rc;
+  if (!workspace) return SALTS_EINVAL;
+  memset(workspace, 0, sizeof(*workspace));
+  if (!region || capacity == 0u ||
+      region->backend != FLOW_CFLOW_REGION_BACKEND_DIRECT ||
+      !region->batch_safe || !region->input_data || !region->output_data ||
+      !cflow_plan_batch_workspace_supported(&region->plan))
+    return SALTS_ENOTSUP;
+
+  rc = flow_cflow_aligned_array_allocate(
+      region->plan.input_type, capacity, &workspace->input_allocation,
+      (void **)&workspace->input_values);
+  if (rc != SALTS_OK) return rc;
+  if (!cflow_plan_batch_workspace_init(
+          &workspace->plan, &region->plan, capacity)) {
+    free(workspace->input_allocation);
+    memset(workspace, 0, sizeof(*workspace));
+    return SALTS_ENOMEM;
+  }
+  workspace->capacity = capacity;
+  return SALTS_OK;
+}
+
+void flow_cflow_region_batch_workspace_destroy(
+    flow_cflow_region_batch_workspace_t *workspace) {
+  if (!workspace) return;
+  cflow_plan_batch_workspace_destroy(&workspace->plan);
+  free(workspace->input_allocation);
+  memset(workspace, 0, sizeof(*workspace));
+}
+
+int flow_cflow_region_batch_stage_message(
+    const flow_cflow_region_plan_t *region,
+    flow_cflow_region_batch_workspace_t *workspace, size_t index,
+    const turbo_flow_msg_t *message) {
+  const cmeta_data_desc *input_data;
+  const void *input_value;
+  const cmeta_type_desc *type;
+
+  if (!region || !workspace || !message || !region->batch_safe ||
+      index >= workspace->capacity || !workspace->input_values)
+    return SALTS_EINVAL;
+  type = region->plan.input_type;
+  input_data = turbo_flow_msg_projection_data(message);
+  input_value = turbo_flow_msg_projection(message, NULL);
+  if (!input_value || !input_data ||
+      !cmeta_data_desc_equal(input_data, region->input_data))
+    return SALTS_EPROTO;
+  memcpy(workspace->input_values + index * type->size,
+         input_value, type->size);
+  return SALTS_OK;
+}
+
+int flow_cflow_region_execute_batch(
+    const flow_cflow_region_plan_t *region,
+    flow_cflow_region_batch_workspace_t *workspace, size_t input_count,
+    cflow_plan_batch_result *result_out) {
+  cflow_plan_batch_result result = {0};
+
+  if (result_out) memset(result_out, 0, sizeof(*result_out));
+  if (!region || !workspace || !result_out || input_count == 0u ||
+      input_count > workspace->capacity || !workspace->input_values ||
+      !region->batch_safe ||
+      cflow_plan_batch_workspace_capacity(&workspace->plan) <
+          input_count)
+    return SALTS_EINVAL;
+
+  if (!cflow_plan_eval_array_workspace(
+          &region->plan, workspace->input_values, input_count,
+          &workspace->plan, &result))
+    return SALTS_EPROTO;
+  if (result.count != input_count || !result.data ||
+      !cmeta_type_equal(result.type, region->plan.output_type))
+    return SALTS_EPROTO;
+
+  *result_out = result;
+  return SALTS_OK;
 }
 
 int flow_cflow_region_execute(

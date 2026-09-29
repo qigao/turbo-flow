@@ -361,9 +361,21 @@ typedef struct flow_cflow_region_plan_s {
   const cmeta_data_desc *input_data;
   const cmeta_data_desc *output_data;
   flow_cflow_value_slot_plan_t value_slot;
+  /*
+   * Proven cardinality-preserving PURE + TOTAL MAP region backed by the
+   * canonical CFlow raw-batch workspace contract.
+   */
+  int batch_safe;
   cflow_plan plan;
   cflow_plan_compile_stats stats;
 } flow_cflow_region_plan_t;
+
+typedef struct flow_cflow_region_batch_workspace_s {
+  cflow_plan_batch_workspace plan;
+  void *input_allocation;
+  unsigned char *input_values;
+  size_t capacity;
+} flow_cflow_region_batch_workspace_t;
 
 /**
  * Single-owner compiled graph plan. The compiler is the only writer; runtime
@@ -823,6 +835,19 @@ const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out);
 int flow_cflow_region_execute(
     turbo_flow_t *flow, const flow_cflow_region_plan_t *region, turbo_flow_msg_t *message);
+int flow_cflow_region_batch_workspace_init(
+    const flow_cflow_region_plan_t *region, size_t capacity,
+    flow_cflow_region_batch_workspace_t *workspace);
+void flow_cflow_region_batch_workspace_destroy(
+    flow_cflow_region_batch_workspace_t *workspace);
+int flow_cflow_region_batch_stage_message(
+    const flow_cflow_region_plan_t *region,
+    flow_cflow_region_batch_workspace_t *workspace, size_t index,
+    const turbo_flow_msg_t *message);
+int flow_cflow_region_execute_batch(
+    const flow_cflow_region_plan_t *region,
+    flow_cflow_region_batch_workspace_t *workspace, size_t input_count,
+    cflow_plan_batch_result *result_out);
 int flow_msg_commit_trivial_projection_in_place(
     turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
     const cmeta_data_desc *output_data, const void *output_value);
