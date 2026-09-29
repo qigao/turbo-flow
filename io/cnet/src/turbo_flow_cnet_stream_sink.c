@@ -16,6 +16,9 @@ enum {
   STREAM_SINK_RESOURCE_GENERATION = 1u
 };
 
+_Static_assert(TURBO_FLOW_TRANSPORT_VECTOR_MAX_SEGMENTS <= CNET_RETAINED_VECTOR_MAX,
+               "TurboFlow transport vectors must fit one CNet logical SG write");
+
 static const char STREAM_SINK_RESOURCE_UID_PREFIX[] = "cnet-stream-sink:";
 static const char STREAM_SINK_SCHEMA_NAME[] = "CNetStream";
 static const char STREAM_SINK_SCHEMA_TYPE[] = "NonEmptyBytes";
@@ -274,12 +277,22 @@ static void stream_sink_operation_release(void *user) {
 
 static int stream_sink_send_message_sg(turbo_flow_cnet_stream_sink_t *sink,
                                        const turbo_flow_msg_t *message) {
+  const mem_slice_t *transport_segments = NULL;
+  const size_t transport_count =
+      turbo_flow_msg_transport_slices(message, &transport_segments);
   mem_buffer_t *materialized = NULL;
   mem_slice_t segment = {0};
   int status;
 
   if (!sink || !message || !message->payload.data || message->payload.len == 0u)
     return SALTS_EINVAL;
+
+  if (transport_count != 0u) {
+    if (!transport_segments || transport_count > CNET_RETAINED_VECTOR_MAX)
+      return SALTS_EPROTO;
+    return cnet_send_slicev(&sink->client, sink->connection,
+                            transport_segments, transport_count);
+  }
 
   /*
    * Prefer the message's retained Salts backing. This keeps a graph-owned
@@ -332,9 +345,11 @@ static int stream_sink_backend_submit(void *user, cflow_io_actor *actor,
   (void)lease_id;
   if (!sink || !operation || sink->native_request != 0u) return SALTS_EBUSY;
   message = turbo_flow_async_terminal_claim_message(&operation->claim);
-  if (!message || !message->payload.data || message->payload.len == 0u ||
-      message->payload.len != operation->bytes) {
-    return SALTS_EPROTO;
+  if (!message || !message->payload.data || message->payload.len == 0u) return SALTS_EPROTO;
+  {
+    const size_t transport_bytes = turbo_flow_msg_transport_bytes(message);
+    const size_t wire_bytes = transport_bytes != 0u ? transport_bytes : message->payload.len;
+    if (wire_bytes != operation->bytes) return SALTS_EPROTO;
   }
   sink->native_request = request_id;
   rc = stream_sink_send_message_sg(sink, message);
@@ -630,13 +645,17 @@ static int stream_sink_async_submit(void *ctx, turbo_flow_t *flow,
   if (!sink || !message || !claim) return stream_sink_reject(sink, SALTS_EINVAL);
   if (!message->payload.data || message->payload.len == 0u)
     return stream_sink_reject(sink, SALTS_EINVAL);
-  if (message->payload.len > sink->max_message_bytes)
-    return stream_sink_reject(sink, SALTS_EMSGSIZE);
-  operation = (stream_sink_operation_t *)calloc(1u, sizeof(*operation));
-  if (!operation) return stream_sink_reject(sink, SALTS_ENOMEM);
+  {
+    const size_t transport_bytes = turbo_flow_msg_transport_bytes(message);
+    const size_t wire_bytes = transport_bytes != 0u ? transport_bytes : message->payload.len;
+    if (wire_bytes == 0u || wire_bytes > sink->max_message_bytes)
+      return stream_sink_reject(sink, SALTS_EMSGSIZE);
+    operation = (stream_sink_operation_t *)calloc(1u, sizeof(*operation));
+    if (!operation) return stream_sink_reject(sink, SALTS_ENOMEM);
+    operation->bytes = wire_bytes;
+  }
   operation->sink = sink;
   operation->claim = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
-  operation->bytes = message->payload.len;
   salts_mutex_lock(&sink->lifecycle_mutex);
   state = stream_sink_state(sink);
   if (flow != sink->flow || atomic_load_explicit(&sink->detached, memory_order_acquire) ||
