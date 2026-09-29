@@ -22,8 +22,12 @@ typedef enum protocol_network_e2e_storage_kind_e {
 typedef struct protocol_network_e2e_tcp_probe_s {
   size_t connected;
   size_t sent;
+  size_t received;
+  size_t bytes;
   size_t terminal;
   int failed;
+  uint8_t last_payload[4096];
+  size_t last_payload_size;
 } protocol_network_e2e_tcp_probe_t;
 
 typedef struct protocol_network_e2e_udp_probe_s {
@@ -63,6 +67,7 @@ typedef struct protocol_network_e2e_fixture_s {
   protocol_network_e2e_tcp_probe_t tcp;
   protocol_network_e2e_udp_probe_t udp;
   protocol_network_e2e_business_probe_t business;
+  int reply_enabled;
 } protocol_network_e2e_fixture_t;
 
 int protocol_network_e2e_storage_prepare(protocol_network_e2e_fixture_t *fixture,
@@ -78,11 +83,21 @@ int protocol_network_e2e_jtt808_init(protocol_network_e2e_fixture_t *fixture,
                                      const char *durable_module,
                                      protocol_network_e2e_storage_kind_t storage,
                                      char *turbodb_path);
+int protocol_network_e2e_jtt808_init_reply(protocol_network_e2e_fixture_t *fixture,
+                                           const char *cnet_module, const char *jtt808_module,
+                                           const char *durable_module,
+                                           protocol_network_e2e_storage_kind_t storage,
+                                           char *turbodb_path);
 int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
                                    const char *cnet_module, const char *coap_module,
                                    const char *durable_module,
                                    protocol_network_e2e_storage_kind_t storage,
                                    char *turbodb_path);
+int protocol_network_e2e_coap_init_reply(protocol_network_e2e_fixture_t *fixture,
+                                         const char *cnet_module, const char *coap_module,
+                                         const char *durable_module,
+                                         protocol_network_e2e_storage_kind_t storage,
+                                         char *turbodb_path);
 int protocol_network_e2e_start(protocol_network_e2e_fixture_t *fixture,
                                turbo_flow_protocol_network_intake_snapshot_t *snapshot);
 int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
