@@ -454,6 +454,28 @@ static int cnet_plugin_transport_reply_send(
   }
 }
 
+static int cnet_plugin_transport_reply_send_slices(
+    void *ctx, const turbo_flow_transport_reply_slices_request_t *request) {
+  cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
+  cnet_connection connection = {0};
+  turbo_flow_cnet_listener_reply_slices_request_t cnet_request =
+      TURBO_FLOW_CNET_LISTENER_REPLY_SLICES_REQUEST_INIT;
+  int rc;
+  if (!owner || !request) return SALTS_EINVAL;
+  if (owner->config.kind != TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE)
+    return SALTS_ENOTSUP;
+  rc = cnet_plugin_reply_session_unpack(&request->session, &connection, sizeof(connection));
+  if (rc != SALTS_OK) return rc;
+  cnet_request.connection = connection;
+  cnet_request.segments = request->segments;
+  cnet_request.segment_count = request->segment_count;
+  cnet_request.tag = request->tag;
+  return owner->handle.listener_source
+             ? turbo_flow_cnet_listener_source_reply_send_slices(
+                   owner->handle.listener_source, &cnet_request)
+             : SALTS_EBUSY;
+}
+
 static int cnet_plugin_transport_reply_take_terminal(
     void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
   cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
@@ -554,6 +576,8 @@ static int cnet_plugin_register_source(cnet_plugin_owner_t *owner, turbo_flow_t 
       reply.capture = cnet_plugin_transport_reply_capture;
       reply.send = cnet_plugin_transport_reply_send;
       reply.take_terminal = cnet_plugin_transport_reply_take_terminal;
+      if (owner->config.kind == TURBO_FLOW_CNET_PLUGIN_LISTENER_SOURCE)
+        reply.send_slices = cnet_plugin_transport_reply_send_slices;
       rc = turbo_flow_register_adapter_transport_reply(flow, owner->name, &reply, owner);
     }
     return rc;
