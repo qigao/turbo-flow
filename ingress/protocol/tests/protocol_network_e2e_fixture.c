@@ -605,8 +605,17 @@ int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
 
 int protocol_network_e2e_tcp_send(protocol_network_e2e_fixture_t *fixture, const void *data,
                                   size_t size) {
+  mem_buffer_t *payload;
+  int rc;
   if (!fixture || !fixture->client_initialized || !data || size == 0u) return SALTS_EINVAL;
-  return cnet_send(&fixture->client, fixture->connection, data, size);
+
+  payload = mem_get_buffer(mem_global(), size);
+  if (!payload) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(payload), data, size);
+  mem_set_used(payload, size);
+  rc = cnet_send_buffer(&fixture->client, fixture->connection, payload);
+  mem_buffer_release(payload);
+  return rc;
 }
 
 int protocol_network_e2e_tcp_close(protocol_network_e2e_fixture_t *fixture, uint32_t timeout_ms) {
