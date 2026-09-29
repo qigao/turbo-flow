@@ -1140,6 +1140,108 @@ typedef struct turbo_flow_claim_settler_s {
 #define TURBO_FLOW_CLAIM_SETTLER_INIT                                                              \
   {sizeof(turbo_flow_claim_settler_t), NULL, NULL, NULL, NULL, 0u, NULL, NULL}
 
+
+#define TURBO_FLOW_TRANSPORT_REPLY_API_VERSION 1u
+#define TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES 32u
+
+/**
+ * Opaque generation-fenced transport identity captured from one ingress message.
+ *
+ * The core and protocol layers never interpret token bytes. The Source provider
+ * that captured the token is the only code allowed to decode it.
+ */
+typedef struct turbo_flow_transport_reply_session_s {
+  size_t size;
+  uint32_t version;
+  size_t token_size;
+  uint8_t token[TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES];
+} turbo_flow_transport_reply_session_t;
+
+#define TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT                                                    \
+  {sizeof(turbo_flow_transport_reply_session_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION, 0u, {0}}
+
+typedef struct turbo_flow_transport_reply_request_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_transport_reply_session_t session;
+  const void *data;
+  size_t data_size;
+  uint64_t tag;
+} turbo_flow_transport_reply_request_t;
+
+#define TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT                                                    \
+  {sizeof(turbo_flow_transport_reply_request_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION,            \
+   TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, NULL, 0u, 0u}
+
+typedef enum turbo_flow_transport_reply_terminal_kind_e {
+  TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_NONE = 0,
+  TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT,
+  TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_PEER_CLOSED,
+  TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_FAILED,
+  TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_STOPPED
+} turbo_flow_transport_reply_terminal_kind_t;
+
+typedef struct turbo_flow_transport_reply_terminal_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_transport_reply_session_t session;
+  turbo_flow_transport_reply_terminal_kind_t kind;
+  size_t data_size;
+  int status;
+  uint64_t tag;
+} turbo_flow_transport_reply_terminal_t;
+
+#define TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT                                                   \
+  {sizeof(turbo_flow_transport_reply_terminal_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION,           \
+   TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_NONE, 0u,           \
+   SALTS_OK, 0u}
+
+typedef int (*turbo_flow_transport_reply_capture_fn)(
+    void *ctx, const turbo_flow_msg_t *message, turbo_flow_transport_reply_session_t *session);
+typedef int (*turbo_flow_transport_reply_send_fn)(
+    void *ctx, const turbo_flow_transport_reply_request_t *request);
+typedef int (*turbo_flow_transport_reply_take_terminal_fn)(
+    void *ctx, turbo_flow_transport_reply_terminal_t *terminal);
+
+/**
+ * Optional Source-owned generation-fenced reply capability.
+ *
+ * A successful send is admission only. Exactly one later terminal must be
+ * observable for every successfully admitted request. Failed admission retains
+ * no request and creates no terminal.
+ */
+typedef struct turbo_flow_transport_reply_provider_ops_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_transport_reply_capture_fn capture;
+  turbo_flow_transport_reply_send_fn send;
+  turbo_flow_transport_reply_take_terminal_fn take_terminal;
+} turbo_flow_transport_reply_provider_ops_t;
+
+#define TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT                                               \
+  {sizeof(turbo_flow_transport_reply_provider_ops_t), TURBO_FLOW_TRANSPORT_REPLY_API_VERSION,       \
+   NULL, NULL, NULL}
+
+/** Attach one reply capability to an already registered Source adapter before compile. */
+TURBO_FLOW_C_API int turbo_flow_register_adapter_transport_reply(
+    turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx);
+
+/** Capture the exact transport generation carried by one Source-owned ingress message. */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_capture(
+    const turbo_flow_t *flow, const char *adapter_name, const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session);
+
+/** Admit one encoded reply to the exact captured transport generation. */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_send(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_request_t *request);
+
+/** Consume one authoritative terminal; returns SALTS_ENOENT when none is ready. */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_take_terminal(
+    const turbo_flow_t *flow, const char *adapter_name,
+    turbo_flow_transport_reply_terminal_t *terminal);
+
 typedef struct turbo_flow_adapter_ops_s {
   /**
    * Start one source/sink adapter binding.
