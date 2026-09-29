@@ -12,6 +12,61 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct reflected_managed_value_s {
+  int *value;
+} reflected_managed_value_t;
+
+static bool reflected_managed_copy(void *destination, const void *source) {
+  reflected_managed_value_t *dst = (reflected_managed_value_t *)destination;
+  const reflected_managed_value_t *src = (const reflected_managed_value_t *)source;
+  if (!dst || !src) return false;
+  dst->value = NULL;
+  if (!src->value) return true;
+  dst->value = (int *)malloc(sizeof(*dst->value));
+  if (!dst->value) return false;
+  *dst->value = *src->value;
+  return true;
+}
+
+static void reflected_managed_move(void *destination, void *source) {
+  reflected_managed_value_t *dst = (reflected_managed_value_t *)destination;
+  reflected_managed_value_t *src = (reflected_managed_value_t *)source;
+  if (!dst || !src) return;
+  dst->value = src->value;
+  src->value = NULL;
+}
+
+static void reflected_managed_destroy(void *value) {
+  reflected_managed_value_t *managed = (reflected_managed_value_t *)value;
+  if (!managed) return;
+  free(managed->value);
+  managed->value = NULL;
+}
+
+static const cmeta_type_traits reflected_managed_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = reflected_managed_copy,
+    .move_construct = reflected_managed_move,
+    .destroy = reflected_managed_destroy};
+
+static const cmeta_type_desc reflected_managed_type = {
+    "reflected_managed_value",
+    sizeof(reflected_managed_value_t),
+    _Alignof(reflected_managed_value_t),
+    CMETA_T_OBJECT,
+    NULL,
+    &reflected_managed_traits,
+    NULL};
+
+static const cmeta_type_desc reflected_unknown_lifecycle_type = {
+    "reflected_unknown_lifecycle",
+    sizeof(reflected_managed_value_t),
+    _Alignof(reflected_managed_value_t),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    NULL};
+
 FunctionDecl(value, int, reflected_increment,
     (int, input, CMETA_PARAM_IN));
 int reflected_increment(int input) { return input + 1; }
@@ -321,7 +376,48 @@ compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
       &flow->compiled_plan.stage_semantics, (size_t)stage_index);
 }
 
+
 suite("TurboFlow reflected operation semantics") {
+  it("classifies CMeta slot lifecycle without granting unsafe reuse") {
+    flow_cflow_value_slot_plan_t slot = {0};
+
+    check_equal(flow_cflow_value_slot_plan_classify(
+                    &cmeta_type_int, &cmeta_type_int, &slot),
+                SALTS_OK);
+    check_equal(slot.mode, FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT);
+    check_equal(slot.transfer, FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY);
+    check_equal(slot.extent, sizeof(int));
+    check_equal(slot.alignment, cmeta_type_int.align);
+    check_bits(slot.available_traits,
+               CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY);
+    check_equal(slot.required_traits,
+                (cmeta_trait_flags)(CMETA_TRAIT_TRIVIAL_COPY |
+                                    CMETA_TRAIT_TRIVIAL_DESTROY));
+    check_equal(slot.source_destroy_after_transfer, 0);
+
+    memset(&slot, 0, sizeof(slot));
+    check_equal(flow_cflow_value_slot_plan_classify(
+                    &reflected_managed_type, &reflected_managed_type, &slot),
+                SALTS_OK);
+    check_equal(slot.mode, FLOW_CFLOW_VALUE_SLOT_NONE);
+    check_equal(slot.transfer, FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT);
+    check_bits(slot.available_traits,
+               CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY);
+    check_equal(slot.required_traits,
+                (cmeta_trait_flags)(CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY));
+    check_equal(slot.source_destroy_after_transfer, 1);
+
+    memset(&slot, 0, sizeof(slot));
+    check_equal(flow_cflow_value_slot_plan_classify(
+                    &reflected_unknown_lifecycle_type,
+                    &reflected_unknown_lifecycle_type, &slot),
+                SALTS_OK);
+    check_equal(slot.mode, FLOW_CFLOW_VALUE_SLOT_NONE);
+    check_equal(slot.transfer, FLOW_CFLOW_VALUE_TRANSFER_NONE);
+    check_equal(slot.required_traits, (cmeta_trait_flags)0u);
+    check_equal(slot.source_destroy_after_transfer, 0);
+  }
+
   it("uses FunctionDesc as the unary CFlow MAP semantic source") {
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
@@ -521,6 +617,8 @@ suite("TurboFlow reflected operation semantics") {
     check_true(cmeta_data_desc_equal(region->input_data, &cmeta_data_int));
     check_true(cmeta_data_desc_equal(region->output_data, &cmeta_data_int));
     check_equal(region->value_slot.mode, FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT);
+    check_equal(region->value_slot.transfer, FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY);
+    check_equal(region->value_slot.source_destroy_after_transfer, 0);
     check_equal(region->value_slot.extent, sizeof(int));
     check_equal(region->value_slot.alignment, cmeta_type_int.align);
     check_equal(
