@@ -22,6 +22,7 @@ struct turbo_flow_cnet_packet_source_s {
   cnet_packet_endpoint endpoint;
   cflow_scheduler scheduler;
   queue_t messages;
+  queue_t reply_terminals;
   turbo_flow_run_t *run;
   cflow_waker value_waker;
   cflow_waker terminal_waker;
@@ -29,6 +30,8 @@ struct turbo_flow_cnet_packet_source_s {
   cnet_packet_protocol protocol;
   cnet_packet_session last_error_session;
   size_t queue_capacity;
+  size_t reply_terminal_capacity;
+  size_t reply_send_pending;
   size_t max_message_bytes;
   size_t scheduler_max_steps_per_poll;
   uint16_t bound_port;
@@ -41,6 +44,7 @@ struct turbo_flow_cnet_packet_source_s {
   bool endpoint_initialized;
   bool scheduler_initialized;
   bool queue_initialized;
+  bool reply_terminal_queue_initialized;
   bool publisher_destroyed;
   bool managed_run;
   bool publisher_cancelled;
@@ -311,6 +315,29 @@ static void packet_source_on_receive(void *user, cnet_packet_endpoint *endpoint,
   packet_source_wake(&source->value_waker);
 }
 
+static void packet_source_on_send_terminal(void *user, cnet_packet_endpoint *endpoint,
+                                           cnet_packet_session session, size_t size, int status,
+                                           uint64_t tag) {
+  turbo_flow_cnet_packet_source_t *source = (turbo_flow_cnet_packet_source_t *)user;
+  turbo_flow_cnet_packet_reply_terminal_t terminal =
+      TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT;
+  (void)endpoint;
+  if (!source) return;
+  if (source->reply_send_pending == 0u) {
+    packet_source_fail(source, SALTS_EPROTO, session, "reply_terminal");
+    return;
+  }
+  --source->reply_send_pending;
+  terminal.session = session;
+  terminal.data_size = size;
+  terminal.status = status;
+  terminal.tag = tag;
+  if (!source->reply_terminal_queue_initialized ||
+      packet_source_stl_status(queue_push(&source->reply_terminals, &terminal)) != SALTS_OK) {
+    packet_source_fail(source, SALTS_EPROTO, session, "reply_terminal_queue");
+  }
+}
+
 static void packet_source_on_error(void *user, cnet_packet_endpoint *endpoint,
                                    cnet_packet_session session, int status) {
   turbo_flow_cnet_packet_source_t *source = (turbo_flow_cnet_packet_source_t *)user;
@@ -386,6 +413,7 @@ static void packet_source_open_cleanup(turbo_flow_cnet_packet_source_t *source,
   if (source->scheduler_initialized) cflow_scheduler_destroy(&source->scheduler);
   packet_source_clear_queue(source);
   if (source->queue_initialized) queue_destroy(&source->messages);
+  if (source->reply_terminal_queue_initialized) queue_destroy(&source->reply_terminals);
   tstr_free(source->source_name);
   free(source);
 }
@@ -396,6 +424,7 @@ static int packet_source_open_impl(const turbo_flow_cnet_packet_source_config_t 
   turbo_flow_cnet_packet_source_t *source;
   turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
   cnet_packet_endpoint_config endpoint_config;
+  cnet_packet_terminal_config terminal_config = CNET_PACKET_TERMINAL_CONFIG_INIT;
   cflow_publisher publisher = {0};
   int status;
   if (!source_out) return SALTS_EINVAL;
@@ -409,6 +438,7 @@ static int packet_source_open_impl(const turbo_flow_cnet_packet_source_config_t 
   source->source_name = tstr_dup(config->source_name);
   source->protocol = config->endpoint->protocol;
   source->queue_capacity = config->queue_capacity;
+  source->reply_terminal_capacity = config->queue_capacity;
   source->max_message_bytes = config->max_message_bytes;
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
@@ -434,6 +464,21 @@ static int packet_source_open_impl(const turbo_flow_cnet_packet_source_config_t 
     packet_source_open_cleanup(source, &publisher);
     return status;
   }
+  status = packet_source_stl_status(
+      queue_init_bytes(&source->reply_terminals, sizeof(turbo_flow_cnet_packet_reply_terminal_t),
+                       _Alignof(turbo_flow_cnet_packet_reply_terminal_t),
+                       source->reply_terminal_capacity));
+  if (status != SALTS_OK) {
+    packet_source_open_cleanup(source, &publisher);
+    return status;
+  }
+  source->reply_terminal_queue_initialized = true;
+  status = packet_source_stl_status(
+      queue_reserve(&source->reply_terminals, source->reply_terminal_capacity));
+  if (status != SALTS_OK) {
+    packet_source_open_cleanup(source, &publisher);
+    return status;
+  }
   if (!cflow_scheduler_manual_init_with_capacity(&source->scheduler, config->scheduler_capacity)) {
     packet_source_open_cleanup(source, &publisher);
     return SALTS_ENOMEM;
@@ -445,7 +490,10 @@ static int packet_source_open_impl(const turbo_flow_cnet_packet_source_config_t 
                                                     .on_receive = packet_source_on_receive,
                                                     .on_error = packet_source_on_error,
                                                     .user = source};
-  status = cnet_packet_endpoint_init(&source->endpoint, &endpoint_config);
+  terminal_config.send_capacity = source->reply_terminal_capacity;
+  terminal_config.on_send = packet_source_on_send_terminal;
+  terminal_config.user = source;
+  status = cnet_packet_endpoint_init_ex(&source->endpoint, &endpoint_config, &terminal_config);
   if (status != SALTS_OK) {
     packet_source_open_cleanup(source, &publisher);
     return status;
@@ -597,6 +645,36 @@ int turbo_flow_cnet_packet_source_send(turbo_flow_cnet_packet_source_t *source,
   return cnet_packet_send(&source->endpoint, session, data, size);
 }
 
+int turbo_flow_cnet_packet_source_reply_send(
+    turbo_flow_cnet_packet_source_t *source, cnet_packet_session session,
+    const void *data, size_t size, uint64_t tag) {
+  size_t retained;
+  int status = packet_source_live_status(source);
+  if (status != SALTS_OK) return status;
+  if (!data || size == 0u || tag == 0u) return SALTS_EINVAL;
+  retained = source->reply_send_pending +
+             (source->reply_terminal_queue_initialized ? queue_size(&source->reply_terminals) : 0u);
+  if (retained >= source->reply_terminal_capacity) return SALTS_ENOBUFS;
+  status = cnet_packet_send_tagged(&source->endpoint, session, data, size, tag);
+  if (status == SALTS_OK) ++source->reply_send_pending;
+  return status;
+}
+
+int turbo_flow_cnet_packet_source_reply_take_terminal(
+    turbo_flow_cnet_packet_source_t *source,
+    turbo_flow_cnet_packet_reply_terminal_t *terminal) {
+  turbo_flow_cnet_packet_reply_terminal_t current =
+      TURBO_FLOW_CNET_PACKET_REPLY_TERMINAL_INIT;
+  if (!source || !terminal || terminal->size < sizeof(*terminal) ||
+      terminal->version != TURBO_FLOW_CNET_PACKET_REPLY_API_VERSION)
+    return SALTS_EINVAL;
+  if (!source->reply_terminal_queue_initialized || queue_empty(&source->reply_terminals))
+    return SALTS_ENOENT;
+  if (queue_pop(&source->reply_terminals, &current) != STL_OK) return SALTS_EPROTO;
+  *terminal = current;
+  return SALTS_OK;
+}
+
 const turbo_flow_cnet_packet_message_context_t *
 turbo_flow_cnet_packet_message_context(const turbo_flow_msg_t *message) {
   const turbo_flow_cnet_packet_message_context_t *context;
@@ -655,8 +733,12 @@ int turbo_flow_cnet_packet_source_stop(turbo_flow_cnet_packet_source_t *source,
 int turbo_flow_cnet_packet_source_destroy(turbo_flow_cnet_packet_source_t *source) {
   if (!source) return SALTS_EINVAL;
   if (source->state != TURBO_FLOW_CNET_PACKET_SOURCE_STOPPED) return SALTS_EBUSY;
+  if (source->reply_send_pending != 0u ||
+      (source->reply_terminal_queue_initialized && !queue_empty(&source->reply_terminals)))
+    return SALTS_EBUSY;
   packet_source_clear_queue(source);
   if (source->queue_initialized) queue_destroy(&source->messages);
+  if (source->reply_terminal_queue_initialized) queue_destroy(&source->reply_terminals);
   tstr_free(source->source_name);
   free(source);
   return SALTS_OK;
