@@ -10,6 +10,7 @@ on:
       - 'turbo_flow/CMakeLists.txt'
       - 'turbo_flow/benchmarks/**'
       - 'turbo_flow/src/flow_cflow_region.c'
+      - 'turbo_flow/src/flow_runtime.c'
       - 'turbo_flow/src/flow_compile.c'
       - 'turbo_flow/src/flow_domain.c'
       - 'turbo_flow/src/flow_plan_semantics.c'
@@ -150,13 +151,15 @@ jobs:
           cmake -E env \
             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
             "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
-          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region) ' \
+          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch) ' \
             "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
             | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 2
+          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 3
           grep -F 'stage_plan=typed-identity-2-stage-native ' \
             "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
           grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
             "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
           {
             echo '### CFlow region benchmark'
