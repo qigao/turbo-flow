@@ -3644,7 +3644,7 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_set_transport_slices(&msg, &forged, 1u), SALTS_EINVAL);
       check_equal(turbo_flow_msg_transport_slices(&msg, &actual), (size_t)1u);
       check_equal(turbo_flow_msg_transport_bytes(&msg), (size_t)3u);
-      check_equal(actual[0].data, "234");
+      check_equal(memcmp(actual[0].data, "234", 3u), 0);
 
       mem_slice_release(&valid);
       turbo_flow_msg_cleanup(&msg);
