@@ -606,6 +606,7 @@ int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
 int protocol_network_e2e_tcp_send(protocol_network_e2e_fixture_t *fixture, const void *data,
                                   size_t size) {
   mem_buffer_t *payload;
+  mem_slice_t segment = {0};
   int rc;
   if (!fixture || !fixture->client_initialized || !data || size == 0u) return SALTS_EINVAL;
 
@@ -613,7 +614,14 @@ int protocol_network_e2e_tcp_send(protocol_network_e2e_fixture_t *fixture, const
   if (!payload) return SALTS_ENOMEM;
   memcpy(mem_buffer_data(payload), data, size);
   mem_set_used(payload, size);
-  rc = cnet_send_buffer(&fixture->client, fixture->connection, payload);
+  segment = mem_slice(payload, 0u, size);
+  if (!segment.buffer || segment.length != size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  rc = cnet_send_slicev(&fixture->client, fixture->connection, &segment, 1u);
+  mem_slice_release(&segment);
   mem_buffer_release(payload);
   return rc;
 }
