@@ -30,6 +30,12 @@ typedef struct intake_pending_claim_s {
   size_t retained_bytes;
 } intake_pending_claim_t;
 
+typedef struct intake_pending_reply_s {
+  turbo_flow_transport_reply_session_t session;
+  size_t data_size;
+  uint64_t tag;
+} intake_pending_reply_t;
+
 struct flow_protocol_network_intake_sink_s {
   turbo_flow_t *flow;
   turbo_flow_protocol_t *protocol;
@@ -47,15 +53,27 @@ struct flow_protocol_network_intake_sink_s {
   size_t mapped_capacity;
   intake_parser_slot_t *parser_slots;
   intake_pending_claim_t *pending;
+  intake_pending_reply_t *replies;
+  uint8_t *reply_bytes;
   size_t pending_head;
   size_t pending_count;
   size_t pending_bytes;
+  size_t reply_head;
+  size_t reply_count;
+  size_t pending_replies;
+  uint64_t next_reply_tag;
   uint64_t blocked_session_id;
   uint64_t blocked_generation;
   uint64_t frames_admitted;
+  uint64_t replies_admitted;
+  uint64_t reply_terminals;
+  uint64_t reply_failures;
   uint64_t accepted;
   uint64_t completed;
   uint64_t rejected;
+  turbo_flow_transport_reply_session_t active_reply_session;
+  int active_reply_session_valid;
+  int reply_backpressured;
   int blocked;
   int terminal_status;
   int registered;
@@ -184,11 +202,133 @@ static int intake_map_business(
   return SALTS_OK;
 }
 
+static size_t intake_reply_index(const flow_protocol_network_intake_sink_t *sink,
+                                size_t offset) {
+  return (sink->reply_head + offset) % sink->settings.max_pending_claims;
+}
+
+static uint8_t *intake_reply_storage(flow_protocol_network_intake_sink_t *sink, size_t index) {
+  if (!sink || !sink->reply_bytes ||
+      index >= sink->settings.max_pending_claims ||
+      sink->settings.reply_max_encoded_bytes == 0u)
+    return NULL;
+  return sink->reply_bytes + index * sink->settings.reply_max_encoded_bytes;
+}
+
+static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
+                                const turbo_flow_protocol_message_output_t *message,
+                                intake_pending_reply_t **reply_out,
+                                turbo_flow_protocol_frame_output_t *output) {
+  turbo_flow_protocol_frame_view_t frame = TURBO_FLOW_PROTOCOL_FRAME_VIEW_INIT;
+  intake_pending_reply_t *reply;
+  size_t index;
+  int rc;
+  if (reply_out) *reply_out = NULL;
+  if (!sink || !message || !reply_out || !output) return SALTS_EINVAL;
+  if (sink->settings.reply_point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) return SALTS_OK;
+  if (!sink->active_reply_session_valid || !message->payload ||
+      message->payload_size == 0u)
+    return SALTS_EPROTO;
+  if (sink->reply_count >= sink->settings.max_pending_claims) return SALTS_ENOBUFS;
+  index = intake_reply_index(sink, sink->reply_count);
+  reply = &sink->replies[index];
+  *reply = (intake_pending_reply_t){
+      .session = TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT, .data_size = 0u, .tag = 0u};
+  reply->session = sink->active_reply_session;
+
+  *output = (turbo_flow_protocol_frame_output_t)TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
+  output->data = intake_reply_storage(sink, index);
+  output->capacity = sink->settings.reply_max_encoded_bytes;
+  if (!output->data || output->capacity == 0u) return SALTS_EPROTO;
+
+  frame.data = message->payload;
+  frame.data_size = message->payload_size;
+  frame.device_id = message->metadata.device_id[0] ? message->metadata.device_id : NULL;
+  frame.protocol_version =
+      message->metadata.protocol_version[0] ? message->metadata.protocol_version
+                                            : sink->settings.protocol_version;
+  rc = turbo_flow_protocol_reply(sink->protocol, &frame, SALTS_OK, output);
+  if (rc != SALTS_OK) return rc;
+  if (output->data_size > output->capacity) return SALTS_EPROTO;
+  if (output->data_size == 0u) return SALTS_OK;
+  if (sink->next_reply_tag == 0u) sink->next_reply_tag = 1u;
+  reply->data_size = output->data_size;
+  reply->tag = sink->next_reply_tag;
+  *reply_out = reply;
+  return SALTS_OK;
+}
+
+static void intake_reply_commit(flow_protocol_network_intake_sink_t *sink,
+                                intake_pending_reply_t *reply) {
+  if (!sink || !reply || reply->data_size == 0u || reply->tag == 0u) return;
+  ++sink->reply_count;
+  ++sink->next_reply_tag;
+  if (sink->next_reply_tag == 0u) sink->next_reply_tag = 1u;
+}
+
+static int intake_reply_drain_terminals(flow_protocol_network_intake_sink_t *sink) {
+  if (!sink) return SALTS_EINVAL;
+  if (sink->settings.reply_point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) return SALTS_OK;
+  for (;;) {
+    turbo_flow_transport_reply_terminal_t terminal =
+        TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    int rc = turbo_flow_transport_reply_take_terminal(
+        sink->flow, sink->settings.source_adapter_name, &terminal);
+    if (rc == SALTS_ENOENT) return SALTS_OK;
+    if (rc != SALTS_OK) return rc;
+    if (sink->pending_replies == 0u) return SALTS_EPROTO;
+    --sink->pending_replies;
+    intake_counter_add(&sink->reply_terminals, 1u);
+    if (terminal.kind != TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT ||
+        terminal.status != SALTS_OK)
+      intake_counter_add(&sink->reply_failures, 1u);
+  }
+}
+
+static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
+  int rc;
+  if (!sink) return SALTS_EINVAL;
+  sink->reply_backpressured = 0;
+  rc = intake_reply_drain_terminals(sink);
+  if (rc != SALTS_OK) return rc;
+  while (sink->reply_count > 0u) {
+    const size_t index = sink->reply_head;
+    intake_pending_reply_t *reply = &sink->replies[index];
+    turbo_flow_transport_reply_request_t request = TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
+    request.session = reply->session;
+    request.data = intake_reply_storage(sink, index);
+    request.data_size = reply->data_size;
+    request.tag = reply->tag;
+    if (!request.data || request.data_size == 0u || request.tag == 0u) return SALTS_EPROTO;
+    rc = turbo_flow_transport_reply_send(
+        sink->flow, sink->settings.source_adapter_name, &request);
+    if (rc == SALTS_EBUSY || rc == SALTS_ENOBUFS || rc == SALTS_ENOSPC) {
+      sink->reply_backpressured = 1;
+      return SALTS_OK;
+    }
+    if (rc != SALTS_OK) {
+      intake_counter_add(&sink->reply_failures, 1u);
+      *reply = (intake_pending_reply_t){0};
+      sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
+      --sink->reply_count;
+      continue;
+    }
+    intake_counter_add(&sink->replies_admitted, 1u);
+    ++sink->pending_replies;
+    *reply = (intake_pending_reply_t){0};
+    sink->reply_head = (sink->reply_head + 1u) % sink->settings.max_pending_claims;
+    --sink->reply_count;
+  }
+  return SALTS_OK;
+}
+
 static int intake_decoded_admit(void *ctx,
                                 const turbo_flow_protocol_source_admit_request_t *request) {
   flow_protocol_network_intake_sink_t *sink = (flow_protocol_network_intake_sink_t *)ctx;
   turbo_flow_durable_identity_t identity = TURBO_FLOW_DURABLE_IDENTITY_INIT;
   turbo_flow_content_descriptor_t content = TURBO_FLOW_CONTENT_DESCRIPTOR_INIT;
+  turbo_flow_protocol_frame_output_t reply_output = TURBO_FLOW_PROTOCOL_FRAME_OUTPUT_INIT;
+  intake_pending_reply_t *prepared_reply = NULL;
   turbo_flow_msg_t message;
   mem_buffer_t *buffer = NULL;
   const uint8_t *payload_data = NULL;
@@ -220,6 +360,9 @@ static int intake_decoded_admit(void *ctx,
     payload_data = sink->envelope_scratch;
   }
 
+  rc = intake_reply_prepare(sink, request->message, &prepared_reply, &reply_output);
+  if (rc != SALTS_OK) return rc;
+
   buffer = mem_wrap_external((void *)payload_data, encoded_size, NULL, NULL);
   if (!buffer) return SALTS_ENOMEM;
   turbo_flow_msg_init(&message);
@@ -233,6 +376,7 @@ static int intake_decoded_admit(void *ctx,
   if (rc == SALTS_OK)
     rc = turbo_flow_publish(sink->downstream_flow, sink->decoded_source_name, &message);
   turbo_flow_msg_cleanup(&message);
+  if (rc == SALTS_OK && prepared_reply) intake_reply_commit(sink, prepared_reply);
   return rc;
 }
 
@@ -402,21 +546,36 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
   int rc;
   int complete_rc;
   if (!entry) return SALTS_OK;
-  if (sink->blocked) {
-    rc = turbo_flow_protocol_source_session_feed(sink->protocol_source, sink->blocked_session_id,
-                                                 sink->blocked_generation, NULL, 0u, &result);
+  message = turbo_flow_async_terminal_claim_message(&entry->claim);
+  if (!message || (!message->payload.data && message->payload.len != 0u) ||
+      message->payload.len == 0u) {
+    rc = SALTS_EPROTO;
   } else {
-    message = turbo_flow_async_terminal_claim_message(&entry->claim);
-    if (!message || (!message->payload.data && message->payload.len != 0u) ||
-        message->payload.len == 0u)
-      rc = SALTS_EPROTO;
-    else {
-      rc = intake_session_prepare(sink, message, &session_id, &generation);
-      if (rc == SALTS_OK)
-        rc = turbo_flow_protocol_source_session_feed(
-            sink->protocol_source, session_id, generation,
-            (const uint8_t *)message->payload.data, message->payload.len, &result);
+    if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+      sink->active_reply_session =
+          (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+      rc = turbo_flow_transport_reply_capture(
+          sink->flow, sink->settings.source_adapter_name, message, &sink->active_reply_session);
+      if (rc == SALTS_OK) sink->active_reply_session_valid = 1;
+    } else {
+      rc = SALTS_OK;
     }
+    if (rc == SALTS_OK) {
+      if (sink->blocked) {
+        rc = turbo_flow_protocol_source_session_feed(
+            sink->protocol_source, sink->blocked_session_id,
+            sink->blocked_generation, NULL, 0u, &result);
+      } else {
+        rc = intake_session_prepare(sink, message, &session_id, &generation);
+        if (rc == SALTS_OK)
+          rc = turbo_flow_protocol_source_session_feed(
+              sink->protocol_source, session_id, generation,
+              (const uint8_t *)message->payload.data, message->payload.len, &result);
+      }
+    }
+    sink->active_reply_session_valid = 0;
+    sink->active_reply_session =
+        (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
   }
   intake_counter_add(&sink->frames_admitted, result.frames_admitted);
   if (rc != SALTS_OK) {
@@ -454,6 +613,9 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
 static int intake_drive(flow_protocol_network_intake_sink_t *sink) {
   int rc;
   if (!sink) return SALTS_EINVAL;
+  rc = intake_reply_drive(sink);
+  if (rc != SALTS_OK) return rc;
+  if (sink->reply_backpressured) return SALTS_OK;
   while (sink->pending_count > 0u) {
     const size_t before = sink->pending_count;
     rc = intake_process_front(sink);
@@ -651,8 +813,13 @@ int flow_protocol_network_intake_sink_create(
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
       config->settings->max_pending_claims > SIZE_MAX / sizeof(intake_pending_claim_t) ||
+      config->settings->max_pending_claims > SIZE_MAX / sizeof(intake_pending_reply_t) ||
       config->settings->max_sessions > SIZE_MAX / sizeof(intake_parser_slot_t) ||
-      config->settings->max_frame_size > SIZE_MAX - TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD)
+      config->settings->max_frame_size > SIZE_MAX - TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD ||
+      (config->settings->reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE &&
+       (config->settings->reply_max_encoded_bytes == 0u ||
+        config->settings->reply_max_encoded_bytes >
+            SIZE_MAX / config->settings->max_pending_claims)))
     return SALTS_ERANGE;
   source_buffer_bytes = (config->settings->max_sessions + 1u) * config->settings->max_frame_size;
   if (config->mapper_contract &&
@@ -677,6 +844,9 @@ int flow_protocol_network_intake_sink_create(
                                        TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
   sink->mapped_capacity =
       sink->mapper_bound ? sink->mapper_contract.max_output_bytes : 0u;
+  sink->next_reply_tag = 1u;
+  sink->active_reply_session =
+      (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
   sink->adapter_name = tstr_dup(config->adapter_name);
   sink->decoded_source_name = tstr_dup(config->decoded_source_name);
   sink->envelope_scratch =
@@ -687,17 +857,27 @@ int flow_protocol_network_intake_sink_create(
       (intake_parser_slot_t *)calloc(sink->settings.max_sessions, sizeof(*sink->parser_slots));
   sink->pending =
       (intake_pending_claim_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->pending));
+  if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    sink->replies =
+        (intake_pending_reply_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->replies));
+    sink->reply_bytes = (uint8_t *)calloc(
+        sink->settings.max_pending_claims, sink->settings.reply_max_encoded_bytes);
+  }
   sink->terminal_status = SALTS_OK;
   if (!sink->adapter_name || !sink->decoded_source_name ||
       (!sink->mapper_bound && !sink->envelope_scratch) ||
       (sink->mapper_bound && !sink->mapped_scratch) ||
-      !sink->parser_slots || !sink->pending) {
+      !sink->parser_slots || !sink->pending ||
+      (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE &&
+       (!sink->replies || !sink->reply_bytes))) {
     tstr_free(sink->adapter_name);
     tstr_free(sink->decoded_source_name);
     free(sink->envelope_scratch);
     free(sink->mapped_scratch);
     free(sink->parser_slots);
     free(sink->pending);
+    free(sink->replies);
+    free(sink->reply_bytes);
     free(sink);
     return SALTS_ENOMEM;
   }
@@ -722,6 +902,8 @@ fail:
   free(sink->mapped_scratch);
   free(sink->parser_slots);
   free(sink->pending);
+  free(sink->replies);
+  free(sink->reply_bytes);
   free(sink);
   return rc;
 }
@@ -757,8 +939,12 @@ int flow_protocol_network_intake_sink_register(flow_protocol_network_intake_sink
 }
 
 int flow_protocol_network_intake_sink_retry(flow_protocol_network_intake_sink_t *sink) {
+  int rc;
   if (!sink) return SALTS_EINVAL;
+  rc = intake_reply_drive(sink);
+  if (rc != SALTS_OK) return rc;
   if (sink->terminal_status != SALTS_OK) return sink->terminal_status;
+  if (sink->reply_backpressured) return SALTS_OK;
   return intake_drive(sink);
 }
 
@@ -793,7 +979,11 @@ void flow_protocol_network_intake_sink_metrics(
   metrics->pending_claims = sink->pending_count;
   metrics->pending_bytes = sink->pending_bytes;
   metrics->frames_admitted = sink->frames_admitted;
-  metrics->backpressured = sink->blocked;
+  metrics->replies_admitted = sink->replies_admitted;
+  metrics->reply_terminals = sink->reply_terminals;
+  metrics->reply_failures = sink->reply_failures;
+  metrics->pending_replies = sink->pending_replies + sink->reply_count;
+  metrics->backpressured = sink->blocked || sink->reply_backpressured;
   metrics->terminal_status = sink->terminal_status;
 }
 
@@ -817,5 +1007,7 @@ void flow_protocol_network_intake_sink_destroy(flow_protocol_network_intake_sink
   free(sink->mapped_scratch);
   free(sink->parser_slots);
   free(sink->pending);
+  free(sink->replies);
+  free(sink->reply_bytes);
   free(sink);
 }
