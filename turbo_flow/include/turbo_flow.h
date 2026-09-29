@@ -2639,6 +2639,33 @@ TURBO_FLOW_C_API int turbo_flow_msg_retain_view(turbo_flow_msg_t *dst, const tur
 TURBO_FLOW_C_API int turbo_flow_msg_clone(turbo_flow_msg_t *dst, const turbo_flow_msg_t *src);
 TURBO_FLOW_C_API int turbo_flow_msg_move(turbo_flow_msg_t *dst, turbo_flow_msg_t *src);
 
+#define TURBO_FLOW_TRANSPORT_VECTOR_MAX_SEGMENTS 32u
+
+/**
+ * Attach an immutable final-wire scatter/gather vector to a message.
+ *
+ * Each canonical non-empty slice is retained independently by the message.
+ * The vector is transport metadata: graph stages continue to observe payload
+ * as the logical application value. A stage that changes the intended wire
+ * representation must clear or replace this vector before a terminal transport
+ * sink consumes it. Clone/retain preserve the vector; move transfers it.
+ */
+TURBO_FLOW_C_API int turbo_flow_msg_set_transport_slices(
+    turbo_flow_msg_t *msg, const mem_slice_t *segments, size_t segment_count);
+
+/**
+ * Borrow the message-owned final-wire vector. Returns its segment count.
+ * segments_out receives NULL when no vector is attached.
+ */
+TURBO_FLOW_C_API size_t turbo_flow_msg_transport_slices(
+    const turbo_flow_msg_t *msg, const mem_slice_t **segments_out);
+
+/** Return total final-wire bytes carried by the attached vector, or zero. */
+TURBO_FLOW_C_API size_t turbo_flow_msg_transport_bytes(const turbo_flow_msg_t *msg);
+
+/** Release an attached final-wire vector without changing logical payload bytes. */
+TURBO_FLOW_C_API void turbo_flow_msg_clear_transport_slices(turbo_flow_msg_t *msg);
+
 /** Return whether the message has an attached schema-bound projection. */
 TURBO_FLOW_C_API turbo_flow_content_state_t turbo_flow_msg_content_state(const turbo_flow_msg_t *msg);
 

@@ -279,6 +279,13 @@ static int flow_verify_execution_backends(
 
     if (!node || !executor_index || !adapter_index || !region_index || !stage)
       return SALTS_EPROTO;
+    /*
+     * Composite template declarations remain in the parsed stage vector so
+     * source locations and type propagation stay stable, but inactive
+     * templates are intentionally not materialized or provider-bound.
+     * Only instantiated stages have a resolved runtime operation contract.
+     */
+    if (!stage->operation_resolved) continue;
     if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
                         FLOW_RUNTIME_NODE_BUFFER)) != 0u)
       continue;
@@ -325,6 +332,8 @@ static int flow_require_cflow_backend(turbo_flow_t *flow, const flow_compiled_pl
       return flow_set_error(flow, SALTS_EPROTO, 0, 0,
                             "required CFlow backend received an invalid candidate plan");
     }
+    /* Inactive composite templates are declarations, not runtime backend obligations. */
+    if (!stage->operation_resolved) continue;
     if ((node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
                         FLOW_RUNTIME_NODE_BUFFER)) != 0u) {
       continue;

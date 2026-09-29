@@ -3,6 +3,8 @@
 #include "turbo_flow_projection.h"
 #include "turbo_flow_durable_buffer.h"
 
+typedef struct flow_msg_transport_vector_s flow_msg_transport_vector_t;
+
 typedef struct flow_msg_projection_s {
   uint64_t magic;
   const turbo_flow_content_descriptor_t *descriptor;
@@ -22,6 +24,7 @@ typedef struct flow_msg_projection_s {
   turbo_flow_destroy_fn result_destroy;
   void *result_ctx;
   turbo_flow_projection_owner_t *result_owner;
+  flow_msg_transport_vector_t *transport_vector;
   int claim_active;
   int has_durable_identity;
   int has_durable_claim;
