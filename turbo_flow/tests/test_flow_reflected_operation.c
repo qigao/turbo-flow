@@ -157,9 +157,18 @@ compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
       snprintf(source, sizeof(source), "%s%s%s",
                prefix, operation_name, suffix) < 0)
     return NULL;
-  if (turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK ||
-      turbo_flow_compile(flow) != SALTS_OK)
+  if (turbo_flow_parse_string(flow, source, strlen(source)) != SALTS_OK)
     return NULL;
+  {
+    int compile_rc = turbo_flow_compile(flow);
+    if (compile_rc != SALTS_OK) {
+      const turbo_flow_error_t *error = turbo_flow_last_error(flow);
+      fprintf(stderr, "reflected compile failed: rc=%d error=%d message=%s\n",
+              compile_rc, error ? error->code : 0,
+              error ? error->message : "<none>");
+      return NULL;
+    }
+  }
   stage_index = turbo_flow_find_stage(flow, "reflected");
   if (stage_index < 0) return NULL;
   return (const flow_stage_semantic_plan_t *)vec_at_const(
@@ -245,7 +254,16 @@ suite("TurboFlow reflected operation semantics") {
         FunctionAbi(reflected_increment),
         CFLOW_REFLECTED_CALLABLE(reflected_increment)));
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    {
+      int compile_rc = turbo_flow_compile(flow);
+      if (compile_rc != SALTS_OK) {
+        const turbo_flow_error_t *error = turbo_flow_last_error(flow);
+        fprintf(stderr, "region compile failed: rc=%d error=%d message=%s\n",
+                compile_rc, error ? error->code : 0,
+                error ? error->message : "<none>");
+      }
+      check_equal(compile_rc, SALTS_OK);
+    }
 
     first_stage = turbo_flow_find_stage(flow, "first");
     second_stage = turbo_flow_find_stage(flow, "second");
