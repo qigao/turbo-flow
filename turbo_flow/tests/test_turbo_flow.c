@@ -1548,7 +1548,7 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("admits explicitly typed pure operation contracts as CFlow candidates") {
+    it("keeps legacy typed operations on the native backend without reflected callable authority") {
       static const char *src = "source input\n"
                                "stage parse operation data.parse\n"
                                "stage main {\n"
@@ -1590,9 +1590,9 @@ suite("Turbo Flow") {
       check_not_null(semantics);
       check_equal(semantics->effects, CMETA_EFFECT_MAY_FAIL);
       check_equal(semantics->barriers, FLOW_LOWERING_BARRIER_UNTYPED_CALLABLE);
-      check_equal(semantics->lowering_candidate, 1);
-      check_equal(semantics->candidate_region, 0u);
-      check_equal(flow->compiled_plan.candidate_region_count, 1u);
+      check_equal(semantics->lowering_candidate, 0);
+      check_equal(semantics->candidate_region, FLOW_PLAN_INDEX_NONE);
+      check_equal(flow->compiled_plan.candidate_region_count, 0u);
 
       turbo_flow_destroy(flow);
     }
@@ -1705,20 +1705,16 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("fails explicitly when a fully admissible CFlow plan has no execution backend") {
+    it("accepts a source-only plan when CFlow is required because no executable stage needs lowering") {
       static const char *src = "source input\n";
       turbo_flow_t *flow = turbo_flow_create();
 
       check_not_null(flow);
       check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
       flow->required_backend = FLOW_PLAN_BACKEND_CFLOW;
-      check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
-      check_false(flow->compiled_plan.sealed);
-      check_equal(vec_size(&flow->compiled_plan.nodes), 0u);
-      check_equal(turbo_flow_last_error(flow)->line, 0u);
-      check_equal(turbo_flow_last_error(flow)->column, 0u);
-      check_equal(turbo_flow_last_error(flow)->message,
-                  "required CFlow backend execution is not implemented");
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_true(flow->compiled_plan.sealed);
+      check_equal(vec_size(&flow->compiled_plan.cflow_regions), 0u);
 
       turbo_flow_destroy(flow);
     }
@@ -3588,8 +3584,8 @@ suite("Turbo Flow") {
       check_not_null(actual);
       check_equal(actual[0].length, (size_t)4u);
       check_equal(actual[1].length, (size_t)4u);
-      check_equal(actual[0].data, "head");
-      check_equal(actual[1].data, "body");
+      check_equal(memcmp(actual[0].data, "head", 4u), 0);
+      check_equal(memcmp(actual[1].data, "body", 4u), 0);
       check_equal(turbo_flow_msg_transport_bytes(&src), (size_t)8u);
       check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
       check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
