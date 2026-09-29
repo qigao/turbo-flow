@@ -141,6 +141,40 @@ jobs:
           set -euxo pipefail
           ctest --test-dir build/cflow-region-benchmark --tests-regex test_flow_reflected_operation --output-on-failure
 
+      - name: Configure CFlow ASan and UBSan contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DENABLE_SANITIZER_THREAD=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+
+      - name: Run reflected CFlow contract under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation -j2
+          ctest --test-dir build/cflow-region-sanitizers \
+            --tests-regex test_flow_reflected_operation --output-on-failure
+
       - name: Run fixed CFlow region benchmark
         shell: bash
         run: |
