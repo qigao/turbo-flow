@@ -909,6 +909,10 @@ suite("TurboFlow reflected operation semantics") {
                 SALTS_OK);
     check_equal(cflow_plan_batch_workspace_capacity(&workspace.plan), (size_t)4u);
     check_true(cflow_plan_batch_workspace_bytes(&workspace.plan) > 0u);
+    check_equal(
+        flow_cflow_region_batch_workspace_bytes(&workspace),
+        workspace.input_allocation_bytes +
+            cflow_plan_batch_workspace_bytes(&workspace.plan));
 
     for (size_t i = 0u; i < 4u; ++i) {
       turbo_flow_msg_init(&messages[i]);
@@ -927,6 +931,7 @@ suite("TurboFlow reflected operation semantics") {
     for (size_t i = 0u; i < 4u; ++i) turbo_flow_msg_cleanup(&messages[i]);
     flow_cflow_region_batch_workspace_destroy(&workspace);
     check_equal(cflow_plan_batch_workspace_capacity(&workspace.plan), (size_t)0u);
+    check_equal(flow_cflow_region_batch_workspace_bytes(&workspace), (size_t)0u);
     turbo_flow_destroy(flow);
   }
 
