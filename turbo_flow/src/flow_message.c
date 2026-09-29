@@ -742,15 +742,16 @@ static void flow_msg_cmeta_managed_destroy(void *value, void *ctx) {
   flow_msg_managed_storage_free(value);
 }
 
-int flow_msg_commit_trivial_projection_in_place(
-    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
-    const cmeta_data_desc *output_data, const void *output_value) {
+static int flow_msg_trivial_projection_commit_projection(
+    const turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, flow_msg_projection_t **projection_out) {
   flow_msg_projection_t *projection;
   const cmeta_trait_flags required =
       CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
 
+  if (projection_out) *projection_out = NULL;
   if (!message || !cmeta_data_desc_valid(expected_input) ||
-      !cmeta_data_desc_valid(output_data) || !output_value ||
+      !cmeta_data_desc_valid(output_data) ||
       !cmeta_data_desc_equal(expected_input, output_data) ||
       !output_data->storage_type ||
       cmeta_type_require_traits(output_data->storage_type, required) != CMETA_OK)
@@ -763,6 +764,26 @@ int flow_msg_commit_trivial_projection_in_place(
     return SALTS_ENOTSUP;
   if (!cmeta_data_desc_equal(projection->data, expected_input))
     return SALTS_EPROTO;
+  if (projection_out) *projection_out = projection;
+  return SALTS_OK;
+}
+
+int flow_msg_trivial_projection_commit_ready(
+    const turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data) {
+  return flow_msg_trivial_projection_commit_projection(
+      message, expected_input, output_data, NULL);
+}
+
+int flow_msg_commit_trivial_projection_in_place(
+    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, const void *output_value) {
+  flow_msg_projection_t *projection = NULL;
+  int rc;
+  if (!output_value) return SALTS_EINVAL;
+  rc = flow_msg_trivial_projection_commit_projection(
+      message, expected_input, output_data, &projection);
+  if (rc != SALTS_OK) return rc;
 
   /*
    * The direct region's compiled slot plan proves that input and output share
