@@ -7,10 +7,11 @@ parser.add_argument("--rulesforge", action="store_true")
 parser.add_argument("--rulesforge-e2e", action="store_true")
 parser.add_argument("--materializer", action="store_true")
 parser.add_argument("--protocol-intake", action="store_true")
+parser.add_argument("--benchmark", action="store_true")
 args = parser.parse_args()
 if sum((args.turbodb, args.rulesforge, args.rulesforge_e2e, args.materializer,
-        args.protocol_intake)) > 1:
-    parser.error("--turbodb, --rulesforge, --rulesforge-e2e, --materializer and --protocol-intake are mutually exclusive")
+        args.protocol_intake, args.benchmark)) > 1:
+    parser.error("--turbodb, --rulesforge, --rulesforge-e2e, --materializer, --protocol-intake and --benchmark are mutually exclusive")
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
@@ -20,7 +21,12 @@ assert "include(TurboFlowRequireCHTTP)" in text
 text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
-if args.rulesforge:
+if args.benchmark:
+    children = (
+        "add_subdirectory(ingress/protocol/common)\n"
+        "add_subdirectory(turbo_flow)\n"
+    )
+elif args.rulesforge:
     children = (
         "add_subdirectory(ingress/protocol/common)\n"
         "add_subdirectory(turbo_flow)\n"
@@ -207,6 +213,10 @@ graph = Path("turbo_flow/CMakeLists.txt")
 text = graph.read_text()
 assert "RulesForge::RulesForge" not in text
 assert "find_package(RulesForge" not in text
+
+if args.benchmark:
+    graph.write_text(text)
+    raise SystemExit(0)
 
 if args.rulesforge or args.rulesforge_e2e or args.materializer or args.protocol_intake:
     full_tests = """if(BUILD_TESTING)
