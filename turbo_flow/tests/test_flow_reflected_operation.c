@@ -4,7 +4,6 @@
 #include "turbo_flow_domain.h"
 
 #include <cflow/function_projection.h>
-#include <cflow/plan_internal.h>
 #include <cmeta/data.h>
 #include <cmeta/function.h>
 
@@ -138,20 +137,6 @@ static void reflected_managed_projection_destroy(void *value, void *ctx) {
   if (!value) return;
   reflected_managed_destroy(value);
   free(value);
-}
-
-static bool reflected_managed_map_invoke(
-    const cmeta_callable *self, void *out, const void *const *args) {
-  const reflected_managed_value_t *input;
-  reflected_managed_value_t mapped;
-  (void)self;
-  if (!out || !args || !args[0]) return false;
-  input = (const reflected_managed_value_t *)args[0];
-  if (!input->value) return false;
-  mapped = reflected_managed_make(*input->value + 1);
-  if (!mapped.value) return false;
-  *(reflected_managed_value_t *)out = mapped;
-  return true;
 }
 
 FunctionDecl(value, int, reflected_increment,
@@ -510,22 +495,7 @@ suite("TurboFlow reflected operation semantics") {
         sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
         TURBO_FLOW_DATA_ENCODING_OPAQUE, "test.reflected.managed", "Managed",
         "reflected_managed_value", 81u, 1u, NULL};
-    cflow_plan_call map_call = {
-        .invoke = reflected_managed_map_invoke,
-        .input_type = &reflected_managed_type,
-        .output_type = &reflected_managed_type};
-    cflow_plan_inst instruction = {
-        .opcode = CMETA_PLAN_MAP,
-        .step = cflow_plan_step_for_opcode(CMETA_PLAN_MAP),
-        .input_type = &reflected_managed_type,
-        .output_type = &reflected_managed_type,
-        .fn_chain = &map_call,
-        .fn_chain_count = 1u};
-    cflow_plan_impl impl = {
-        .code = &instruction,
-        .count = 1u,
-        .terminal_reduce_index = SIZE_MAX,
-        .managed_values = true};
+    cflow_graph surface = {0};
     flow_cflow_region_plan_t region = {0};
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_msg_t message;
@@ -540,9 +510,15 @@ suite("TurboFlow reflected operation semantics") {
     region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
     region.input_data = &reflected_managed_data;
     region.output_data = &reflected_managed_data;
-    region.plan.impl = &impl;
-    region.plan.input_type = &reflected_managed_type;
-    region.plan.output_type = &reflected_managed_type;
+    surface.root = CMETA_INVALID_ID;
+    cflow_graph_init(&surface, &reflected_managed_type);
+    check_null(surface.error);
+    check_true(cflow_graph_take(&surface, 1u));
+    check_true(cflow_plan_compile_surface(&region.plan, &surface, NULL));
+    cflow_graph_destroy(&surface);
+    check_not_null(region.plan.impl);
+    check_true(cmeta_type_equal(region.plan.input_type, &reflected_managed_type));
+    check_true(cmeta_type_equal(region.plan.output_type, &reflected_managed_type));
     check_equal(flow_cflow_value_slot_plan_classify(
                     &reflected_managed_type, &reflected_managed_type,
                     &region.value_slot),
@@ -575,7 +551,7 @@ suite("TurboFlow reflected operation semantics") {
     check_equal((uintptr_t)output % reflected_managed_type.align,
                 (uintptr_t)0u);
     check_not_null(output->value);
-    check_equal(*output->value, 8);
+    check_equal(*output->value, 7);
     check_equal(reflected_managed_live_resources, (size_t)1u);
     check_true(reflected_managed_moves >= (size_t)1u);
     check_true(reflected_managed_destroys >= (size_t)2u);
@@ -585,7 +561,7 @@ suite("TurboFlow reflected operation semantics") {
         turbo_flow_msg_projection(&clone, NULL);
     check_not_null(cloned);
     check_not_null(cloned->value);
-    check_equal(*cloned->value, 8);
+    check_equal(*cloned->value, 7);
     check_true(cloned->value != output->value);
     check_equal(reflected_managed_live_resources, (size_t)2u);
 
@@ -593,6 +569,7 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(reflected_managed_live_resources, (size_t)1u);
     turbo_flow_msg_cleanup(&clone);
     check_equal(reflected_managed_live_resources, (size_t)0u);
+    cflow_plan_destroy(&region.plan);
     turbo_flow_destroy(flow);
   }
 
