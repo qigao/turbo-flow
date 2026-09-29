@@ -199,6 +199,37 @@ static void reflected_test_stage_observer(
   (void)status;
 }
 
+static int register_native_int_stage(
+    turbo_flow_t *flow, const char *name, turbo_flow_stage_fn fn, void *ctx) {
+  turbo_flow_operation_descriptor_t operation =
+      reflected_operation_descriptor(name);
+  turbo_flow_operation_provider_registration_t provider =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+
+  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_type = cmeta_data_int.stable_id;
+  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.output_type = cmeta_data_int.stable_id;
+  if (turbo_flow_register_operation(flow, &operation) != SALTS_OK) return 0;
+  provider.operation_name = name;
+  provider.fn = fn;
+  provider.ctx = ctx;
+  return turbo_flow_register_operation_provider(flow, &provider) == SALTS_OK;
+}
+
+static int bind_test_int_projection(
+    turbo_flow_msg_t *message, const turbo_flow_data_schema_t *schema, int value) {
+  int *storage = (int *)malloc(sizeof(*storage));
+  int rc;
+  if (!storage) return SALTS_ENOMEM;
+  *storage = value;
+  rc = turbo_flow_msg_bind_typed_projection(
+      message, schema, &cmeta_data_int, storage,
+      reflected_test_clone_int, reflected_test_destroy_int, NULL);
+  if (rc != SALTS_OK) free(storage);
+  return rc;
+}
+
 static const flow_stage_semantic_plan_t *
 compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
   static const char prefix[] =
@@ -457,6 +488,214 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(probe.value, 9);
     /* Publish clones the message; the caller's source projection stays 7. */
     check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 7);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("keeps CFlow regions on both sides of a native barrier") {
+    static const char graph[] =
+        "source input\n"
+        "stage a operation test.reflected.diff.a\n"
+        "stage b operation test.reflected.diff.b\n"
+        "stage boundary operation test.reflected.diff.boundary\n"
+        "stage c operation test.reflected.diff.c\n"
+        "stage d operation test.reflected.diff.d\n"
+        "stage sink operation test.reflected.diff.sink\n"
+        "stage main {\n"
+        "  input -> a -> b -> boundary -> c -> d -> sink\n"
+        "}\n";
+    static const turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t a =
+        reflected_operation_descriptor("test.reflected.diff.a");
+    turbo_flow_operation_descriptor_t b =
+        reflected_operation_descriptor("test.reflected.diff.b");
+    turbo_flow_operation_descriptor_t c_op =
+        reflected_operation_descriptor("test.reflected.diff.c");
+    turbo_flow_operation_descriptor_t d =
+        reflected_operation_descriptor("test.reflected.diff.d");
+    reflected_runtime_sink_probe_t probe = {0};
+    turbo_flow_msg_t message;
+    int boundary_stage;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &a, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &b, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.diff.boundary", reflected_noop_stage, NULL));
+    check_true(register_unary_reflected_mode(
+        flow, &c_op, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &d, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.diff.sink", reflected_runtime_sink, &probe));
+
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)2u);
+    boundary_stage = turbo_flow_find_stage(flow, "boundary");
+    check_true(boundary_stage >= 0);
+    {
+      const uint32_t *region = (const uint32_t *)vec_at_const(
+          &flow->compiled_plan.cflow_region_by_stage, (size_t)boundary_stage);
+      check_not_null(region);
+      check_equal(*region, FLOW_PLAN_INDEX_NONE);
+    }
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(bind_test_int_projection(&message, &schema, 1), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(probe.value, 5);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 1);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("stops a direct CFlow region before a native fan-out boundary") {
+    static const char graph[] =
+        "source input\n"
+        "stage a operation test.reflected.fanout.a\n"
+        "stage b operation test.reflected.fanout.b\n"
+        "stage fork operation test.reflected.fanout.fork\n"
+        "stage left operation test.reflected.fanout.left\n"
+        "stage right operation test.reflected.fanout.right\n"
+        "stage main {\n"
+        "  input -> a -> b -> fork -> [left, right]\n"
+        "}\n";
+    static const turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t a =
+        reflected_operation_descriptor("test.reflected.fanout.a");
+    turbo_flow_operation_descriptor_t b =
+        reflected_operation_descriptor("test.reflected.fanout.b");
+    reflected_runtime_sink_probe_t left = {0};
+    reflected_runtime_sink_probe_t right = {0};
+    turbo_flow_msg_t message;
+    int fork_stage;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &a, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &b, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.fanout.fork", reflected_noop_stage, NULL));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.fanout.left", reflected_runtime_sink, &left));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.fanout.right", reflected_runtime_sink, &right));
+
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)1u);
+    fork_stage = turbo_flow_find_stage(flow, "fork");
+    check_true(fork_stage >= 0);
+    {
+      const flow_stage_semantic_plan_t *semantics =
+          (const flow_stage_semantic_plan_t *)vec_at_const(
+              &flow->compiled_plan.stage_semantics, (size_t)fork_stage);
+      check_not_null(semantics);
+      check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_RELATION);
+      check_false(semantics->lowering_candidate);
+    }
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(bind_test_int_projection(&message, &schema, 5), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(left.calls, (size_t)1u);
+    check_equal(right.calls, (size_t)1u);
+    check_equal(left.value, 7);
+    check_equal(right.value, 7);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+  }
+
+  it("keeps independent CFlow branches separate across a fan-in boundary") {
+    static const char graph[] =
+        "source input\n"
+        "stage left operation test.reflected.fanin.left\n"
+        "stage right operation test.reflected.fanin.right\n"
+        "stage join operation test.reflected.fanin.join\n"
+        "stage sink operation test.reflected.fanin.sink\n"
+        "stage main {\n"
+        "  input -> [left, right] -> join -> sink\n"
+        "}\n";
+    static const turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "cmeta.int.data", "Integer",
+        "int", 7u, 3u, NULL};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t left_op =
+        reflected_operation_descriptor("test.reflected.fanin.left");
+    turbo_flow_operation_descriptor_t right_op =
+        reflected_operation_descriptor("test.reflected.fanin.right");
+    reflected_runtime_sink_probe_t probe = {0};
+    turbo_flow_msg_t message;
+    int join_stage;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &left_op, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_unary_reflected_mode(
+        flow, &right_op, FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.fanin.join", reflected_noop_stage, NULL));
+    check_true(register_native_int_stage(
+        flow, "test.reflected.fanin.sink", reflected_runtime_sink, &probe));
+
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)2u);
+    join_stage = turbo_flow_find_stage(flow, "join");
+    check_true(join_stage >= 0);
+    {
+      const flow_stage_semantic_plan_t *semantics =
+          (const flow_stage_semantic_plan_t *)vec_at_const(
+              &flow->compiled_plan.stage_semantics, (size_t)join_stage);
+      check_not_null(semantics);
+      check_bits(semantics->barriers, FLOW_LOWERING_BARRIER_RELATION);
+      check_false(semantics->lowering_candidate);
+    }
+
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(bind_test_int_projection(&message, &schema, 10), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(probe.value, 12);
 
     turbo_flow_msg_cleanup(&message);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
