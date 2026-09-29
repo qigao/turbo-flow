@@ -461,6 +461,8 @@ static void bench_register_operation(turbo_flow_t *flow,
 
 static int bench_u64_compare(const void *lhs, const void *rhs);
 static uint64_t bench_percentile(const uint64_t *sorted, size_t count, size_t percent);
+static int bench_publish_prepare_clone(void *ctx, size_t index,
+                                       turbo_flow_msg_t *message);
 static uint64_t bench_process_cpu_ns(void);
 
 static turbo_flow_operation_descriptor_t
