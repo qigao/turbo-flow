@@ -135,7 +135,7 @@ jobs:
           test -n "$bench"
           cmake -E env \
             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
-            "$bench" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
+            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
           grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region) ' \
             "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
             | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
