@@ -594,6 +594,30 @@ suite("TurboFlow reflected operation semantics") {
     turbo_flow_destroy(flow);
   }
 
+  it("fails compile transactionally when a provider-free reflected stage hits a native barrier") {
+    static const char graph[] =
+        "source input\n"
+        "stage op operation test.reflected.provider_free_deadline\n"
+        "stage main { input -> op }\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.provider_free_deadline");
+
+    check_not_null(flow);
+    operation.runtime.deadline_ms = 1u;
+    check_true(register_unary_reflected_mode(
+        flow, &operation,
+        FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
+    check_false(flow->compiled_plan.sealed);
+    check_equal(vec_size(&flow->compiled_plan.cflow_regions), (size_t)0u);
+
+    turbo_flow_destroy(flow);
+  }
+
   it("applies FunctionDesc state barriers to the compiled stage") {
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
