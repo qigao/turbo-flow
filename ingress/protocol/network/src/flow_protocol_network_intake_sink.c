@@ -613,9 +613,6 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
 static int intake_drive(flow_protocol_network_intake_sink_t *sink) {
   int rc;
   if (!sink) return SALTS_EINVAL;
-  rc = intake_reply_drive(sink);
-  if (rc != SALTS_OK) return rc;
-  if (sink->reply_backpressured) return SALTS_OK;
   while (sink->pending_count > 0u) {
     const size_t before = sink->pending_count;
     rc = intake_process_front(sink);
@@ -983,7 +980,8 @@ void flow_protocol_network_intake_sink_metrics(
   metrics->reply_terminals = sink->reply_terminals;
   metrics->reply_failures = sink->reply_failures;
   metrics->pending_replies = sink->pending_replies + sink->reply_count;
-  metrics->backpressured = sink->blocked || sink->reply_backpressured;
+  metrics->backpressured =
+      sink->blocked || sink->reply_backpressured || sink->reply_count != 0u;
   metrics->terminal_status = sink->terminal_status;
 }
 
