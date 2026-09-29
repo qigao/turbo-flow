@@ -459,6 +459,10 @@ static void bench_register_operation(turbo_flow_t *flow,
   check_equal(turbo_flow_register_operation_provider(flow, &provider), SALTS_OK);
 }
 
+static int bench_u64_compare(const void *lhs, const void *rhs);
+static uint64_t bench_percentile(const uint64_t *sorted, size_t count, size_t percent);
+static uint64_t bench_process_cpu_ns(void);
+
 static turbo_flow_operation_descriptor_t
 bench_cflow_region_native_descriptor(const char *name) {
   turbo_flow_operation_descriptor_t operation = {0};
@@ -1593,6 +1597,31 @@ spec("Turbo Flow Bench") {
     }
 
     turbo_flow_msg_cleanup(&msg);
+  }
+
+  bench("cflow regions") {
+    turbo_flow_t *native_flow;
+    turbo_flow_t *cflow_flow;
+
+    atomic_store_explicit(
+        &g_flow_bench_region_native_callbacks, 0u, memory_order_relaxed);
+    atomic_store_explicit(
+        &g_flow_bench_region_projection_clones, 0u, memory_order_relaxed);
+
+    native_flow = bench_cflow_region_create_flow(0);
+    cflow_flow = bench_cflow_region_create_flow(1);
+    check_not_null(native_flow);
+    check_not_null(cflow_flow);
+
+    bench_report_cflow_region_publish(
+        native_flow, "typed-identity-2-stage-native",
+        "native-stage-dispatch", FLOW_BENCH_EXECUTOR_ITERS, 2u);
+    bench_report_cflow_region_publish(
+        cflow_flow, "typed-identity-2-stage-cflow-region",
+        "cflow-direct-region", FLOW_BENCH_EXECUTOR_ITERS, 0u);
+
+    bench_destroy_started_flow(cflow_flow);
+    bench_destroy_started_flow(native_flow);
   }
 
   bench("async ingress") {
