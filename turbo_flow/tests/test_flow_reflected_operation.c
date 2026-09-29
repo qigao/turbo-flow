@@ -16,15 +16,40 @@ typedef struct reflected_managed_value_s {
   int *value;
 } reflected_managed_value_t;
 
+static size_t reflected_managed_copies;
+static size_t reflected_managed_moves;
+static size_t reflected_managed_destroys;
+static size_t reflected_managed_live_resources;
+
+static void reflected_managed_reset(void) {
+  reflected_managed_copies = 0u;
+  reflected_managed_moves = 0u;
+  reflected_managed_destroys = 0u;
+  reflected_managed_live_resources = 0u;
+}
+
+static reflected_managed_value_t reflected_managed_make(int value) {
+  reflected_managed_value_t result = {0};
+  result.value = (int *)malloc(sizeof(*result.value));
+  if (result.value) {
+    *result.value = value;
+    ++reflected_managed_live_resources;
+  }
+  return result;
+}
+
 static bool reflected_managed_copy(void *destination, const void *source) {
   reflected_managed_value_t *dst = (reflected_managed_value_t *)destination;
   const reflected_managed_value_t *src = (const reflected_managed_value_t *)source;
   if (!dst || !src) return false;
   dst->value = NULL;
-  if (!src->value) return true;
-  dst->value = (int *)malloc(sizeof(*dst->value));
-  if (!dst->value) return false;
-  *dst->value = *src->value;
+  if (src->value) {
+    dst->value = (int *)malloc(sizeof(*dst->value));
+    if (!dst->value) return false;
+    *dst->value = *src->value;
+    ++reflected_managed_live_resources;
+  }
+  ++reflected_managed_copies;
   return true;
 }
 
@@ -34,13 +59,18 @@ static void reflected_managed_move(void *destination, void *source) {
   if (!dst || !src) return;
   dst->value = src->value;
   src->value = NULL;
+  ++reflected_managed_moves;
 }
 
 static void reflected_managed_destroy(void *value) {
   reflected_managed_value_t *managed = (reflected_managed_value_t *)value;
   if (!managed) return;
-  free(managed->value);
-  managed->value = NULL;
+  if (managed->value) {
+    free(managed->value);
+    managed->value = NULL;
+    if (reflected_managed_live_resources > 0u) --reflected_managed_live_resources;
+  }
+  ++reflected_managed_destroys;
 }
 
 static const cmeta_type_traits reflected_managed_traits = {
@@ -66,6 +96,48 @@ static const cmeta_type_desc reflected_unknown_lifecycle_type = {
     NULL,
     NULL,
     NULL};
+
+static const cmeta_struct_desc reflected_managed_layout = {
+    "reflected_managed_value",
+    sizeof(reflected_managed_value_t),
+    _Alignof(reflected_managed_value_t),
+    NULL,
+    0u};
+
+static const cmeta_data_struct_shape reflected_managed_shape = {
+    &reflected_managed_layout, NULL, 0u};
+
+static const cmeta_data_desc reflected_managed_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.reflected.managed",
+    .display_name = "Managed test value",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &reflected_managed_type,
+    .shape = &reflected_managed_shape};
+
+static int reflected_managed_projection_clone(
+    const void *value, void *ctx, void **out) {
+  reflected_managed_value_t *copy;
+  (void)ctx;
+  if (out) *out = NULL;
+  if (!value || !out) return SALTS_EINVAL;
+  copy = (reflected_managed_value_t *)malloc(sizeof(*copy));
+  if (!copy) return SALTS_ENOMEM;
+  if (!reflected_managed_copy(copy, value)) {
+    free(copy);
+    return SALTS_ENOMEM;
+  }
+  *out = copy;
+  return SALTS_OK;
+}
+
+static void reflected_managed_projection_destroy(void *value, void *ctx) {
+  (void)ctx;
+  if (!value) return;
+  reflected_managed_destroy(value);
+  free(value);
+}
 
 FunctionDecl(value, int, reflected_increment,
     (int, input, CMETA_PARAM_IN));
@@ -416,6 +488,89 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(slot.transfer, FLOW_CFLOW_VALUE_TRANSFER_NONE);
     check_equal(slot.required_traits, (cmeta_trait_flags)0u);
     check_equal(slot.source_destroy_after_transfer, 0);
+  }
+
+  it("moves one managed CFlow result into message-owned aligned storage") {
+    static const turbo_flow_data_schema_t schema = {
+        sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
+        TURBO_FLOW_DATA_ENCODING_OPAQUE, "test.reflected.managed", "Managed",
+        "reflected_managed_value", 81u, 1u, NULL};
+    cflow_graph surface = {0};
+    flow_cflow_region_plan_t region = {0};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_msg_t message;
+    turbo_flow_msg_t clone;
+    reflected_managed_value_t *input;
+    const reflected_managed_value_t *output;
+    const reflected_managed_value_t *cloned;
+    const void *projection_before;
+
+    check_not_null(flow);
+    reflected_managed_reset();
+    region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
+    region.input_data = &reflected_managed_data;
+    region.output_data = &reflected_managed_data;
+    surface.root = CMETA_INVALID_ID;
+    cflow_graph_init(&surface, &reflected_managed_type);
+    check_null(surface.error);
+    check_true(cflow_graph_take(&surface, 1u));
+    check_true(cflow_plan_compile_surface(&region.plan, &surface, NULL));
+    cflow_graph_destroy(&surface);
+    check_not_null(region.plan.impl);
+    check_true(cmeta_type_equal(region.plan.input_type, &reflected_managed_type));
+    check_true(cmeta_type_equal(region.plan.output_type, &reflected_managed_type));
+    check_equal(flow_cflow_value_slot_plan_classify(
+                    &reflected_managed_type, &reflected_managed_type,
+                    &region.value_slot),
+                SALTS_OK);
+    check_equal(region.value_slot.mode, FLOW_CFLOW_VALUE_SLOT_NONE);
+    check_equal(region.value_slot.transfer,
+                FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT);
+    region.value_slot.mode = FLOW_CFLOW_VALUE_SLOT_OWNED_OUTPUT;
+
+    turbo_flow_msg_init(&message);
+    turbo_flow_msg_init(&clone);
+    input = (reflected_managed_value_t *)malloc(sizeof(*input));
+    check_not_null(input);
+    *input = reflected_managed_make(7);
+    check_not_null(input->value);
+    check_equal(reflected_managed_live_resources, (size_t)1u);
+    check_equal(turbo_flow_msg_bind_typed_projection(
+                    &message, &schema, &reflected_managed_data, input,
+                    reflected_managed_projection_clone,
+                    reflected_managed_projection_destroy, NULL),
+                SALTS_OK);
+    projection_before = turbo_flow_msg_projection(&message, NULL);
+    check_not_null(projection_before);
+
+    check_equal(flow_cflow_region_execute(flow, &region, &message), SALTS_OK);
+    output = (const reflected_managed_value_t *)
+        turbo_flow_msg_projection(&message, NULL);
+    check_not_null(output);
+    check_true((const void *)output != projection_before);
+    check_equal((uintptr_t)output % reflected_managed_type.align,
+                (uintptr_t)0u);
+    check_not_null(output->value);
+    check_equal(*output->value, 7);
+    check_equal(reflected_managed_live_resources, (size_t)1u);
+    check_true(reflected_managed_moves >= (size_t)1u);
+    check_true(reflected_managed_destroys >= (size_t)2u);
+
+    check_equal(turbo_flow_msg_clone(&clone, &message), SALTS_OK);
+    cloned = (const reflected_managed_value_t *)
+        turbo_flow_msg_projection(&clone, NULL);
+    check_not_null(cloned);
+    check_not_null(cloned->value);
+    check_equal(*cloned->value, 7);
+    check_true(cloned->value != output->value);
+    check_equal(reflected_managed_live_resources, (size_t)2u);
+
+    turbo_flow_msg_cleanup(&message);
+    check_equal(reflected_managed_live_resources, (size_t)1u);
+    turbo_flow_msg_cleanup(&clone);
+    check_equal(reflected_managed_live_resources, (size_t)0u);
+    cflow_plan_destroy(&region.plan);
+    turbo_flow_destroy(flow);
   }
 
   it("uses FunctionDesc as the unary CFlow MAP semantic source") {

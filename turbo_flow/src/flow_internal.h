@@ -326,7 +326,8 @@ typedef enum flow_cflow_region_backend_e {
 
 typedef enum flow_cflow_value_slot_mode_e {
   FLOW_CFLOW_VALUE_SLOT_NONE = 0,
-  FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT
+  FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT,
+  FLOW_CFLOW_VALUE_SLOT_OWNED_OUTPUT
 } flow_cflow_value_slot_mode_t;
 
 typedef enum flow_cflow_value_transfer_mode_e {
@@ -825,6 +826,9 @@ int flow_cflow_region_execute(
 int flow_msg_commit_trivial_projection_in_place(
     turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
     const cmeta_data_desc *output_data, const void *output_value);
+int flow_msg_commit_managed_projection_move(
+    turbo_flow_msg_t *message, const cmeta_data_desc *expected_input,
+    const cmeta_data_desc *output_data, void *output_value);
 int flow_runtime_stage_index_reset(vec_t *index_by_stage, size_t stage_count);
 const flow_runtime_stage_config_t *flow_runtime_stage_config_for_stage(const turbo_flow_t *flow,
                                                                        uint32_t stage_index);
