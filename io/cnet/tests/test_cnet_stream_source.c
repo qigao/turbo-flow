@@ -30,6 +30,28 @@ static cnet_client_config stream_source_test_client_config(void) {
   return config;
 }
 
+static int stream_source_server_send_sg(
+    cnet_client *client, cnet_connection connection, const void *data, size_t size) {
+  mem_buffer_t *payload;
+  mem_slice_t segment = {0};
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  payload = mem_get_buffer(mem_global(), size);
+  if (!payload) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(payload), data, size);
+  mem_set_used(payload, size);
+  segment = mem_slice(payload, 0u, size);
+  if (!segment.buffer || segment.length != size) {
+    mem_slice_release(&segment);
+    mem_buffer_release(payload);
+    return SALTS_EPROTO;
+  }
+  status = cnet_send_slicev(client, connection, &segment, 1u);
+  mem_slice_release(&segment);
+  mem_buffer_release(payload);
+  return status;
+}
+
 static turbo_flow_cnet_stream_source_config_t
 stream_source_test_config(turbo_flow_t *flow, const cnet_client_config *client) {
   turbo_flow_cnet_stream_source_config_t config = TURBO_FLOW_CNET_STREAM_SOURCE_CONFIG_INIT;
@@ -363,7 +385,7 @@ spec("CNet stream source owner") {
     check_equal(server_probe.connected, 1u);
     check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SOURCE_CONNECTED);
 
-    check_equal(cnet_send(&server, server_connection, "first", 5u), SALTS_OK);
+    check_equal(stream_source_server_send_sg(&server, server_connection, "first", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (server_probe.sent < 1u && salts_monotonic_ms() < deadline)
       check_equal(stream_source_poll_server(&server, 1u), SALTS_OK);
@@ -381,7 +403,7 @@ spec("CNet stream source owner") {
     check_equal(graph_probe.ids[0], 101u);
     check_equal(graph_probe.payloads[0], "first");
 
-    check_equal(cnet_send(&server, server_connection, "second", 6u), SALTS_OK);
+    check_equal(stream_source_server_send_sg(&server, server_connection, "second", 6u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (server_probe.sent < 2u && salts_monotonic_ms() < deadline)
       check_equal(stream_source_poll_server(&server, 1u), SALTS_OK);
@@ -504,7 +526,7 @@ spec("CNet stream source owner") {
                 SALTS_OK);
 
     check_equal(turbo_flow_cnet_stream_source_request(source, 1u), SALTS_OK);
-    check_equal(cnet_send(&server, server_connection, "large", 5u), SALTS_OK);
+    check_equal(stream_source_server_send_sg(&server, server_connection, "large", 5u), SALTS_OK);
     deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_STREAM_SOURCE_FAILED &&
            salts_monotonic_ms() < deadline) {
