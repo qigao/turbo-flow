@@ -3575,8 +3575,12 @@ suite("Turbo Flow") {
       check_not_null(input[1].buffer);
 
       turbo_flow_msg_init(&src);
-      src.owned_payload = tstr_dup("logical");
-      src.payload = tstr_to_v(src.owned_payload);
+      src.buffer = mem_get_buffer(mem_global(), sizeof("logical") - 1u);
+      check_not_null(src.buffer);
+      memcpy(mem_buffer_data(src.buffer), "logical", sizeof("logical") - 1u);
+      mem_set_used(src.buffer, sizeof("logical") - 1u);
+      src.payload =
+          vstr_from_buf(mem_buffer_data(src.buffer), sizeof("logical") - 1u);
       check_equal(turbo_flow_msg_set_transport_slices(&src, input, 2u), SALTS_OK);
       mem_slice_release(&input[0]);
       mem_slice_release(&input[1]);
@@ -3590,10 +3594,10 @@ suite("Turbo Flow") {
       check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
       check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
 
-      /* retain_view rejects owned payloads, while clone shares immutable vector ownership. */
       turbo_flow_msg_init(&retained);
-      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_EINVAL);
-      turbo_flow_msg_cleanup(&retained);
+      check_equal(turbo_flow_msg_retain_view(&retained, &src), SALTS_OK);
+      check_equal(turbo_flow_msg_transport_slices(&retained, &actual), (size_t)2u);
+      check_equal(turbo_flow_msg_transport_bytes(&retained), (size_t)8u);
       check_equal(turbo_flow_msg_clone(&cloned, &src), SALTS_OK);
       check_equal(turbo_flow_msg_transport_slices(&cloned, &actual), (size_t)2u);
       check_equal(turbo_flow_msg_transport_bytes(&cloned), (size_t)8u);
@@ -3604,6 +3608,9 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_msg_transport_slices(&cloned, NULL), (size_t)0u);
       check_equal(turbo_flow_msg_transport_slices(&moved, &actual), (size_t)2u);
       turbo_flow_msg_cleanup(&src);
+      check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
+      check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
+      turbo_flow_msg_cleanup(&retained);
       check_equal(mem_buffer_ref_count(header), (uint32_t)2u);
       check_equal(mem_buffer_ref_count(body), (uint32_t)2u);
       turbo_flow_msg_clear_transport_slices(&moved);
