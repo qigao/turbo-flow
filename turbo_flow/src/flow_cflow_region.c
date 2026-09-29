@@ -56,6 +56,50 @@ static int flow_cflow_stage_data_contract(
   return SALTS_OK;
 }
 
+int flow_cflow_value_slot_plan_classify(
+    const cmeta_type_desc *input_type, const cmeta_type_desc *output_type,
+    flow_cflow_value_slot_plan_t *out) {
+  const cmeta_trait_flags trivial =
+      CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
+  const cmeta_trait_flags managed =
+      CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY;
+
+  if (!out) return SALTS_EINVAL;
+  memset(out, 0, sizeof(*out));
+  if (!cmeta_type_desc_valid(input_type) || !cmeta_type_desc_valid(output_type))
+    return SALTS_EINVAL;
+
+  out->extent = output_type->size;
+  out->alignment = output_type->align;
+  out->available_traits =
+      output_type->traits ? output_type->traits->flags & CMETA_TRAIT_MASK : 0u;
+
+  if (!cmeta_type_equal(input_type, output_type))
+    return SALTS_OK;
+
+  if (cmeta_type_require_traits(output_type, trivial) == CMETA_OK) {
+    out->mode = FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT;
+    out->transfer = FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY;
+    out->required_traits = trivial;
+    out->source_destroy_after_transfer = 0;
+    return SALTS_OK;
+  }
+
+  if (cmeta_type_require_traits(output_type, managed) == CMETA_OK) {
+    /*
+     * CMeta proves that a moved-from source can be destroyed and a destination
+     * can be move-constructed. Runtime reuse is deliberately not admitted yet:
+     * TurboFlow must also own the destination storage before replacing a live
+     * non-trivial projection in place.
+     */
+    out->mode = FLOW_CFLOW_VALUE_SLOT_NONE;
+    out->transfer = FLOW_CFLOW_VALUE_TRANSFER_MOVE_CONSTRUCT;
+    out->required_traits = CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY;
+    out->source_destroy_after_transfer = 1;
+  }
+  return SALTS_OK;
+}
+
 static int flow_cflow_direct_boundary_supported(
     const turbo_flow_t *flow, uint32_t entry_stage, uint32_t exit_stage,
     const cflow_plan *plan, const cmeta_data_desc **input_data_out,
@@ -271,11 +315,14 @@ static int flow_cflow_region_compile(const turbo_flow_t *flow,
       &region.input_data, &region.output_data);
   if (rc != SALTS_OK) goto cleanup;
   region.backend = FLOW_CFLOW_REGION_BACKEND_DIRECT;
-  region.value_slot.mode = FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT;
-  region.value_slot.extent = region.plan.output_type->size;
-  region.value_slot.alignment = region.plan.output_type->align;
-  region.value_slot.required_traits =
-      CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY;
+  rc = flow_cflow_value_slot_plan_classify(
+      region.plan.input_type, region.plan.output_type, &region.value_slot);
+  if (rc != SALTS_OK ||
+      region.value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region.value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY) {
+    rc = rc != SALTS_OK ? rc : SALTS_ENOTSUP;
+    goto cleanup;
+  }
 
   *region_out = region;
   memset(&region, 0, sizeof(region));
@@ -387,8 +434,10 @@ int flow_cflow_region_execute(
   }
 
   if (region->value_slot.mode != FLOW_CFLOW_VALUE_SLOT_REUSE_INPUT ||
+      region->value_slot.transfer != FLOW_CFLOW_VALUE_TRANSFER_TRIVIAL_COPY ||
       region->value_slot.extent != region->plan.output_type->size ||
       region->value_slot.alignment != region->plan.output_type->align ||
+      region->value_slot.source_destroy_after_transfer != 0 ||
       region->value_slot.required_traits !=
           (CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY)) {
     cflow_result_destroy(&result);
