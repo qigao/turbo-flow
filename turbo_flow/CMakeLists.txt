@@ -51,6 +51,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_co
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_diagnostic.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_resolver.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
@@ -139,6 +140,7 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product_databind.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_resolver.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 cmake_config_target(
   turbo_flow_product
@@ -152,7 +154,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_product
-  PUBLIC TurboFlow::Graph TurboFlow::Config Salts::DataBind
+  PUBLIC TurboFlow::Graph TurboFlow::Config Salts::DataBind Salts::Plugin
   PRIVATE Salts::JsonParser)
 
 add_library(turbo_flow_plugin_host SHARED
