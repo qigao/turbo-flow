@@ -91,7 +91,6 @@ typedef struct turbo_flow_execution_stage_view_s {
   const char *resource_name;
   const char *input_semantic_id;
   const char *output_semantic_id;
-  uint32_t barriers;
 } turbo_flow_execution_stage_view_t;
 
 #define TURBO_FLOW_EXECUTION_STAGE_VIEW_INIT                                        \
@@ -100,7 +99,7 @@ typedef struct turbo_flow_execution_stage_view_s {
    TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
    TURBO_FLOW_EXECUTION_BACKEND_NATIVE,                                             \
    TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
-   NULL, NULL, NULL, NULL, NULL, NULL, 0u}
+   NULL, NULL, NULL, NULL, NULL, NULL}
 
 /** Deterministic indexed diagnostics for one compiled direct CFlow region. */
 typedef struct turbo_flow_execution_cflow_region_view_s {
