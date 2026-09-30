@@ -62,9 +62,14 @@ static int register_native_sink(
   operation.version = 1u;
   operation.domain = TURBO_FLOW_DOMAIN_DATA;
   operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_type = "TelemetryEvent";
+  /*
+   * The native TurboFlow stage consumes the core message envelope. The
+   * DataBind payload identity stays exclusively in the compiled Channel
+   * contract and must not be duplicated into legacy operation type strings.
+   */
+  operation.input_type = "Message";
   operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.output_type = "TelemetryEvent";
+  operation.output_type = "Message";
   operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
   operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
