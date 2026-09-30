@@ -38,6 +38,8 @@ typedef enum flow_databind_transport_kind_e {
 
 typedef struct flow_databind_source_binding_s
     flow_databind_source_binding_t;
+typedef struct flow_databind_service_binding_s
+    flow_databind_service_binding_t;
 
 typedef struct flow_stage_plan_impl_s {
   tstr name;
@@ -74,6 +76,8 @@ typedef struct flow_stage_plan_impl_s {
   void *ctx;
   /** Optional generated DataBind Channel binding owned by this parsed stage. */
   flow_databind_source_binding_t *databind_source;
+  /** Optional generated DataBind Service binding owned by this parsed stage. */
+  flow_databind_service_binding_t *databind_service;
 } flow_stage_plan_impl_t;
 
 typedef struct flow_operation_provider_registration_s {
@@ -228,6 +232,8 @@ typedef struct flow_runtime_node_plan_s {
   uint32_t databind_format;
   /** Borrowed immutable generated SocketPlan/FlowMQPlan artifact. */
   const void *databind_transport_plan;
+  /** DataBind Service MethodPlan row for provider stages, or FLOW_PLAN_INDEX_NONE. */
+  uint32_t databind_service_index;
 } flow_runtime_node_plan_t;
 
 typedef struct flow_runtime_edge_plan_s {
@@ -305,7 +311,9 @@ typedef enum flow_lowering_barrier_e {
   FLOW_LOWERING_BARRIER_DEADLINE = 1u << 15,
   FLOW_LOWERING_BARRIER_CANCELLATION = 1u << 16,
   FLOW_LOWERING_BARRIER_BACKPRESSURE = 1u << 17,
-  FLOW_LOWERING_BARRIER_ERROR_POLICY = 1u << 18
+  FLOW_LOWERING_BARRIER_ERROR_POLICY = 1u << 18,
+  /** Generated DataBind Service MethodPlan is an explicit provider boundary. */
+  FLOW_LOWERING_BARRIER_DATABIND_SERVICE = 1u << 19
 } flow_lowering_barrier_t;
 
 typedef struct flow_semantic_type_plan_s {
@@ -431,6 +439,8 @@ typedef struct flow_compiled_plan_s {
   vec_t cflow_region_by_stage;
   /** Deduplicated canonical DataBind Channel/native binding rows. */
   vec_t databind_channels;
+  /** Generated DataBind Service MethodPlans owned by this sealed plan. */
+  vec_t databind_services;
   /** Opaque compile-time resources retained for the complete sealed-plan lifetime. */
   vec_t owned_resources;
   const cmeta_type_desc *message_type;
@@ -885,6 +895,12 @@ int flow_databind_channels_init(vec_t *channels);
 void flow_databind_channels_destroy(vec_t *channels);
 int flow_databind_channels_verify(const vec_t *channels);
 int flow_plan_build_databind_channels(
+    const turbo_flow_t *flow, flow_compiled_plan_t *plan);
+int flow_databind_services_init(vec_t *services);
+void flow_databind_services_destroy(vec_t *services);
+int flow_databind_services_verify(
+    const vec_t *services, size_t stage_count);
+int flow_plan_build_databind_services(
     const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out);
