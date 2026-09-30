@@ -18,6 +18,7 @@
 %token LBRACE RBRACE LBRACKET RBRACKET COMMA DOT EQUAL NEWLINE.
 
 %type stage_options {flow_stage_spec_t}
+%type stage_config_head {flow_stage_spec_t}
 %type source_options {flow_stage_spec_t}
 %type exec_spec {flow_exec_spec_t}
 %type exec_options {flow_exec_options_t}
@@ -35,14 +36,35 @@ top_items ::= .
 top_items ::= top_items top_item.
 
 top_item ::= source_decl NEWLINE.
+top_item ::= source_config_block.
 top_item ::= buffer_decl NEWLINE.
 top_item ::= stage_decl NEWLINE.
+top_item ::= stage_config_block.
 top_item ::= stage_block.
 top_item ::= NEWLINE.
 
 source_decl ::= SOURCE IDENT(N) source_options(O). {
   flow_parse_add_source(ctx, N, O);
 }
+
+source_config_block ::= source_config_start NEWLINE source_config_lines RBRACE NEWLINE. {
+  flow_parse_finish_node_config(ctx);
+}
+source_config_start ::= SOURCE IDENT(N) source_options(O) LBRACE. {
+  flow_parse_begin_node_config(ctx, N, O, FLOW_NODE_CONFIG_SOURCE);
+}
+source_config_lines ::= .
+source_config_lines ::= source_config_lines source_config_line.
+source_config_line ::= ADAPTER adapter_name(N) NEWLINE. {
+  flow_parse_set_adapter(ctx, &ctx->node_config_spec, N);
+}
+source_config_line ::= OPERATION adapter_name(N) NEWLINE. {
+  flow_parse_set_operation(ctx, &ctx->node_config_spec, N);
+}
+source_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
+  flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
+}
+source_config_line ::= NEWLINE.
 
 buffer_decl ::= BUFFER IDENT(N) RESOURCE adapter_name(R). {
   flow_parse_add_buffer(ctx, N, R);
@@ -116,6 +138,89 @@ stage_options(A) ::= stage_options(B) EXEC(E) IDENT(BAD). {
   flow_parse_unknown_executor(ctx, BAD);
 }
 
+stage_config_head(A) ::= stage_options(B) WORKER NUMBER(N). {
+  A = B;
+  flow_parse_set_worker(ctx, &A, N);
+}
+stage_config_head(A) ::= stage_options(B) CAPACITY NUMBER(N). {
+  A = B;
+  flow_parse_set_data_pool(ctx, &A, N);
+}
+stage_config_head(A) ::= stage_options(B) ADAPTER adapter_name(N). {
+  A = B;
+  flow_parse_set_adapter(ctx, &A, N);
+}
+stage_config_head(A) ::= stage_options(B) OPERATION adapter_name(N). {
+  A = B;
+  flow_parse_set_operation(ctx, &A, N);
+}
+stage_config_head(A) ::= stage_options(B) RESOURCE adapter_name(N). {
+  A = B;
+  flow_parse_set_resource(ctx, &A, N);
+}
+stage_config_head(A) ::= stage_options(B) EXEC(E) exec_spec(S). {
+  A = B;
+  flow_parse_set_exec(ctx, &A, S, E);
+}
+stage_config_head(A) ::= stage_options(B) RETRY ATTEMPTS NUMBER(N). {
+  A = B;
+  flow_parse_set_retry(ctx, &A, N, NULL);
+}
+stage_config_head(A) ::= stage_options(B) RETRY ATTEMPTS NUMBER(N) DELAY NUMBER(D). {
+  A = B;
+  flow_parse_set_retry(ctx, &A, N, &D);
+}
+stage_config_head(A) ::= stage_options(B) REORDER CAPACITY NUMBER(C) TIMEOUT NUMBER(T). {
+  A = B;
+  flow_parse_set_reorder(ctx, &A, C, T);
+}
+stage_config_head(A) ::= stage_options(B) EXEC(E) IDENT(BAD). {
+  A = B;
+  (void)E;
+  flow_parse_unknown_executor(ctx, BAD);
+}
+
+stage_config_block ::= stage_config_start NEWLINE stage_config_lines RBRACE NEWLINE. {
+  flow_parse_finish_node_config(ctx);
+}
+stage_config_start ::= STAGE IDENT(N) stage_config_head(O) LBRACE. {
+  flow_parse_begin_node_config(ctx, N, O, FLOW_NODE_CONFIG_STAGE);
+}
+stage_config_lines ::= .
+stage_config_lines ::= stage_config_lines stage_config_line.
+stage_config_line ::= WORKER NUMBER(N) NEWLINE. {
+  flow_parse_set_worker(ctx, &ctx->node_config_spec, N);
+}
+stage_config_line ::= CAPACITY NUMBER(N) NEWLINE. {
+  flow_parse_set_data_pool(ctx, &ctx->node_config_spec, N);
+}
+stage_config_line ::= ADAPTER adapter_name(N) NEWLINE. {
+  flow_parse_set_adapter(ctx, &ctx->node_config_spec, N);
+}
+stage_config_line ::= OPERATION adapter_name(N) NEWLINE. {
+  flow_parse_set_operation(ctx, &ctx->node_config_spec, N);
+}
+stage_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
+  flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
+}
+stage_config_line ::= EXEC(E) exec_spec(S) NEWLINE. {
+  flow_parse_set_exec(ctx, &ctx->node_config_spec, S, E);
+}
+stage_config_line ::= RETRY ATTEMPTS NUMBER(N) NEWLINE. {
+  flow_parse_set_retry(ctx, &ctx->node_config_spec, N, NULL);
+}
+stage_config_line ::= RETRY ATTEMPTS NUMBER(N) DELAY NUMBER(D) NEWLINE. {
+  flow_parse_set_retry(ctx, &ctx->node_config_spec, N, &D);
+}
+stage_config_line ::= REORDER CAPACITY NUMBER(C) TIMEOUT NUMBER(T) NEWLINE. {
+  flow_parse_set_reorder(ctx, &ctx->node_config_spec, C, T);
+}
+stage_config_line ::= EXEC(E) IDENT(BAD) NEWLINE. {
+  (void)E;
+  flow_parse_unknown_executor(ctx, BAD);
+}
+stage_config_line ::= NEWLINE.
+
 exec_spec(A) ::= INLINE exec_options(O). {
   A = flow_exec_spec_make(TURBO_FLOW_EXEC_INLINE, O);
 }
@@ -176,6 +281,13 @@ exec_options(A) ::= exec_options(B) POOL NUMBER(N). {
   flow_parse_set_exec_count(ctx, &A, N, 2);
 }
 
+step_config_block ::= step_config_start NEWLINE stage_config_lines RBRACE NEWLINE. {
+  flow_parse_finish_node_config(ctx);
+}
+step_config_start ::= STEP IDENT(N) stage_options(O) LBRACE. {
+  flow_parse_begin_node_config(ctx, N, O, FLOW_NODE_CONFIG_STAGE);
+}
+
 stage_block ::= stage_block_start NEWLINE stage_lines RBRACE NEWLINE. {
   flow_parse_leave_stage_block(ctx);
 }
@@ -188,6 +300,8 @@ stage_lines ::= .
 stage_lines ::= stage_lines stage_line.
 
 stage_line ::= step_decl NEWLINE.
+stage_line ::= step_config_block.
+stage_line ::= source_config_block.
 stage_line ::= use_stmt NEWLINE.
 stage_line ::= port_decl NEWLINE.
 stage_line ::= edge_stmt NEWLINE.

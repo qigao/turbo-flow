@@ -851,6 +851,101 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
+    it("parses node configuration blocks through existing option semantics") {
+      static const char *src =
+          "source input adapter cnet.stream {\n"
+          "  resource vehicle_listener\n"
+          "}\n"
+          "stage classify operation Vehicle.classify {\n"
+          "  worker 4\n"
+          "  capacity 64\n"
+          "  exec thread workers 3\n"
+          "  retry attempts 3 delay 10\n"
+          "  reorder capacity 16 timeout 500\n"
+          "}\n"
+          "stage main {\n"
+          "  input -> classify\n"
+          "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      const turbo_flow_stage_plan_t *stage;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+
+      stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "input"));
+      check_not_null(stage);
+      check_true(stage->is_source);
+      check_equal(stage->adapter_name, "cnet.stream");
+      check_equal(stage->resource_name, "vehicle_listener");
+
+      stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "classify"));
+      check_not_null(stage);
+      check_equal(stage->operation_name, "Vehicle.classify");
+      check_equal(stage->data_strategy, TURBO_FLOW_DATA_WORKER_POOL);
+      check_equal(stage->data_worker_count, 4);
+      check_equal(stage->exec.kind, TURBO_FLOW_EXEC_THREAD_POOL);
+      check_equal(stage->exec.workers, 3);
+      check_equal(stage->retry.max_attempts, 3);
+      check_equal(stage->retry.delay_ms, 10);
+      check_equal(stage->reorder.capacity, 16);
+      check_equal(stage->reorder.timeout_ms, 500);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("parses step configuration blocks inside reusable stages") {
+      static const char *src =
+          "stage cleanse {\n"
+          "  in raw\n"
+          "  out clean\n"
+          "  step trim operation Text.trim {\n"
+          "    exec coro lanes 2 pool 8\n"
+          "  }\n"
+          "  raw -> trim -> clean\n"
+          "}\n"
+          "stage main {\n"
+          "  source input\n"
+          "  use c = cleanse\n"
+          "  input -> c.raw\n"
+          "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      const turbo_flow_stage_plan_t *stage;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+
+      stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "cleanse.trim"));
+      check_not_null(stage);
+      check_equal(stage->operation_name, "Text.trim");
+      check_equal(stage->exec.kind, TURBO_FLOW_EXEC_CORO_POOL);
+      check_equal(stage->exec.lanes, 2);
+      check_equal(stage->exec.pool_capacity, 8);
+
+      stage = turbo_flow_stage_at(flow, (size_t)turbo_flow_find_stage(flow, "c.trim"));
+      check_not_null(stage);
+      check_equal(stage->operation_name, "Text.trim");
+      check_equal(stage->exec.kind, TURBO_FLOW_EXEC_CORO_POOL);
+      check_equal(stage->exec.lanes, 2);
+      check_equal(stage->exec.pool_capacity, 8);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects duplicate options across node headers and config blocks") {
+      static const char *src =
+          "stage classify operation Vehicle.classify {\n"
+          "  operation Vehicle.other\n"
+          "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_EALREADY);
+      check_equal(turbo_flow_last_error(flow)->line, 2);
+      check_contains(turbo_flow_last_error(flow)->message, "duplicate operation");
+
+      turbo_flow_destroy(flow);
+    }
+
     it("accepts reusable stage definitions with ports") {
       static const char *src = "stage clean {\n"
                                "  in input\n"
