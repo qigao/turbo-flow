@@ -71,7 +71,6 @@ static void flow_plan_owned_resource_vector_release(vec_t *resources) {
 
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   if (!plan) return;
-  flow_plan_owned_resource_vector_release(&plan->owned_resources);
   for (size_t i = 0u; i < vec_size(&plan->cflow_regions); ++i) {
     flow_cflow_region_plan_t *region =
         (flow_cflow_region_plan_t *)vec_at(&plan->cflow_regions, i);
@@ -92,6 +91,14 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->stage_semantics);
   vec_destroy(&plan->cflow_regions);
   vec_destroy(&plan->cflow_region_by_stage);
+
+  /*
+   * Borrowed FunctionDesc/DataDesc/callable code and type traits may belong to
+   * an owned plugin module. Tear down every compiled artifact first; release
+   * the module/resource lease only after no plan object can invoke provider
+   * callbacks during destruction.
+   */
+  flow_plan_owned_resource_vector_release(&plan->owned_resources);
   vec_destroy(&plan->owned_resources);
   memset(plan, 0, sizeof(*plan));
 }
