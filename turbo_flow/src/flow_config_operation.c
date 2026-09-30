@@ -23,7 +23,7 @@ static void flow_operation_path(char *path, size_t capacity, size_t index, const
 
 static int flow_operation_identifier(const json_value_t *value, size_t index, const char *field,
                                      const char **result, turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   size_t length;
   const char *text;
   flow_operation_path(path, sizeof(path), index, field);
@@ -47,7 +47,7 @@ static int flow_operation_identifier(const json_value_t *value, size_t index, co
 static int flow_operation_integer(const json_value_t *value, size_t index, const char *field,
                                   uint64_t minimum, uint64_t maximum, uint64_t *result,
                                   turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   double number;
   uint64_t converted;
   flow_operation_path(path, sizeof(path), index, field);
@@ -66,7 +66,7 @@ static int flow_operation_integer(const json_value_t *value, size_t index, const
 static int flow_operation_enum(const json_value_t *value, size_t index, const char *field,
                                const char *const *values, size_t value_count,
                                turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   const char *text;
   flow_operation_path(path, sizeof(path), index, field);
   if (!value || json_type(value) != JSON_STRING)
@@ -81,7 +81,7 @@ static int flow_operation_enum(const json_value_t *value, size_t index, const ch
 
 static int flow_operation_validate_permissions(const json_value_t *permissions, size_t index,
                                                turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   if (!permissions || json_type(permissions) != JSON_ARRAY) {
     flow_operation_path(path, sizeof(path), index, "permissions");
     return flow_config_error(error, SALTS_EINVAL, path, "permissions must be an array");
@@ -130,7 +130,7 @@ int flow_config_validate_operation_bindings(const json_value_t *bindings,
     const char *operation = NULL;
     const char *resource = NULL;
     uint64_t max_result = 0u, max_retained = 0u;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     int rc;
     flow_operation_path(path, sizeof(path), i, NULL);
     rc = flow_config_object_keys(binding, path, flow_operation_keys,
@@ -308,7 +308,7 @@ static void flow_materializer_path(char *path, size_t capacity, size_t index,
 static int flow_materializer_identifier(const json_value_t *value, size_t index,
                                         const char *field, const char **result,
                                         turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   const char *text;
   size_t length;
   flow_materializer_path(path, sizeof(path), index, field);
@@ -332,7 +332,7 @@ static int flow_materializer_identifier(const json_value_t *value, size_t index,
 static int flow_materializer_schema_version(const json_value_t *value, size_t index,
                                             uint32_t *out,
                                             turbo_flow_config_error_t *error) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   double number;
   uint64_t converted;
   flow_materializer_path(path, sizeof(path), index, "schema_version");
@@ -354,7 +354,7 @@ static int flow_materializer_encoding_value(
     turbo_flow_config_materializer_encoding_t *out,
     turbo_flow_config_error_t *error) {
   static const char *const names[] = {"tbe", "json", "csv", "xml", "utf8", "opaque"};
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   const char *text;
   flow_materializer_path(path, sizeof(path), index, "encoding");
   if (!value || json_type(value) != JSON_STRING)
@@ -384,7 +384,7 @@ int flow_config_validate_materializer_bindings(const json_value_t *bindings,
     const char *plugin = NULL, *schema = NULL;
     turbo_flow_config_materializer_encoding_t encoding;
     uint32_t schema_version = 0u;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     int rc;
     flow_materializer_path(path, sizeof(path), i, NULL);
     rc = flow_config_object_keys(binding, path, flow_materializer_keys,
