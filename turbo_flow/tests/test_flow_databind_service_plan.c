@@ -54,10 +54,23 @@ static turbo_flow_operation_port_binding_t service_param_port(
   return port;
 }
 
+static turbo_flow_operation_port_binding_t service_status_port(void) {
+  turbo_flow_operation_port_binding_t port =
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  port.port_index = 1u;
+  port.domain = TURBO_FLOW_DOMAIN_DATA;
+  port.direction = TURBO_FLOW_OPERATION_PORT_OUTPUT;
+  port.value_kind = TURBO_FLOW_OPERATION_VALUE_RETURN;
+  port.storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  port.parameter_index = SIZE_MAX;
+  port.data = &cmeta_data_int;
+  return port;
+}
+
 static int register_service_stage(
     turbo_flow_t *flow, int use_other_function) {
   turbo_flow_operation_descriptor_t operation;
-  turbo_flow_operation_port_binding_t ports[2];
+  turbo_flow_operation_port_binding_t ports[3];
   turbo_flow_reflected_operation_registration_t registration =
       TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
   turbo_flow_operation_provider_registration_t provider =
@@ -106,12 +119,13 @@ static int register_service_stage(
       0u, TURBO_FLOW_OPERATION_PORT_INPUT, 0u, request.data);
   ports[1] = service_param_port(
       0u, TURBO_FLOW_OPERATION_PORT_OUTPUT, 1u, response.data);
+  ports[2] = service_status_port();
 
   registration.operation = &operation;
   registration.function = native.function;
   registration.abi = abi;
   registration.ports = ports;
-  registration.port_count = 2u;
+  registration.port_count = 3u;
   registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
 
   provider.operation_name = operation.name;
