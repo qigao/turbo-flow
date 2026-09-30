@@ -117,10 +117,28 @@ jobs:
           set -euxo pipefail
           cmake --build build/materializer-abi \
             --target test_flow_plugin_materializer test_materializer_binding_config \
-                     test_flow_plugin_materializer_generation test_flow_reflected_operation \
+                     test_flow_plugin_materializer_generation test_flow_plugin_operation_runtime \
+                     test_flow_reflected_operation \
             -j2
           ctest --test-dir build/materializer-abi \
-            -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation|test_flow_reflected_operation)$' \
+            -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation|test_flow_plugin_operation_runtime|test_flow_reflected_operation)
+
+      - name: Restore validation-only CMake assembly
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify committed source remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+ \
             --output-on-failure
 
       - name: Restore validation-only CMake assembly
