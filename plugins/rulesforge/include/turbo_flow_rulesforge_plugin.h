@@ -4,6 +4,7 @@
 #include "turbo_flow.h"
 
 #include <cmeta/data.h>
+#include <cmeta/function.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -54,6 +55,21 @@ static const cmeta_data_desc turbo_flow_rulesforge_decision_data = {
     sizeof(cmeta_data_desc), CMETA_DATA_DESC_ABI_VERSION, TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID,
     "Decision", CMETA_DATA_STRUCT, &turbo_flow_rulesforge_decision_type,
     &turbo_flow_rulesforge_decision_shape, NULL, NULL, NULL};
+
+#ifndef __cplusplus
+/*
+ * Canonical typed operation semantics. The ABI3 plugin vtable is an execution
+ * mechanism subordinate to this CMeta FunctionDesc/FunctionAbi contract.
+ */
+FunctionDeclAsAbi(
+    fallible,
+    turbo_flow_rulesforge_decision,
+    &turbo_flow_rulesforge_decision_type,
+    CMETA_ABI_AGGREGATE,
+    turbo_flow_rulesforge_apply_contract,
+    (turbo_flow_rulesforge_applicant, applicant, CMETA_PARAM_IN,
+     &turbo_flow_rulesforge_applicant_type, CMETA_ABI_AGGREGATE));
+#endif
 
 static const turbo_flow_data_schema_t turbo_flow_rulesforge_applicant_schema = {
     sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA, TURBO_FLOW_DATA_ENCODING_JSON,

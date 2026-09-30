@@ -283,27 +283,107 @@ static int checked_add(size_t *sum, size_t add) {
   *sum += add;
   return SALTS_OK;
 }
-static int operation_graph_validate(turbo_flow_t *flow,
-                                    const turbo_flow_resolved_operation_binding_view_t *v,
-                                    const char **resource) {
-  const turbo_flow_operation_descriptor_t *m = turbo_flow_find_operation(flow, v->operation);
+static int operation_reflected_contract(
+    const turbo_flow_t *flow, const char *operation_name,
+    const cmeta_data_desc **input_out, const cmeta_data_desc **output_out) {
+  turbo_flow_reflected_operation_view_t view =
+      TURBO_FLOW_REFLECTED_OPERATION_VIEW_INIT;
+  const turbo_flow_operation_port_binding_t *input = NULL;
+  const turbo_flow_operation_port_binding_t *output = NULL;
+  const cmeta_param_desc *param;
+  int rc;
+
+  if (!flow || !operation_name || !input_out || !output_out)
+    return SALTS_EINVAL;
+  *input_out = NULL;
+  *output_out = NULL;
+
+  rc = turbo_flow_reflected_operation(flow, operation_name, &view);
+  if (rc != SALTS_OK)
+    return rc == SALTS_ENOENT ? SALTS_ENOTSUP : rc;
+  if (!view.function || !view.abi ||
+      !cmeta_function_desc_valid(view.function) ||
+      !cmeta_function_abi_desc_valid(view.abi) ||
+      !cmeta_function_desc_equal(view.abi->function, view.function) ||
+      view.port_count != 2u || !view.ports)
+    return SALTS_ENOTSUP;
+
+  for (size_t i = 0u; i < view.port_count; ++i) {
+    const turbo_flow_operation_port_binding_t *port = &view.ports[i];
+    if (!port->data || !cmeta_data_desc_valid(port->data))
+      return SALTS_EPROTO;
+    if (port->direction == TURBO_FLOW_OPERATION_PORT_INPUT) {
+      if (input || port->value_kind != TURBO_FLOW_OPERATION_VALUE_PARAMETER ||
+          port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT)
+        return SALTS_ENOTSUP;
+      input = port;
+    } else if (port->direction == TURBO_FLOW_OPERATION_PORT_OUTPUT) {
+      if (output || port->value_kind != TURBO_FLOW_OPERATION_VALUE_RETURN ||
+          port->storage != TURBO_FLOW_OPERATION_STORAGE_DIRECT ||
+          port->parameter_index != SIZE_MAX)
+        return SALTS_ENOTSUP;
+      output = port;
+    } else {
+      return SALTS_ENOTSUP;
+    }
+  }
+  if (!input || !output || input->parameter_index >= view.function->param_count)
+    return SALTS_ENOTSUP;
+
+  param = cmeta_function_param(view.function, input->parameter_index);
+  if (!param ||
+      (param->flags & CMETA_PARAM_DIRECTION_MASK) != CMETA_PARAM_IN ||
+      !cmeta_type_equal(param->type, input->data->storage_type) ||
+      !view.function->return_type ||
+      view.function->return_type->kind == CMETA_T_VOID ||
+      !cmeta_type_equal(view.function->return_type,
+                        output->data->storage_type))
+    return SALTS_EPROTO;
+
+  *input_out = input->data;
+  *output_out = output->data;
+  return SALTS_OK;
+}
+
+static int operation_graph_validate(
+    turbo_flow_t *flow,
+    const turbo_flow_resolved_operation_binding_view_t *v,
+    const char **resource,
+    const cmeta_data_desc **input_data,
+    const cmeta_data_desc **output_data) {
+  const turbo_flow_operation_descriptor_t *m =
+      turbo_flow_find_operation(flow, v->operation);
   int found = 0;
+  int rc;
+
   if (!m) return SALTS_EINVAL;
   if (m->size != sizeof(*m)) return SALTS_EINVAL;
-  if (m->version != v->version || m->input_domain != m->output_domain ||
-      !same_name(m->input_type, m->output_type))
-    return SALTS_EPROTO;
-  if (m->domain != TURBO_FLOW_DOMAIN_DATA || m->input_domain != TURBO_FLOW_DOMAIN_DATA ||
-      !m->input_type || m->scope.data != TURBO_FLOW_DATA_SCOPE_MESSAGE ||
+  if (m->version != v->version) return SALTS_EPROTO;
+
+  /*
+   * Native function/type/effect semantics must already exist in the canonical
+   * reflected registry. ABI3 is an implementation/session/result-owner
+   * mechanism only; a legacy string-typed operation is not a fallback.
+   */
+  rc = operation_reflected_contract(
+      flow, v->operation, input_data, output_data);
+  if (rc != SALTS_OK) return rc;
+
+  if (m->domain != TURBO_FLOW_DOMAIN_DATA ||
+      m->input_domain != TURBO_FLOW_DOMAIN_NONE || m->input_type ||
+      m->output_domain != TURBO_FLOW_DOMAIN_NONE || m->output_type ||
+      m->scope.data != TURBO_FLOW_DATA_SCOPE_MESSAGE ||
       m->scope.state != TURBO_FLOW_STATE_SCOPE_NONE ||
       m->scope.lifetime != TURBO_FLOW_LIFETIME_CALL ||
       m->scope.concurrency != TURBO_FLOW_CONCURRENCY_INLINE_LANE ||
       m->scope.authority != TURBO_FLOW_AUTHORITY_DATA_MUTATION ||
       m->flags != TURBO_FLOW_OPERATION_STAGE ||
       m->execution_mask != TURBO_FLOW_OPERATION_EXEC_INLINE ||
-      m->runtime.handoff != TURBO_FLOW_HANDOFF_DIRECT || m->runtime.settlement ||
-      m->runtime.deadline_ms || m->runtime.cancellation != TURBO_FLOW_CANCELLATION_NONE)
+      m->runtime.handoff != TURBO_FLOW_HANDOFF_DIRECT ||
+      m->runtime.settlement || m->runtime.deadline_ms ||
+      m->runtime.cancellation != TURBO_FLOW_CANCELLATION_NONE)
     return SALTS_ENOTSUP;
+
   for (size_t j = 0; j < turbo_flow_stage_count(flow); ++j) {
     const turbo_flow_stage_plan_t *s = turbo_flow_stage_at(flow, j);
     if (!s || !same_name(s->operation_name, v->operation)) continue;
@@ -344,6 +424,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     turbo_flow_result_memory_requirements_t cost;
     flow_plugin_operation_binding_t *b = vec_at(bindings, i);
     const turbo_flow_plugin_operation_v3_t *op = NULL;
+    const cmeta_data_desc *canonical_input = NULL;
+    const cmeta_data_desc *canonical_output = NULL;
     int plugin_found = 0, operation_found = 0;
     const char *resource = NULL;
     size_t capacity;
@@ -369,10 +451,15 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
                              : !operation_found ? "operation"
                                                 : "version",
                              SALTS_EINVAL);
-    if (!same_name(op->input.data->stable_id, v.input_schema) ||
+    rc = operation_graph_validate(
+        flow, &v, &resource, &canonical_input, &canonical_output);
+    if (rc != SALTS_OK) return operation_error(error, i, "graph", rc);
+    if (!cmeta_data_desc_equal(op->input.data, canonical_input) ||
+        !same_name(canonical_input->stable_id, v.input_schema) ||
         op->input.schema_version != v.input_schema_version)
       return operation_error(error, i, "input_schema", SALTS_EPROTO);
-    if (!same_name(op->output.data->stable_id, v.output_schema) ||
+    if (!cmeta_data_desc_equal(op->output.data, canonical_output) ||
+        !same_name(canonical_output->stable_id, v.output_schema) ||
         op->output.schema_version != v.output_schema_version)
       return operation_error(error, i, "output_schema", SALTS_EPROTO);
     if (v.execution != TURBO_FLOW_CONFIG_OPERATION_INLINE ||
@@ -380,8 +467,6 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
         v.cancellation != TURBO_FLOW_CONFIG_OPERATION_CANCEL_NONE || v.deadline_ms ||
         v.permission_count)
       return operation_error(error, i, "profile", SALTS_ENOTSUP);
-    rc = operation_graph_validate(flow, &v, &resource);
-    if (rc != SALTS_OK) return operation_error(error, i, "graph", rc);
     if (v.resource) {
       turbo_flow_resolved_channel_view_t channel = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
       rc = turbo_flow_resolved_config_channel(resolved, v.resource, &channel);
@@ -397,8 +482,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
         v.max_retained_bytes > op->limits.max_retained_bytes ||
         v.max_steps > op->limits.max_steps || capacity < v.max_inflight ||
         capacity > FLOW_PLUGIN_OPERATION_MAX_INFLIGHT ||
-        op->input.data->storage_type->size > v.max_input_bytes ||
-        op->output.data->storage_type->size > v.max_result_bytes)
+        canonical_input->storage_type->size > v.max_input_bytes ||
+        canonical_output->storage_type->size > v.max_result_bytes)
       return operation_error(error, i, "limits", SALTS_ENOSPC);
     turbo_flow_result_memory_requirements_init(&cost);
     rc = turbo_flow_result_memory_requirements(capacity, v.max_result_bytes, &cost);
@@ -411,6 +496,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
         checked_add(&required, sizeof(flow_plugin_result_entry_t)) != SALTS_OK)
       return operation_error(error, i, "memory", SALTS_EINVAL);
     b->operation = *op;
+    b->input_data = canonical_input;
+    b->output_data = canonical_output;
     turbo_flow_plugin_operation_request_v3_init(&b->request);
     b->request.resolved = resolved;
     b->request.operation_name = op->operation_name;
@@ -479,8 +566,8 @@ static int operation_invoke(turbo_flow_msg_t *msg, void *ctx) {
       goto done;
     }
   }
-  rc = turbo_flow_data_schema_match(b->operation.input.projection, b->operation.input.data, schema,
-                                    data);
+  rc = turbo_flow_data_schema_match(
+      b->operation.input.projection, b->input_data, schema, data);
   if (rc != SALTS_OK) goto done;
   admission = atomic_load(&b->admission);
   for (;;) {
@@ -496,12 +583,12 @@ static int operation_invoke(turbo_flow_msg_t *msg, void *ctx) {
   }
   accepted = 1;
   error.phase = TURBO_FLOW_PLUGIN_OPERATION_PHASE_RESULT;
-  rc = turbo_flow_msg_result_claim(msg, b->result->owner, b->operation.output.data, &claim);
+  rc = turbo_flow_msg_result_claim(msg, b->result->owner, b->output_data, &claim);
   if (rc != SALTS_OK) goto done;
   turbo_flow_plugin_operation_input_v3_init(&input);
   input.value = value;
   input.data = data;
-  input.bytes = data->storage_type->size;
+  input.bytes = b->input_data->storage_type->size;
   turbo_flow_plugin_operation_budget_v3_init(&budget);
   budget.ctx = &charged;
   budget.charge = operation_charge;
@@ -511,11 +598,11 @@ static int operation_invoke(turbo_flow_msg_t *msg, void *ctx) {
   if (rc == SALTS_OK && charged.status != SALTS_OK) rc = charged.status;
   independent =
       turbo_flow_value_require_disjoint(value, input.bytes, candidate,
-                                        b->operation.output.data->storage_type->size) == SALTS_OK;
+                                        b->output_data->storage_type->size) == SALTS_OK;
   if (independent && msg->payload.data && msg->payload.len)
     independent =
         turbo_flow_value_require_disjoint(msg->payload.data, msg->payload.len, candidate,
-                                          b->operation.output.data->storage_type->size) == SALTS_OK;
+                                          b->output_data->storage_type->size) == SALTS_OK;
   if (!independent && rc == SALTS_OK) {
     rc = SALTS_EPROTO;
     error.phase = TURBO_FLOW_PLUGIN_OPERATION_PHASE_RESULT;

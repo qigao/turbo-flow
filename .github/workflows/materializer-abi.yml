@@ -117,10 +117,11 @@ jobs:
           set -euxo pipefail
           cmake --build build/materializer-abi \
             --target test_flow_plugin_materializer test_materializer_binding_config \
-                     test_flow_plugin_materializer_generation test_flow_reflected_operation \
+                     test_flow_plugin_materializer_generation test_flow_plugin_operation_runtime \
+                     test_flow_reflected_operation \
             -j2
           ctest --test-dir build/materializer-abi \
-            -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation|test_flow_reflected_operation)$' \
+            -R '^(test_flow_plugin_materializer|test_materializer_binding_config|test_flow_plugin_materializer_generation|test_flow_plugin_operation_runtime|test_flow_reflected_operation)$' \
             --output-on-failure
 
       - name: Restore validation-only CMake assembly
