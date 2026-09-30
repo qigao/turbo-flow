@@ -1,6 +1,47 @@
-#include "flow_internal.h"
+#include "flow_databind_internal.h"
 
 #include <string.h>
+
+void flow_databind_stage_binding_clear(flow_stage_plan_impl_t *stage) {
+  flow_databind_source_binding_t *binding;
+  if (!stage || !stage->databind_source) return;
+  binding = stage->databind_source;
+  tstr_freep(&binding->channel_name);
+  tstr_freep(&binding->message_type);
+  memset(binding, 0, sizeof(*binding));
+  free(binding);
+  stage->databind_source = NULL;
+}
+
+int flow_databind_channels_init(vec_t *channels) {
+  if (!channels) return SALTS_EINVAL;
+  return turbo_flow_stl_error(
+      vec_init_bytes(channels, sizeof(flow_databind_channel_plan_t),
+                     _Alignof(turbo_flow_max_align_t), SIZE_MAX));
+}
+
+void flow_databind_channels_destroy(vec_t *channels) {
+  if (!channels) return;
+  vec_destroy(channels);
+}
+
+int flow_databind_channels_verify(const vec_t *channels) {
+  if (!channels) return SALTS_EINVAL;
+  for (size_t channel_index = 0u;
+       channel_index < vec_size(channels); ++channel_index) {
+    const flow_databind_channel_plan_t *channel =
+        (const flow_databind_channel_plan_t *)vec_at_const(
+            channels, channel_index);
+    if (!channel || !channel->channel_name || !channel->message_type ||
+        !channel->data_stable_id || !channel->native.idl_type_name ||
+        !channel->native.data ||
+        strcmp(channel->message_type, channel->native.idl_type_name) != 0 ||
+        !cmeta_data_desc_valid(channel->native.data)) {
+      return SALTS_EPROTO;
+    }
+  }
+  return SALTS_OK;
+}
 
 static int flow_databind_text_equal(const char *left, const char *right) {
   return left && right && strcmp(left, right) == 0;
@@ -120,7 +161,7 @@ int flow_databind_source_bind(
   stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
   if (!stage || !stage->is_source || stage->is_port || stage->is_buffer)
     return SALTS_ENOTSUP;
-  if (stage->databind_source.bound) return SALTS_EALREADY;
+  if (stage->databind_source) return SALTS_EALREADY;
 
   /*
    * Multiple generated transport projections for one logical Channel must
@@ -131,12 +172,12 @@ int flow_databind_source_bind(
   for (size_t i = 0u; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *other =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!other || !other->databind_source.bound ||
-        strcmp(other->databind_source.channel_name,
+    if (!other || !other->databind_source ||
+        strcmp(other->databind_source->channel_name,
                binding->channel_name) != 0)
       continue;
     if (!flow_databind_binding_contract_equal(
-            &other->databind_source, binding))
+            other->databind_source, binding))
       return SALTS_EPROTO;
   }
 
@@ -148,9 +189,19 @@ int flow_databind_source_bind(
     return SALTS_ENOMEM;
   }
 
-  stage->databind_source = *binding;
-  stage->databind_source.channel_name = channel_name;
-  stage->databind_source.message_type = message_type;
+  {
+    flow_databind_source_binding_t *owned =
+        (flow_databind_source_binding_t *)calloc(1, sizeof(*owned));
+    if (!owned) {
+      tstr_freep(&channel_name);
+      tstr_freep(&message_type);
+      return SALTS_ENOMEM;
+    }
+    *owned = *binding;
+    owned->channel_name = channel_name;
+    owned->message_type = message_type;
+    stage->databind_source = owned;
+  }
   return SALTS_OK;
 }
 
@@ -186,10 +237,12 @@ int flow_plan_build_databind_channels(
         (flow_runtime_node_plan_t *)vec_at(&plan->nodes, stage_index);
     uint32_t contract_index = FLOW_PLAN_INDEX_NONE;
 
+    const flow_databind_source_binding_t *binding;
     if (!stage || !node) return SALTS_EPROTO;
-    if (!stage->databind_source.bound) continue;
+    binding = stage->databind_source;
+    if (!binding) continue;
     if (!stage->is_source ||
-        !flow_databind_source_binding_valid(&stage->databind_source))
+        !flow_databind_source_binding_valid(binding))
       return SALTS_EPROTO;
 
     for (size_t i = 0u; i < vec_size(&plan->databind_channels); ++i) {
@@ -198,11 +251,9 @@ int flow_plan_build_databind_channels(
               &plan->databind_channels, i);
       if (!existing ||
           !flow_databind_text_equal(
-              existing->channel_name,
-              stage->databind_source.channel_name))
+              existing->channel_name, binding->channel_name))
         continue;
-      if (!flow_databind_channel_plan_matches(
-              existing, &stage->databind_source))
+      if (!flow_databind_channel_plan_matches(existing, binding))
         return SALTS_EPROTO;
       if (i > UINT32_MAX) return SALTS_ERANGE;
       contract_index = (uint32_t)i;
@@ -213,10 +264,10 @@ int flow_plan_build_databind_channels(
       flow_databind_channel_plan_t channel = {0};
       size_t next = vec_size(&plan->databind_channels);
       if (next > UINT32_MAX) return SALTS_ERANGE;
-      channel.channel_name = stage->databind_source.channel_name;
-      channel.message_type = stage->databind_source.message_type;
-      channel.data_stable_id = stage->databind_source.native.data->stable_id;
-      channel.native = stage->databind_source.native;
+      channel.channel_name = binding->channel_name;
+      channel.message_type = binding->message_type;
+      channel.data_stable_id = binding->native.data->stable_id;
+      channel.native = binding->native;
       rc = turbo_flow_stl_error(
           vec_push(&plan->databind_channels, &channel));
       if (rc != SALTS_OK) return rc;
@@ -224,9 +275,9 @@ int flow_plan_build_databind_channels(
     }
 
     node->databind_channel_index = contract_index;
-    node->databind_transport = stage->databind_source.transport;
-    node->databind_format = stage->databind_source.format;
-    node->databind_transport_plan = stage->databind_source.transport_plan;
+    node->databind_transport = binding->transport;
+    node->databind_format = (uint32_t)binding->format;
+    node->databind_transport_plan = binding->transport_plan;
   }
 
   return SALTS_OK;
