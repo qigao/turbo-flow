@@ -881,6 +881,9 @@ TURBO_FLOW_API int flow_databind_source_bind(
     turbo_flow_t *flow, const char *stage_name,
     const flow_databind_source_binding_t *binding);
 void flow_databind_stage_binding_clear(flow_stage_plan_impl_t *stage);
+int flow_databind_channels_init(vec_t *channels);
+void flow_databind_channels_destroy(vec_t *channels);
+int flow_databind_channels_verify(const vec_t *channels);
 int flow_plan_build_databind_channels(
     const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
