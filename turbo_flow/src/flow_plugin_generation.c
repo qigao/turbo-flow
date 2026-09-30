@@ -70,7 +70,7 @@ static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int st
 static int flow_plugin_generation_provider_error(turbo_flow_config_error_t *error, int status,
                                                  const char *scope, const char *name,
                                                  const char *message) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   if (error && error->size >= sizeof(*error) && error->status != SALTS_OK) return status;
   (void)snprintf(path, sizeof(path), "$.%s.%s", scope, name);
   return flow_plugin_generation_error(error, status, path, message);
@@ -79,7 +79,7 @@ static int flow_plugin_generation_provider_error(turbo_flow_config_error_t *erro
 static int flow_plugin_generation_owner_error(turbo_flow_config_error_t *error, int status,
                                               const flow_plugin_generation_owner_t *owner,
                                               const char *phase) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   (void)snprintf(path, sizeof(path), "$.%s.%s.owner.%s",
                  owner && owner->resource ? "channels" : "adapters",
                  owner && owner->name ? owner->name : "unknown", phase);
@@ -395,7 +395,7 @@ static int flow_plugin_materializers_stop_and_check(
 static int flow_plugin_generation_materializer_error(
     turbo_flow_config_error_t *error, int status, size_t index,
     const char *field, const char *message) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   (void)snprintf(path, sizeof(path), "$.materializer_bindings[%zu]%s%s", index,
                  field ? "." : "", field ? field : "");
   return flow_plugin_generation_error(error, status, path, message);

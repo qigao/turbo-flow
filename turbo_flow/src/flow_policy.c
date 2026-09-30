@@ -587,7 +587,7 @@ static int flow_rule_resolved_fields(const json_value_t *object, const char *cha
   for (size_t i = 0u; i < json_object_size(object); ++i) {
     const char *key = json_object_key(object, i);
     if (!key || !flow_rule_resolved_key_allowed(key, allowed, allowed_count)) {
-      char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+      char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
       if (scope && scope[0]) (void)snprintf(path, sizeof(path), "%s.%s", scope, key ? key : "?");
       else (void)snprintf(path, sizeof(path), "%s", key ? key : "?");
       return flow_rule_resolved_error(error, SALTS_EINVAL, channel_name, path,

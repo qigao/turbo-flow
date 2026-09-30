@@ -46,7 +46,7 @@ int flow_config_object_keys(const json_value_t *object, const char *path,
   for (size_t i = 0; i < json_object_size(object); ++i) {
     const char *key = json_object_key(object, i);
     if (!key || !flow_config_key_allowed(key, allowed, count)) {
-      char field_path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+      char field_path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
       (void)snprintf(field_path, sizeof(field_path), "%s.%s", path, key ? key : "?");
       return flow_config_error(error, SALTS_EINVAL, field_path, "unknown field");
     }
@@ -98,7 +98,7 @@ static int flow_config_merge(json_value_t *merged, json_value_t *sources,
     json_value_t *value = json_object_value(fields, i);
     if (!key || !key[0]) return flow_config_error(error, SALTS_EINVAL, path, "empty field name");
     if (json_object_get(merged, key)) {
-      char field_path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+      char field_path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
       (void)snprintf(field_path, sizeof(field_path), "%s.%s", path, key);
       return flow_config_error(error, SALTS_EALREADY, field_path, "field has more than one source");
     }
@@ -127,7 +127,7 @@ static int flow_config_validate_profiles(const json_value_t *profiles, const jso
       const int adapter_found = adapter && json_object_get(adapters, adapter);
       const int channel_found = adapter && channels && json_object_get(channels, adapter);
       if (!adapter || (!adapter_found && !channel_found) || (adapter_found && channel_found)) {
-        char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+        char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
         (void)snprintf(path, sizeof(path), "$.profiles.%s.%s", name, parameter);
         return flow_config_error(
             error,
@@ -149,7 +149,7 @@ static int flow_config_validate_fragments(const json_value_t *fragments,
   for (size_t category_index = 0; category_index < json_object_size(fragments); ++category_index) {
     const char *category = json_object_key(fragments, category_index);
     json_value_t *category_map = json_object_value(fragments, category_index);
-    char category_path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char category_path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     (void)snprintf(category_path, sizeof(category_path), "$.fragments.%s", category);
     if (!category_map || json_type(category_map) != JSON_OBJECT)
       return flow_config_error(error, SALTS_EINVAL, category_path,
@@ -158,7 +158,7 @@ static int flow_config_validate_fragments(const json_value_t *fragments,
          ++fragment_index) {
       const char *name = json_object_key(category_map, fragment_index);
       json_value_t *fields = json_object_value(category_map, fragment_index);
-      char fragment_path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+      char fragment_path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
       (void)snprintf(fragment_path, sizeof(fragment_path), "%s.%s", category_path,
                      name ? name : "?");
       if (!name || !name[0] || !fields || json_type(fields) != JSON_OBJECT ||
@@ -174,7 +174,7 @@ static int flow_config_plugin_string(const json_value_t *plugin, const char *fie
                                      size_t index, turbo_flow_config_error_t *error) {
   json_value_t *value = plugin ? json_object_get(plugin, field) : NULL;
   const char *text = value && json_type(value) == JSON_STRING ? json_string(value) : NULL;
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   (void)snprintf(path, sizeof(path), "$.plugins[%zu].%s", index, field);
   if (!text || !text[0])
     return flow_config_error(error, SALTS_EINVAL, path, "expected non-empty string");
@@ -214,7 +214,7 @@ static int flow_config_validate_plugins(const json_value_t *plugins,
   for (size_t i = 0u; i < json_array_size(plugins); ++i) {
     json_value_t *plugin = json_array_get(plugins, i);
     json_value_t *id;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     int rc;
     (void)snprintf(path, sizeof(path), "$.plugins[%zu]", i);
     rc = flow_config_object_keys(plugin, path, plugin_keys,
@@ -257,7 +257,7 @@ static int flow_config_validate_channels(const json_value_t *channels,
     json_value_t *channel = json_object_value(channels, i);
     json_value_t *kind;
     json_value_t *config;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     int rc;
     (void)snprintf(path, sizeof(path), "$.channels.%s", name ? name : "?");
     if (!name || !name[0])
@@ -400,7 +400,7 @@ static int flow_config_resolve_adapters(const json_value_t *input_adapters,
     json_value_t *resolved = json_create_object();
     json_value_t *merged = json_create_object();
     json_value_t *sources = json_create_object();
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     int rc;
     (void)snprintf(path, sizeof(path), "$.adapters.%s", name ? name : "?");
     if (!resolved || !merged || !sources) {
@@ -812,7 +812,7 @@ int turbo_flow_resolved_config_preflight_adapter_kinds(const turbo_flow_resolved
     json_value_t *kind = adapter ? json_object_get(adapter, "kind") : NULL;
     const char *kind_name = kind && json_type(kind) == JSON_STRING ? json_string(kind) : NULL;
     int enabled = 0;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     if (!name || !name[0] || !kind_name || !kind_name[0])
       return flow_config_error(error, SALTS_EPROTO, "$.adapters",
                                "resolved adapter identity is invalid");

@@ -155,7 +155,7 @@ int turbo_flow_product_preflight(const turbo_flow_resolved_config_t *config,
     json_value_t *kind = adapter ? json_object_get(adapter, "kind") : NULL;
     const char *kind_name =
         kind && json_type(kind) == JSON_STRING ? json_string(kind) : NULL;
-    char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+    char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
     if (!name || !name[0] || !kind_name || !kind_name[0])
       return flow_product_error(error, SALTS_EPROTO, "$.adapters",
                                "resolved adapter identity is invalid");
@@ -174,7 +174,7 @@ static int flow_product_channel_kind(const turbo_flow_resolved_config_t *config,
   json_value_t *channels;
   json_value_t *channel;
   json_value_t *kind;
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   if (kind_name) *kind_name = NULL;
   if (!config || !config->document || !resource_name || !resource_name[0] || !kind_name)
     return SALTS_EINVAL;
@@ -205,7 +205,7 @@ static int flow_product_stage_reference_seen(const turbo_flow_t *flow, size_t st
 
 static int flow_product_provider_error(turbo_flow_config_error_t *error, int status,
                                        const char *scope, const char *name) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   if (error && error->size >= sizeof(*error) && error->status != SALTS_OK) return status;
   (void)snprintf(path, sizeof(path), "$.%s.%s", scope, name);
   return flow_product_error(error, status, path, "product provider registration failed");
@@ -236,7 +236,7 @@ int turbo_flow_product_assemble_graph(turbo_flow_t *flow,
       rc = flow_product_channel_kind(config, resource_name, &kind, error);
       if (rc != SALTS_OK) return rc;
       if (!flow_product_resource_provider(registry, kind)) {
-        char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+        char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
         (void)snprintf(path, sizeof(path), "$.channels.%s.kind", resource_name);
         return flow_product_error(error, SALTS_ENOTSUP, path,
                                  "Graph resource kind has no product provider");
@@ -246,7 +246,7 @@ int turbo_flow_product_assemble_graph(turbo_flow_t *flow,
       turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
       rc = turbo_flow_resolved_config_adapter(config, adapter_name, &view);
       if (rc != SALTS_OK) {
-        char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+        char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
         (void)snprintf(path, sizeof(path), "$.adapters.%s", adapter_name);
         return flow_product_error(error, rc, path,
                                  "Graph adapter does not resolve to configured adapter");
