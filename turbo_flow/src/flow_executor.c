@@ -293,7 +293,7 @@ int flow_execute_threadpool_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *st
   flow_threadpool_task_t task;
   flow_pool_record_t *record;
   const turbo_flow_operation_runtime_contract_t *runtime =
-      flow_stage_operation_runtime(flow, stage);
+      executor ? &executor->runtime : NULL;
   int rc;
 
   if (!adapter || !adapter->pool) {
@@ -345,7 +345,7 @@ static int flow_execute_coro_stage_locked(turbo_flow_t *flow, flow_stage_plan_im
                                           flow_stage_completion_t *completion) {
   flow_coro_task_t task;
   const turbo_flow_operation_runtime_contract_t *runtime =
-      flow_stage_operation_runtime(flow, stage);
+      executor ? &executor->runtime : NULL;
   coro_scheduler_t *scheduler;
   coro_t *co;
   int rc;
