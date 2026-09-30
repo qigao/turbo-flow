@@ -201,6 +201,49 @@ statements but are ordinary segments after `adapter`, `operation`, or
 `resource`. In particular, `when` starts expression capture only after an arrow
 on the same route line, so bindings such as `rules.when` remain unambiguous.
 
+Node configuration blocks reuse these exact option setters; they are not a second
+configuration model.
+
+```flow
+source input adapter cnet.stream {
+  resource vehicle_listener
+}
+
+stage classify operation Vehicle.classify {
+  worker 4
+  capacity 64
+  exec thread workers 3
+  retry attempts 3 delay 10
+  reorder capacity 16 timeout 500
+}
+```
+
+For `source`, a block may follow zero or more inline source options.
+
+For an atomic `stage`, at least one option must appear before `{`:
+
+```flow
+stage classify operation Vehicle.classify {
+  exec thread workers 3
+}
+```
+
+This is intentional. The existing form
+
+```flow
+stage cleanse {
+  in raw
+  out clean
+  ...
+}
+```
+
+continues to mean a reusable composite stage. The parser never guesses whether a
+bare `stage name { ... }` is an atomic node or a composite from its body.
+
+`step` declarations inside a stage block may also use an option block because
+`step` has no composite-stage meaning.
+
 Supported stage options:
 
 ```text
