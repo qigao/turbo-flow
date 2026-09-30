@@ -253,7 +253,7 @@ typedef enum turbo_flow_content_flags_e {
 } turbo_flow_content_flags_t;
 
 /**
- * Immutable content identity owned by a domain adapter or registry-facing host.
+ * Immutable content identity owned by a domain adapter or projection-binding host.
  *
  * It describes the original payload bytes and never owns a parsed value. Empty
  * schema fields mean that content is opaque or awaits explicit projection binding.
@@ -305,7 +305,7 @@ TURBO_FLOW_C_API int turbo_flow_content_descriptor_init(turbo_flow_content_descr
 TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_check(const turbo_flow_content_descriptor_t *descriptor);
 
-/** Declare a trusted registry key on an initialized descriptor. */
+/** Declare a trusted projection-contract identity on an initialized descriptor. */
 TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_declare_schema(turbo_flow_content_descriptor_t *descriptor,
                                              const char *schema_name, const char *type_name,
@@ -316,7 +316,7 @@ TURBO_FLOW_C_API int turbo_flow_content_media_type_normalize(const char *media_t
                                                       turbo_flow_data_encoding_t *encoding_out,
                                                       const char **normalized_media_type_out);
 
-/** Resolve and declare a trusted schema while the owner may still mutate the descriptor. */
+/** Bind/verify projection identity while the owner may still mutate the descriptor. */
 TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descriptor,
                                       const turbo_flow_projection_registry_t *projection_registry,
@@ -329,7 +329,7 @@ TURBO_FLOW_C_API int turbo_flow_content_descriptor_from_media(turbo_flow_content
                                                        const char *media_type, const char *identity,
                                                        const turbo_flow_content_binding_t *binding);
 
-/** Validate exact registry-key and declared-schema compatibility. */
+/** Validate exact content/projection identity compatibility. */
 TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_validate(const turbo_flow_content_descriptor_t *expected,
                                        const turbo_flow_content_descriptor_t *actual);
@@ -2849,7 +2849,8 @@ TURBO_FLOW_C_API int turbo_flow_msg_content_descriptor_owned(const turbo_flow_ms
 
 /** Explicit host-owned content-to-projection binding cache; no schema authority is created. */
 TURBO_FLOW_C_API turbo_flow_projection_registry_t *turbo_flow_projection_registry_create(void);
-TURBO_FLOW_C_API void turbo_flow_projection_registry_destroy(turbo_flow_projection_registry_t *registry);
+TURBO_FLOW_C_API void turbo_flow_projection_registry_destroy(
+    turbo_flow_projection_registry_t *projection_registry);
 
 /**
  * Register one exact content match and copied projection identity.
@@ -2858,14 +2859,15 @@ TURBO_FLOW_C_API void turbo_flow_projection_registry_destroy(turbo_flow_projecti
  * is rejected; providers must compile/load binding plans outside this cache and
  * register projection identity with `schema_text == NULL`.
  */
-TURBO_FLOW_C_API int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *registry,
-                                                  const turbo_flow_content_descriptor_t *match,
-                                                  const turbo_flow_data_schema_t *schema);
+TURBO_FLOW_C_API int turbo_flow_projection_registry_register(
+    turbo_flow_projection_registry_t *projection_registry,
+    const turbo_flow_content_descriptor_t *match,
+    const turbo_flow_data_schema_t *projection);
 
 /**
- * Return a registry-owned stable schema pointer, or SALTS_ENOENT.
- * The pointer remains valid until the host destroys the registry; destruction
- * must be serialized after all adapters and callers stop using it.
+ * Return a cache-owned stable projection identity, or SALTS_ENOENT.
+ * The pointer remains valid until the host destroys the projection registry;
+ * destruction must be serialized after all adapters and callers stop using it.
  */
 TURBO_FLOW_C_API int turbo_flow_projection_registry_resolve(const turbo_flow_projection_registry_t *projection_registry,
                                                  const turbo_flow_content_descriptor_t *descriptor,
