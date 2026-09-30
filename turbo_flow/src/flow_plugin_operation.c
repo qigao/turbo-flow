@@ -135,8 +135,14 @@ TURBO_FLOW_API int flow_plugin_bind_cflow_function(
   }
   if (plugin_status != SALTS_PLUGIN_OK || !entry) {
     rc = flow_set_error_keep_state(
-        flow, flow_plugin_status_to_salts(plugin_status), 0u, 0u,
-        salts_plugin_status_string(plugin_status));
+        flow,
+        plugin_status == SALTS_PLUGIN_OK
+            ? SALTS_EPROTO
+            : flow_plugin_status_to_salts(plugin_status),
+        0u, 0u,
+        plugin_status == SALTS_PLUGIN_OK
+            ? "plugin export lookup returned no entry"
+            : salts_plugin_status_string(plugin_status));
     goto release_lease;
   }
 
