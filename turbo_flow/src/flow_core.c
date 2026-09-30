@@ -1,4 +1,5 @@
 #include "flow_internal.h"
+#include "flow_provider_config_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -83,6 +84,7 @@ void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage) {
   tstr_freep(&stage->adapter_name);
   tstr_freep(&stage->operation_name);
   tstr_freep(&stage->resource_name);
+  flow_provider_config_literals_destroy(&stage->provider_config_literals);
   flow_databind_stage_binding_clear(stage);
 }
 
