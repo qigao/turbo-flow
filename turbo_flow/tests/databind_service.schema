@@ -11,4 +11,5 @@ message AddResponse {
 
 service Calc {
   Add: AddRequest -> AddResponse;
+  Other: AddRequest -> AddResponse;
 }
