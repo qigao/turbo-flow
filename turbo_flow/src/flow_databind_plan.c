@@ -300,8 +300,8 @@ static int flow_databind_service_native_valid(
   if (!binding) return 0;
   native = &binding->native;
   return binding->bound &&
-         (binding->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP ||
-          binding->transport == FLOW_DATABIND_SERVICE_TRANSPORT_RPC) &&
+         (binding->transport == DATA_BIND_TRANSPORT_HTTP ||
+          binding->transport == DATA_BIND_TRANSPORT_RPC) &&
          binding->service_name && binding->service_name[0] &&
          binding->operation_name && binding->operation_name[0] &&
          binding->codec_factory &&
@@ -313,9 +313,9 @@ static int flow_databind_service_native_valid(
          native->request && native->response &&
          flow_databind_native_equal(native->request, &binding->request) &&
          flow_databind_native_equal(native->response, &binding->response) &&
-         ((binding->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP &&
+         ((binding->transport == DATA_BIND_TRANSPORT_HTTP &&
            binding->projection.http) ||
-          (binding->transport == FLOW_DATABIND_SERVICE_TRANSPORT_RPC &&
+          (binding->transport == DATA_BIND_TRANSPORT_RPC &&
            binding->projection.rpc));
 }
 
@@ -377,9 +377,9 @@ void flow_databind_services_destroy(vec_t *services) {
     flow_databind_service_plan_t *service =
         (flow_databind_service_plan_t *)vec_at(services, i);
     if (!service) continue;
-    if (service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP) {
+    if (service->transport == DATA_BIND_TRANSPORT_HTTP) {
       data_bind_http_method_plan_free(service->method.http);
-    } else if (service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_RPC) {
+    } else if (service->transport == DATA_BIND_TRANSPORT_RPC) {
       data_bind_rpc_method_plan_free(service->method.rpc);
     }
     memset(service, 0, sizeof(*service));
@@ -401,11 +401,11 @@ int flow_databind_services_verify(
         !service->function || !cmeta_function_desc_valid(service->function))
       return SALTS_EPROTO;
 
-    if (service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP &&
+    if (service->transport == DATA_BIND_TRANSPORT_HTTP &&
         service->method.http) {
       binding = data_bind_http_method_plan_binding(service->method.http);
       transport_plan = data_bind_http_method_plan_transport(service->method.http);
-    } else if (service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_RPC &&
+    } else if (service->transport == DATA_BIND_TRANSPORT_RPC &&
                service->method.rpc) {
       binding = data_bind_rpc_method_plan_binding(service->method.rpc);
       transport_plan = data_bind_rpc_method_plan_transport(service->method.rpc);
@@ -420,9 +420,9 @@ int flow_databind_services_verify(
         !flow_databind_text_equal(info.service_name, service->service_name) ||
         !flow_databind_text_equal(info.operation_name, service->operation_name))
       return SALTS_EPROTO;
-    if ((service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP &&
+    if ((service->transport == DATA_BIND_TRANSPORT_HTTP &&
          info.kind != DATA_BIND_TRANSPORT_HTTP) ||
-        (service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_RPC &&
+        (service->transport == DATA_BIND_TRANSPORT_RPC &&
          info.kind != DATA_BIND_TRANSPORT_RPC))
       return SALTS_EPROTO;
   }
@@ -470,7 +470,7 @@ int flow_plan_build_databind_services(
     compiled.operation_name = source->operation_name;
     compiled.function = source->native.function;
 
-    if (source->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP) {
+    if (source->transport == DATA_BIND_TRANSPORT_HTTP) {
       status = data_bind_http_method_plan_compile_service(
           codec, source->service_name, source->operation_name,
           source->projection.http, &source->native,
@@ -493,7 +493,7 @@ int flow_plan_build_databind_services(
     if (status != DATA_BIND_OK || !compiled.binding_plan ||
         data_bind_binding_plan_function(compiled.binding_plan) !=
             source->native.function) {
-      if (compiled.transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP)
+      if (compiled.transport == DATA_BIND_TRANSPORT_HTTP)
         data_bind_http_method_plan_free(compiled.method.http);
       else
         data_bind_rpc_method_plan_free(compiled.method.rpc);
@@ -504,7 +504,7 @@ int flow_plan_build_databind_services(
       int rc = turbo_flow_stl_error(
           vec_push(&plan->databind_services, &compiled));
       if (rc != SALTS_OK) {
-        if (compiled.transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP)
+        if (compiled.transport == DATA_BIND_TRANSPORT_HTTP)
           data_bind_http_method_plan_free(compiled.method.http);
         else
           data_bind_rpc_method_plan_free(compiled.method.rpc);
