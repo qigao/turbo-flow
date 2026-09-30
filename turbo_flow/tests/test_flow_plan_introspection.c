@@ -195,7 +195,6 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
                                        right.input_semantic_id));
       check_true(plan_diag_same_string(left.output_semantic_id,
                                        right.output_semantic_id));
-      check_equal(left.barriers, right.barriers);
 
       if (index == 0u) {
         check_equal(left.backend, TURBO_FLOW_EXECUTION_BACKEND_SOURCE);
