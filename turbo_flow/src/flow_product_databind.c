@@ -175,3 +175,56 @@ int turbo_flow_product_bind_databind_rpc_service(
       FLOW_DATABIND_SERVICE_TRANSPORT_RPC, codec_factory,
       native_resolver, projection);
 }
+
+
+static int flow_product_databind_execution_plan_available(
+    const turbo_flow_t *flow) {
+  return flow && flow->compiled_plan.sealed &&
+         (flow->state == TURBO_FLOW_STATE_COMPILED ||
+          flow->state == TURBO_FLOW_STATE_STARTED ||
+          flow->state == TURBO_FLOW_STATE_STOPPED);
+}
+
+size_t turbo_flow_execution_plan_databind_service_count(
+    const turbo_flow_t *flow) {
+  return flow_product_databind_execution_plan_available(flow)
+             ? vec_size(&flow->compiled_plan.databind_services)
+             : 0u;
+}
+
+int turbo_flow_execution_plan_databind_service_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_databind_service_plan_view_t *out) {
+  const flow_databind_service_plan_t *service;
+  const cmeta_function_desc *function;
+
+  if (!flow_product_databind_execution_plan_available(flow) || !out ||
+      out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_DATABIND_SERVICE_PLAN_API_VERSION)
+    return SALTS_EINVAL;
+
+  service = (const flow_databind_service_plan_t *)vec_at_const(
+      &flow->compiled_plan.databind_services, index);
+  if (!service || !service->binding_plan) return SALTS_ENOENT;
+
+  function = data_bind_binding_plan_function(service->binding_plan);
+  if (!function || function != service->function) return SALTS_EPROTO;
+
+  *out = (turbo_flow_databind_service_plan_view_t)
+      TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT;
+  out->stage_index = service->stage_index;
+  out->transport =
+      service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP
+          ? TURBO_FLOW_DATABIND_SERVICE_HTTP
+          : TURBO_FLOW_DATABIND_SERVICE_RPC;
+  out->service_name = service->service_name;
+  out->operation_name = service->operation_name;
+  out->function_name = function->name;
+  out->ingress_count =
+      data_bind_binding_plan_ingress_count(service->binding_plan);
+  out->egress_count =
+      data_bind_binding_plan_egress_count(service->binding_plan);
+  out->error_count =
+      data_bind_binding_plan_error_count(service->binding_plan);
+  return SALTS_OK;
+}
