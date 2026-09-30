@@ -789,7 +789,6 @@ int turbo_flow_execution_plan_stage_at(
   out->resource_name = node->resource_name;
   out->input_semantic_id = semantics->input_semantic_id;
   out->output_semantic_id = semantics->output_semantic_id;
-  out->barriers = semantics->barriers;
   return SALTS_OK;
 }
 
