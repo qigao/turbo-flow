@@ -45,11 +45,28 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&plan->cflow_region_by_stage, sizeof(uint32_t),
-                         _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK) {
+                         _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&plan->owned_resources, sizeof(flow_plan_owned_resource_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     flow_compiled_plan_destroy(plan);
     return SALTS_ENOMEM;
   }
   return SALTS_OK;
+}
+
+static void flow_plan_owned_resource_vector_release(vec_t *resources) {
+  if (!resources) return;
+  for (size_t i = vec_size(resources); i > 0u; --i) {
+    flow_plan_owned_resource_t *resource =
+        (flow_plan_owned_resource_t *)vec_at(resources, i - 1u);
+    if (resource && resource->release) {
+      resource->release(resource->ctx);
+      resource->ctx = NULL;
+      resource->release = NULL;
+    }
+  }
+  (void)turbo_flow_stl_error(vec_clear(resources));
 }
 
 void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
@@ -74,11 +91,98 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->stage_semantics);
   vec_destroy(&plan->cflow_regions);
   vec_destroy(&plan->cflow_region_by_stage);
+
+  /*
+   * Borrowed FunctionDesc/DataDesc/callable code and type traits may belong to
+   * an owned plugin module. Tear down every compiled artifact first; release
+   * the module/resource lease only after no plan object can invoke provider
+   * callbacks during destruction.
+   */
+  flow_plan_owned_resource_vector_release(&plan->owned_resources);
+  vec_destroy(&plan->owned_resources);
   memset(plan, 0, sizeof(*plan));
+}
+
+int flow_plan_owned_resources_reserve(turbo_flow_t *flow, size_t additional) {
+  size_t required;
+  if (!flow || flow->compiled_plan.sealed) return SALTS_EINVAL;
+  if (additional > SIZE_MAX - vec_size(&flow->pending_plan_resources))
+    return SALTS_ERANGE;
+  required = vec_size(&flow->pending_plan_resources) + additional;
+  return turbo_flow_stl_error(vec_reserve(&flow->pending_plan_resources, required));
+}
+
+int flow_plan_owned_resource_stage(
+    turbo_flow_t *flow, void *ctx,
+    flow_plan_owned_resource_release_fn release) {
+  flow_plan_owned_resource_t resource;
+  if (!flow || !ctx || !release || flow->compiled_plan.sealed)
+    return SALTS_EINVAL;
+  resource.ctx = ctx;
+  resource.release = release;
+  return turbo_flow_stl_error(vec_push(&flow->pending_plan_resources, &resource));
+}
+
+int flow_plan_owned_resource_unstage_last(turbo_flow_t *flow, void *ctx) {
+  flow_plan_owned_resource_t resource = {0};
+  flow_plan_owned_resource_t *last;
+  const size_t count = flow ? vec_size(&flow->pending_plan_resources) : 0u;
+  int rc;
+  if (!flow || !ctx || flow->compiled_plan.sealed || count == 0u)
+    return SALTS_EINVAL;
+  last = (flow_plan_owned_resource_t *)vec_at(
+      &flow->pending_plan_resources, count - 1u);
+  if (!last || last->ctx != ctx || !last->release) return SALTS_EPROTO;
+  rc = turbo_flow_stl_error(vec_pop(&flow->pending_plan_resources, &resource));
+  if (rc != SALTS_OK) return rc;
+  resource.release(resource.ctx);
+  return SALTS_OK;
+}
+
+void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow) {
+  if (!flow) return;
+  flow_plan_owned_resource_vector_release(&flow->pending_plan_resources);
+}
+
+static int flow_plan_owned_resources_transfer(
+    turbo_flow_t *flow, flow_compiled_plan_t *candidate) {
+  vec_t empty;
+  if (!flow || !candidate || candidate->sealed ||
+      !vec_empty(&candidate->owned_resources))
+    return SALTS_EINVAL;
+
+  /*
+   * Both vectors are already initialized owners. Swap the empty candidate
+   * handle with the pending mutable-flow handle after all fallible compile and
+   * verification work has succeeded. Ownership transfer is allocation-free.
+   */
+  empty = candidate->owned_resources;
+  candidate->owned_resources = flow->pending_plan_resources;
+  flow->pending_plan_resources = empty;
+  return SALTS_OK;
+}
+
+static void flow_plan_owned_resources_return_to_flow(
+    turbo_flow_t *flow, flow_compiled_plan_t *plan) {
+  vec_t empty;
+  if (!flow || !plan || vec_empty(&plan->owned_resources)) return;
+
+  /*
+   * The operation registry still borrows FunctionDesc/DataDesc/callable code
+   * after a registry-preserving reset. Pending resources must therefore regain
+   * ownership before the compiled plan is destroyed. This path must not
+   * allocate: an OOM here would otherwise release the lease while registry
+   * metadata still contains provider-owned pointers.
+   */
+  if (!vec_empty(&flow->pending_plan_resources)) return;
+  empty = flow->pending_plan_resources;
+  flow->pending_plan_resources = plan->owned_resources;
+  plan->owned_resources = empty;
 }
 
 void flow_clear_runtime_plan(turbo_flow_t *flow) {
   if (!flow) return;
+  flow_plan_owned_resources_return_to_flow(flow, &flow->compiled_plan);
   flow_compiled_plan_destroy(&flow->compiled_plan);
   (void)flow_compiled_plan_init(&flow->compiled_plan);
   (void)turbo_flow_stl_error(vec_clear(&flow->runtime_stage_configs));
@@ -561,6 +665,10 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     runtime_config->data_workers = stage->data_worker_count;
     runtime_config->thread_workers = stage->exec.workers;
     runtime_config->coro_lanes = stage->exec.lanes;
+  }
+  rc = flow_plan_owned_resources_transfer(flow, &candidate);
+  if (rc != SALTS_OK) {
+    return flow_plan_fail(flow, &candidate, rc, "out of memory");
   }
   candidate.sealed = 1;
   flow_compiled_plan_destroy(&flow->compiled_plan);

@@ -16,6 +16,11 @@ on:
       - 'turbo_flow/src/flow_plan_semantics.c'
       - 'turbo_flow/src/flow_plan.c'
       - 'turbo_flow/src/flow_internal.h'
+      - 'turbo_flow/src/flow_plugin_operation.c'
+      - 'turbo_flow/src/flow_plugin_operation_internal.h'
+      - 'turbo_flow/tests/CMakeLists.txt'
+      - 'turbo_flow/tests/plugin_cflow_function_fixture.c'
+      - 'turbo_flow/tests/test_flow_plugin_cflow_plan.c'
       - 'turbo_flow/tests/test_flow_reflected_operation.c'
       - 'turbo_flow/tests/reflected_operation_header_cpp.cpp'
       - '.github/workflows/cflow-region-benchmark.yml'
@@ -133,13 +138,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-benchmark --target bench_turbo_flow test_flow_reflected_operation -j2
+          cmake --build build/cflow-region-benchmark --target bench_turbo_flow test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
 
       - name: Run reflected CFlow region contract
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/cflow-region-benchmark --tests-regex test_flow_reflected_operation --output-on-failure
+          ctest --test-dir build/cflow-region-benchmark --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
 
       - name: Configure CFlow ASan and UBSan contract
         shell: bash
@@ -171,9 +176,9 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation -j2
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
           ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex test_flow_reflected_operation --output-on-failure
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash

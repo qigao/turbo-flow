@@ -486,6 +486,11 @@ compile_single_reflected_stage(turbo_flow_t *flow, const char *operation_name) {
 }
 
 
+static void reflected_plan_resource_release(void *ctx) {
+  size_t *releases = (size_t *)ctx;
+  if (releases) ++*releases;
+}
+
 suite("TurboFlow reflected operation semantics") {
   it("classifies CMeta slot lifecycle without granting unsafe reuse") {
     flow_cflow_value_slot_plan_t slot = {0};
@@ -1491,6 +1496,87 @@ suite("TurboFlow reflected operation semantics") {
     check_equal(flow->compiled_plan.candidate_region_count, 0u);
 
     turbo_flow_destroy(flow);
+  }
+
+  it("transfers staged resources only into a successful sealed plan") {
+    static const char graph[] =
+        "source input\n"
+        "stage reflected operation test.reflected.plan_resource\n"
+        "stage main {\n"
+        "  input -> reflected\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor("test.reflected.plan_resource");
+    size_t releases = 0u;
+
+    check_not_null(flow);
+    check_true(register_unary_reflected_mode(
+        flow, &operation,
+        FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u),
+                SALTS_OK);
+    check_equal(flow_plan_owned_resource_stage(
+                    flow, &releases, reflected_plan_resource_release),
+                SALTS_OK);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_true(flow->compiled_plan.sealed);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
+    check_equal(vec_size(&flow->compiled_plan.owned_resources), (size_t)1u);
+    check_equal(releases, (size_t)0u);
+
+    flow_clear_runtime_plan(flow);
+    check_equal(releases, (size_t)0u);
+    check_equal(vec_size(&flow->compiled_plan.owned_resources), (size_t)0u);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    flow_clear_registry(flow);
+    check_equal(releases, (size_t)1u);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
+    turbo_flow_destroy(flow);
+    check_equal(releases, (size_t)1u);
+  }
+
+  it("keeps staged resources owned by the mutable flow after compile failure") {
+    static const char graph[] =
+        "source input\n"
+        "stage op operation test.reflected.plan_resource_failure\n"
+        "stage main {\n"
+        "  input -> op\n"
+        "}\n";
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        reflected_operation_descriptor(
+            "test.reflected.plan_resource_failure");
+    size_t releases = 0u;
+
+    check_not_null(flow);
+    operation.runtime.deadline_ms = 1u;
+    check_true(register_unary_reflected_mode(
+        flow, &operation,
+        FunctionMeta(reflected_increment),
+        FunctionAbi(reflected_increment),
+        CFLOW_REFLECTED_CALLABLE(reflected_increment), 0));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u),
+                SALTS_OK);
+    check_equal(flow_plan_owned_resource_stage(
+                    flow, &releases, reflected_plan_resource_release),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
+    check_false(flow->compiled_plan.sealed);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    check_equal(releases, (size_t)0u);
+
+    flow_clear_plan(flow);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
+    check_equal(releases, (size_t)0u);
+    flow_clear_registry(flow);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
+    check_equal(releases, (size_t)1u);
+    turbo_flow_destroy(flow);
+    check_equal(releases, (size_t)1u);
   }
 
   it("rejects a reflected registration that repeats legacy graph type strings") {

@@ -598,27 +598,48 @@ int turbo_flow_register_reflected_operation(
     }
 
     if (unary_return_map) {
-      if (!cmeta_callable_contract_valid(registration->adapter) ||
-          registration->adapter.meta.effects != registration->function->effects ||
-          registration->adapter.meta.properties != registration->function->properties) {
-        flow_operation_registration_destroy(&operation);
-        return SALTS_EINVAL;
-      }
-      projection_status = cflow_function_projection_admit(
-          registration->function, registration->abi,
-          registration->adapter, CFLOW_OP_MAP, &operation.projection);
-      if (projection_status != CFLOW_FUNCTION_PROJECTION_OK) {
-        flow_operation_registration_destroy(&operation);
-        return flow_set_error_keep_state(
-            flow, SALTS_ENOTSUP, 0, 0,
-            cflow_function_projection_status_string(projection_status));
-      }
-      if (!cmeta_type_equal(operation.projection.input_type,
-                            input_port->data->storage_type) ||
-          !cmeta_type_equal(operation.projection.output_type,
-                            output_port->data->storage_type)) {
-        flow_operation_registration_destroy(&operation);
-        return SALTS_EPROTO;
+      if (cmeta_callable_contract_valid(registration->adapter)) {
+        if (registration->adapter.meta.effects != registration->function->effects ||
+            registration->adapter.meta.properties != registration->function->properties) {
+          flow_operation_registration_destroy(&operation);
+          return SALTS_EINVAL;
+        }
+        projection_status = cflow_function_projection_admit(
+            registration->function, registration->abi,
+            registration->adapter, CFLOW_OP_MAP, &operation.projection);
+        if (projection_status != CFLOW_FUNCTION_PROJECTION_OK) {
+          flow_operation_registration_destroy(&operation);
+          return flow_set_error_keep_state(
+              flow, SALTS_ENOTSUP, 0, 0,
+              cflow_function_projection_status_string(projection_status));
+        }
+        if (!cmeta_type_equal(operation.projection.input_type,
+                              input_port->data->storage_type) ||
+            !cmeta_type_equal(operation.projection.output_type,
+                              output_port->data->storage_type)) {
+          flow_operation_registration_destroy(&operation);
+          return SALTS_EPROTO;
+        }
+      } else {
+        /*
+         * Explicit erased adapters (for example a Salts Plugin function export)
+         * remain subordinate to the canonical FunctionDesc/FunctionAbi pair.
+         * DataDesc supplies the graph value identity; no function semantics are
+         * reconstructed from an erased callback or C spelling.
+         */
+        projection_status = cflow_function_typed_adapter_projection_admit(
+            registration->function, registration->abi, registration->adapter,
+            input_port->data->storage_type, output_port->data->storage_type,
+            &operation.typed_adapter_projection);
+        if (projection_status != CFLOW_FUNCTION_PROJECTION_OK ||
+            !cflow_function_typed_adapter_projection_valid(
+                &operation.typed_adapter_projection)) {
+          flow_operation_registration_destroy(&operation);
+          return flow_set_error_keep_state(
+              flow, SALTS_ENOTSUP, 0, 0,
+              cflow_function_projection_status_string(projection_status));
+        }
+        operation.reflected_typed_adapter = 1;
       }
     } else if (typed_out_map) {
       projection_status = cflow_function_typed_adapter_projection_admit(

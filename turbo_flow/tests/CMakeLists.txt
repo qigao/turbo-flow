@@ -1,3 +1,24 @@
+add_library(test_flow_plugin_cflow_function_fixture SHARED
+  plugin_cflow_function_fixture.c)
+target_link_libraries(test_flow_plugin_cflow_function_fixture
+  PRIVATE Salts::PluginABI)
+set_target_properties(test_flow_plugin_cflow_function_fixture PROPERTIES
+  FOLDER "turbo_flow/tests/plugin-fixtures")
+
+add_executable(test_flow_plugin_cflow_plan test_flow_plugin_cflow_plan.c)
+target_link_libraries(test_flow_plugin_cflow_plan
+  PRIVATE TurboFlow::PluginHost Salts::Plugin Salts::TinyTest)
+target_include_directories(test_flow_plugin_cflow_plan
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_definitions(test_flow_plugin_cflow_plan PRIVATE
+  FLOW_PLUGIN_CFLOW_FIXTURE="$<TARGET_FILE:test_flow_plugin_cflow_function_fixture>")
+add_dependencies(test_flow_plugin_cflow_plan test_flow_plugin_cflow_function_fixture)
+set_target_properties(test_flow_plugin_cflow_plan PROPERTIES
+  FOLDER "turbo_flow/tests")
+add_test(NAME test_flow_plugin_cflow_plan COMMAND test_flow_plugin_cflow_plan)
+set_tests_properties(test_flow_plugin_cflow_plan PROPERTIES
+  LABELS "graph;plugin;cflow;plan" TIMEOUT 30)
+
 add_executable(test_flow_plugin_operation test_flow_plugin_operation.c operation_schema_fixture.c)
 target_link_libraries(test_flow_plugin_operation PRIVATE TurboFlow::PluginHost Salts::TinyTest)
 set_target_properties(test_flow_plugin_operation PROPERTIES FOLDER "turbo_flow/tests")

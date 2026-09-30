@@ -2,6 +2,7 @@
 #define FLOW_PLUGIN_OPERATION_INTERNAL_H
 #include "turbo_flow_plugin_generation.h"
 #include <cstl/vec.h>
+#include <salts/plugin.h>
 #include <salts/thread.h>
 #include <stdatomic.h>
 enum {
@@ -55,4 +56,35 @@ int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result
 int flow_plugin_operations_close(vec_t *bindings);
 int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *error);
 void flow_plugin_operations_free(vec_t *bindings);
+
+typedef struct flow_plugin_cflow_function_binding_s {
+  salts_plugin_registry *registry;
+  salts_plugin_ref plugin;
+  const char *export_id;
+  const char *contract_id;
+  uint32_t contract_version;
+  uint64_t required_capabilities;
+  const turbo_flow_operation_descriptor_t *operation;
+  const cmeta_data_desc *input_data;
+  const cmeta_data_desc *output_data;
+} flow_plugin_cflow_function_binding_t;
+
+/*
+ * Internal product-composition bridge. Salts Plugin remains the loader/lease
+ * authority; TurboFlow consumes only canonical CMeta reflection and exact
+ * invoke exported by that module.
+ *
+ * export_id selects the implementation row; contract_id/version/capabilities
+ * state the product's required semantic capability and are verified through
+ * salts_plugin_export_require_function() before any reflected registration.
+ *
+ * The caller-owned registry must outlive the TurboFlow registry/compiled plan
+ * that receives this binding. A successful bind retains one Salts Plugin lease
+ * until TurboFlow registry teardown (including across registry-preserving
+ * reset/recompile). Destroying the Salts registry first is an ownership error.
+ */
+TURBO_FLOW_API int flow_plugin_bind_cflow_function(
+    turbo_flow_t *flow,
+    const flow_plugin_cflow_function_binding_t *binding);
+
 #endif

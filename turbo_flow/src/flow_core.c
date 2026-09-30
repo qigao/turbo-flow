@@ -273,6 +273,12 @@ void flow_clear_registry(turbo_flow_t *flow) {
   }
   turbo_flow_stl_error(vec_clear(&flow->adapters));
   flow_expr_projection_clear(flow);
+
+  /*
+   * Plan-owned resources may borrow operation/provider descriptors. Release
+   * them only after the registry entries themselves have been destroyed.
+   */
+  flow_plan_owned_resources_clear_pending(flow);
 }
 
 int flow_find_stage_view(const turbo_flow_t *flow, vstr name) {
@@ -353,6 +359,9 @@ turbo_flow_t *turbo_flow_create(void) {
                                           _Alignof(turbo_flow_max_align_t), SIZE_MAX)) !=
           SALTS_OK ||
       flow_compiled_plan_init(&flow->compiled_plan) != SALTS_OK ||
+      turbo_flow_stl_error(
+          vec_init_bytes(&flow->pending_plan_resources, sizeof(flow_plan_owned_resource_t),
+                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&flow->runtime_stage_configs, sizeof(flow_runtime_stage_config_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
@@ -444,6 +453,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
   vec_destroy(&flow->stages);
   vec_destroy(&flow->edges);
   flow_compiled_plan_destroy(&flow->compiled_plan);
+  vec_destroy(&flow->pending_plan_resources);
   vec_destroy(&flow->runtime_stage_configs);
   vec_destroy(&flow->threadpool_adapters);
   vec_destroy(&flow->threadpool_adapter_by_stage);
