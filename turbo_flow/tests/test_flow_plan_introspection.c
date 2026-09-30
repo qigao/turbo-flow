@@ -146,6 +146,85 @@ static int plan_diag_same_string(const char *left, const char *right) {
   return strcmp(left, right) == 0;
 }
 
+typedef struct plan_diag_stage_probe_s {
+  turbo_flow_stage_plan_t expected;
+  int start_calls;
+  int consume_calls;
+  int stop_calls;
+} plan_diag_stage_probe_t;
+
+static void plan_diag_check_stage_probe(plan_diag_stage_probe_t *probe,
+                                        const turbo_flow_stage_plan_t *stage) {
+  check_not_null(probe);
+  check_not_null(stage);
+  check_true(plan_diag_same_string(stage->name, probe->expected.name));
+  check_true(plan_diag_same_string(stage->adapter_name, probe->expected.adapter_name));
+  check_true(plan_diag_same_string(stage->operation_name, probe->expected.operation_name));
+  check_true(plan_diag_same_string(stage->resource_name, probe->expected.resource_name));
+  check_equal(stage->is_source, probe->expected.is_source);
+  check_equal(stage->is_buffer, probe->expected.is_buffer);
+  check_equal(stage->data_strategy, probe->expected.data_strategy);
+  check_equal(stage->data_worker_count, probe->expected.data_worker_count);
+  check_equal(stage->exec.kind, probe->expected.exec.kind);
+  check_equal(stage->effects, probe->expected.effects);
+  check_equal(stage->retry.max_attempts, probe->expected.retry.max_attempts);
+  check_equal(stage->retry.delay_ms, probe->expected.retry.delay_ms);
+  check_equal(stage->reorder.capacity, probe->expected.reorder.capacity);
+  check_equal(stage->reorder.timeout_ms, probe->expected.reorder.timeout_ms);
+}
+
+static int plan_diag_adapter_start(void *ctx, turbo_flow_t *flow,
+                                   const turbo_flow_stage_plan_t *stage) {
+  plan_diag_stage_probe_t *probe = (plan_diag_stage_probe_t *)ctx;
+  (void)flow;
+  plan_diag_check_stage_probe(probe, stage);
+  probe->start_calls += 1;
+  return SALTS_OK;
+}
+
+static int plan_diag_adapter_consume(void *ctx, turbo_flow_t *flow,
+                                     const turbo_flow_stage_plan_t *stage,
+                                     turbo_flow_msg_t *message) {
+  plan_diag_stage_probe_t *probe = (plan_diag_stage_probe_t *)ctx;
+  (void)flow;
+  check_not_null(message);
+  plan_diag_check_stage_probe(probe, stage);
+  probe->consume_calls += 1;
+  return SALTS_OK;
+}
+
+static void plan_diag_adapter_stop(void *ctx, turbo_flow_t *flow,
+                                   const turbo_flow_stage_plan_t *stage) {
+  plan_diag_stage_probe_t *probe = (plan_diag_stage_probe_t *)ctx;
+  (void)flow;
+  plan_diag_check_stage_probe(probe, stage);
+  probe->stop_calls += 1;
+}
+
+static turbo_flow_t *plan_diag_build_adapter(plan_diag_stage_probe_t *probe) {
+  static const char graph[] =
+      "source input\n"
+      "stage sink adapter plan.diag.adapter\n"
+      "stage main {\n"
+      "  input -> sink\n"
+      "}\n";
+  turbo_flow_adapter_ops_t ops;
+  turbo_flow_t *flow = turbo_flow_create();
+
+  if (!flow) return NULL;
+  memset(&ops, 0, sizeof(ops));
+  ops.start = plan_diag_adapter_start;
+  ops.consume = plan_diag_adapter_consume;
+  ops.stop = plan_diag_adapter_stop;
+  if (turbo_flow_register_adapter(flow, "plan.diag.adapter", &ops, probe) != SALTS_OK ||
+      turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u) != SALTS_OK ||
+      turbo_flow_compile(flow) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return NULL;
+  }
+  return flow;
+}
+
 suite("TurboFlow deterministic ExecutionPlan diagnostics") {
   it("reports identical indexed facts for identical reflected plans") {
     turbo_flow_t *first = plan_diag_build_reflected();
@@ -344,6 +423,57 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
 
     check_equal(executor->runtime.deadline_ms, (uint64_t)0u);
     check_equal(executor->runtime.settlement, (uint32_t)0u);
+    turbo_flow_destroy(flow);
+  }
+
+  it("keeps adapter lifecycle and dispatch on the frozen sealed-stage contract") {
+    plan_diag_stage_probe_t probe;
+    turbo_flow_t *flow;
+    int sink_index;
+    const turbo_flow_stage_plan_t *sealed;
+    flow_stage_plan_impl_t *mutable_stage;
+    turbo_flow_msg_t message;
+
+    memset(&probe, 0, sizeof(probe));
+    flow = plan_diag_build_adapter(&probe);
+    check_not_null(flow);
+    sink_index = turbo_flow_find_stage(flow, "sink");
+    check(sink_index >= 0);
+    sealed = turbo_flow_stage_at(flow, (size_t)sink_index);
+    check_not_null(sealed);
+    probe.expected = *sealed;
+
+    mutable_stage =
+        (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)sink_index);
+    check_not_null(mutable_stage);
+
+    /*
+     * Poison only non-owning/scalar fields in the mutable parser stage after
+     * compile. Start/data-plane/reorder/consume/stop must all stay on the
+     * immutable ExecutionPlan copy.
+     */
+    mutable_stage->data_strategy = TURBO_FLOW_DATA_WORKER_POOL;
+    mutable_stage->data_worker_count = probe.expected.data_worker_count + 7u;
+    mutable_stage->exec.kind = TURBO_FLOW_EXEC_THREAD_POOL;
+    mutable_stage->effects |= TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION;
+    mutable_stage->retry.max_attempts = probe.expected.retry.max_attempts + 5u;
+    mutable_stage->retry.delay_ms = probe.expected.retry.delay_ms + 13u;
+    mutable_stage->reorder.capacity = probe.expected.reorder.capacity + 11u;
+    mutable_stage->reorder.timeout_ms = probe.expected.reorder.timeout_ms + 17u;
+
+    sealed = turbo_flow_stage_at(flow, (size_t)sink_index);
+    plan_diag_check_stage_probe(&probe, sealed);
+
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(probe.start_calls, 1);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(probe.consume_calls, 1);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(probe.stop_calls, 1);
+
+    sealed = turbo_flow_stage_at(flow, (size_t)sink_index);
+    plan_diag_check_stage_probe(&probe, sealed);
     turbo_flow_destroy(flow);
   }
 
