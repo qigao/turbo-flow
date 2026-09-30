@@ -14,6 +14,7 @@ FunctionDecl(value, int, plan_diag_increment,
 int plan_diag_increment(int value) {
   return value + 1;
 }
+CFLOW_REFLECTED_ADAPTER(plan_diag_increment);
 
 static int plan_diag_native_stage(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
