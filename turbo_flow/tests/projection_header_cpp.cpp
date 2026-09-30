@@ -22,6 +22,11 @@ int release_context(void *ctx) {
 }
 
 extern "C" int flow_projection_cpp_example(void) {
+  turbo_flow_projection_registry_t *projection_registry =
+      turbo_flow_projection_registry_create();
+  if (!projection_registry) return SALTS_ENOMEM;
+  turbo_flow_projection_registry_destroy(projection_registry);
+
   turbo_flow_result_memory_requirements_t requirements;
   turbo_flow_result_memory_requirements_init(&requirements);
   if (turbo_flow_result_memory_requirements(result_capacity, sizeof(int), &requirements) != SALTS_OK)
