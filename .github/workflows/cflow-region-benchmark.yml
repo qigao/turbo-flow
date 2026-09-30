@@ -147,7 +147,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/cflow-region-benchmark --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)
+          ctest --test-dir build/cflow-region-benchmark --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Configure CFlow ASan and UBSan contract
         shell: bash
@@ -181,333 +181,7 @@ jobs:
           set -euxo pipefail
           cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
           ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)
-
-      - name: Run fixed CFlow region benchmark
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
-          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
-          test -n "$bench"
-          cmake -E env \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
-            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
-          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
-            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
-          grep -F 'stage_plan=typed-identity-2-stage-native ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          {
-            echo '### CFlow region benchmark'
-            echo
-            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Restore focused benchmark assembly
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
-
-      - name: Verify exact head remained clean
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
-
-      - name: Upload benchmark evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/cflow-region-benchmark-evidence/
-            build/cflow-region-benchmark/CMakeCache.txt
- --output-on-failure
-
-      - name: Configure CFlow ASan and UBSan contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DENABLE_SANITIZER_THREAD=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
-            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
-            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
-            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
-
-      - name: Run reflected CFlow contract under ASan and UBSan
-        shell: bash
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euxo pipefail
-          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
-          ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
-
-      - name: Run fixed CFlow region benchmark
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
-          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
-          test -n "$bench"
-          cmake -E env \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
-            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
-          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
-            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
-          grep -F 'stage_plan=typed-identity-2-stage-native ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          {
-            echo '### CFlow region benchmark'
-            echo
-            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Restore focused benchmark assembly
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
-
-      - name: Verify exact head remained clean
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
-
-      - name: Upload benchmark evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/cflow-region-benchmark-evidence/
-            build/cflow-region-benchmark/CMakeCache.txt
- --output-on-failure
-
-      - name: Run fixed CFlow region benchmark
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
-          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
-          test -n "$bench"
-          cmake -E env \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
-            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
-          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
-            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
-          grep -F 'stage_plan=typed-identity-2-stage-native ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          {
-            echo '### CFlow region benchmark'
-            echo
-            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Restore focused benchmark assembly
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
-
-      - name: Verify exact head remained clean
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
-
-      - name: Upload benchmark evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/cflow-region-benchmark-evidence/
-            build/cflow-region-benchmark/CMakeCache.txt
- --output-on-failure
-
-      - name: Configure CFlow ASan and UBSan contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DENABLE_SANITIZER_THREAD=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
-            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
-            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
-            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
-
-      - name: Run reflected CFlow contract under ASan and UBSan
-        shell: bash
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euxo pipefail
-          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
-          ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
-
-      - name: Run fixed CFlow region benchmark
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
-          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
-          test -n "$bench"
-          cmake -E env \
-            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
-            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
-          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
-            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
-          grep -F 'stage_plan=typed-identity-2-stage-native ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
-            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          {
-            echo '### CFlow region benchmark'
-            echo
-            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Restore focused benchmark assembly
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
-
-      - name: Verify exact head remained clean
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
-
-      - name: Upload benchmark evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/cflow-region-benchmark-evidence/
-            build/cflow-region-benchmark/CMakeCache.txt
- --output-on-failure
-
-      - name: Configure CFlow ASan and UBSan contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=ON \
-            -DENABLE_SANITIZER_THREAD=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
-            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
-            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
-            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
-
-      - name: Run reflected CFlow contract under ASan and UBSan
-        shell: bash
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euxo pipefail
-          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
-          ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash
@@ -833,7 +507,7 @@ jobs:
           set -euxo pipefail
           cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
           ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash
@@ -1159,7 +833,333 @@ jobs:
           set -euxo pipefail
           cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
           ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
+
+      - name: Run fixed CFlow region benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
+          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
+          test -n "$bench"
+          cmake -E env \
+            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
+            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
+          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
+            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
+          grep -F 'stage_plan=typed-identity-2-stage-native ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          {
+            echo '### CFlow region benchmark'
+            echo
+            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore focused benchmark assembly
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify exact head remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/cflow-region-benchmark-evidence/
+            build/cflow-region-benchmark/CMakeCache.txt
+ --output-on-failure
+
+      - name: Configure CFlow ASan and UBSan contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DENABLE_SANITIZER_THREAD=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+
+      - name: Run reflected CFlow contract under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
+          ctest --test-dir build/cflow-region-sanitizers \
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
+
+      - name: Run fixed CFlow region benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
+          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
+          test -n "$bench"
+          cmake -E env \
+            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
+            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
+          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
+            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
+          grep -F 'stage_plan=typed-identity-2-stage-native ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          {
+            echo '### CFlow region benchmark'
+            echo
+            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore focused benchmark assembly
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify exact head remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/cflow-region-benchmark-evidence/
+            build/cflow-region-benchmark/CMakeCache.txt
+ --output-on-failure
+
+      - name: Run fixed CFlow region benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
+          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
+          test -n "$bench"
+          cmake -E env \
+            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
+            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
+          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
+            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
+          grep -F 'stage_plan=typed-identity-2-stage-native ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          {
+            echo '### CFlow region benchmark'
+            echo
+            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore focused benchmark assembly
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify exact head remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/cflow-region-benchmark-evidence/
+            build/cflow-region-benchmark/CMakeCache.txt
+ --output-on-failure
+
+      - name: Configure CFlow ASan and UBSan contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DENABLE_SANITIZER_THREAD=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+
+      - name: Run reflected CFlow contract under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
+          ctest --test-dir build/cflow-region-sanitizers \
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
+
+      - name: Run fixed CFlow region benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/cflow-region-benchmark-evidence"
+          bench="$(find build/cflow-region-benchmark -type f -name bench_turbo_flow -perm -111 | head -n1)"
+          test -n "$bench"
+          cmake -E env \
+            "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/cflow-region-benchmark/bin:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" \
+            "$bench" --filter "cflow regions" 2>&1 | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log"
+          grep -E '^BENCH_RESULT stage_plan=typed-identity-2-stage-(native|cflow-region|cflow-batch|cflow-batch-failure) ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/full.log" \
+            | tee "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          test "$(wc -l < "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt")" -eq 4
+          grep -F 'stage_plan=typed-identity-2-stage-native ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-region ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          grep -F 'stage_plan=typed-identity-2-stage-cflow-batch-failure ' \
+            "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          {
+            echo '### CFlow region benchmark'
+            echo
+            cat "$RUNNER_TEMP/cflow-region-benchmark-evidence/cflow-region.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore focused benchmark assembly
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Verify exact head remained clean
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --exit-code
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-region-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/cflow-region-benchmark-evidence/
+            build/cflow-region-benchmark/CMakeCache.txt
+ --output-on-failure
+
+      - name: Configure CFlow ASan and UBSan contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/cflow-region-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DENABLE_SANITIZER_THREAD=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+
+      - name: Run reflected CFlow contract under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
+          ctest --test-dir build/cflow-region-sanitizers \
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash
