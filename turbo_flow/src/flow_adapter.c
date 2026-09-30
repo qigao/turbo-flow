@@ -54,8 +54,9 @@ const flow_adapter_registration_t *flow_adapter_for_compiled_stage(const turbo_f
 }
 
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                               uint32_t stage_index,
                                const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg) {
-  turbo_flow_stage_plan_t view;
+  const turbo_flow_stage_plan_t *view;
 
   if (!flow || !stage || !msg) return SALTS_EINVAL;
   if (!adapter || !adapter->ops.consume) {
@@ -63,15 +64,19 @@ int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t 
                                      "adapter consume callback is not configured");
   }
 
-  flow_make_stage_view(stage, &view);
-  if (stage->retry.max_attempts > 1u) {
+  view = flow_compiled_stage_view(flow, stage_index);
+  if (!view) {
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "sealed stage contract is unavailable");
+  }
+  if (view->retry.max_attempts > 1u) {
     if (!adapter->ops.consume_retry) {
       return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                        "adapter retry callback is not configured");
     }
-    return adapter->ops.consume_retry(adapter->ctx, flow, &view, msg, &stage->retry);
+    return adapter->ops.consume_retry(adapter->ctx, flow, view, msg, &view->retry);
   }
-  return adapter->ops.consume(adapter->ctx, flow, &view, msg);
+  return adapter->ops.consume(adapter->ctx, flow, view, msg);
 }
 
 static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
