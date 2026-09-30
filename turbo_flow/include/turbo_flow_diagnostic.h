@@ -29,11 +29,6 @@ typedef struct turbo_flow_config_error_s {
 #define TURBO_FLOW_CONFIG_ERROR_INIT \
   {sizeof(turbo_flow_config_error_t), SALTS_OK, {0}, {0}}
 
-/* Transitional source compatibility for code that used the old constant names.
- * The aliases describe the same generic diagnostic ABI and disappear when the
- * old Config public surface is removed under #241. */
-#define TURBO_FLOW_CONFIG_PATH_MAX TURBO_FLOW_DIAGNOSTIC_PATH_MAX
-#define TURBO_FLOW_CONFIG_MESSAGE_MAX TURBO_FLOW_DIAGNOSTIC_MESSAGE_MAX
 
 #ifdef __cplusplus
 }
