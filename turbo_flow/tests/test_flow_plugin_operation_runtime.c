@@ -19,6 +19,18 @@ long runtime_fixture_changed_output(int value) {
   return (long)value * 2L;
 }
 
+FunctionDeclAsAbi(
+    value,
+    int,
+    &cmeta_type_int,
+    CMETA_ABI_SCALAR,
+    runtime_fixture_record_double,
+    (operation_record, value, CMETA_PARAM_IN,
+     &operation_record_type, CMETA_ABI_AGGREGATE));
+int runtime_fixture_record_double(operation_record value) {
+  return value.first * 2;
+}
+
 static turbo_flow_operation_port_binding_t runtime_input_port(void) {
   turbo_flow_operation_port_binding_t port =
       TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
@@ -48,20 +60,28 @@ static turbo_flow_operation_port_binding_t runtime_output_port(
 
 static int runtime_register_reflected_operation(
     turbo_flow_t *flow, const turbo_flow_operation_descriptor_t *operation,
-    int changed_output) {
+    int changed_output, int record_input) {
   turbo_flow_reflected_operation_registration_t registration =
       TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
   turbo_flow_operation_port_binding_t ports[2];
+
   ports[0] = runtime_input_port();
+  ports[0].data = record_input ? &operation_record_data : &cmeta_data_int;
   ports[1] = runtime_output_port(
       changed_output ? &cmeta_data_long : &cmeta_data_int);
   registration.operation = operation;
-  registration.function =
-      changed_output ? FunctionMeta(runtime_fixture_changed_output)
-                     : FunctionMeta(runtime_fixture_double);
-  registration.abi =
-      changed_output ? FunctionAbi(runtime_fixture_changed_output)
-                     : FunctionAbi(runtime_fixture_double);
+  if (record_input) {
+    if (changed_output) return SALTS_EINVAL;
+    registration.function = FunctionMeta(runtime_fixture_record_double);
+    registration.abi = FunctionAbi(runtime_fixture_record_double);
+  } else {
+    registration.function =
+        changed_output ? FunctionMeta(runtime_fixture_changed_output)
+                       : FunctionMeta(runtime_fixture_double);
+    registration.abi =
+        changed_output ? FunctionAbi(runtime_fixture_changed_output)
+                       : FunctionAbi(runtime_fixture_double);
+  }
   registration.ports = ports;
   registration.port_count = 2u;
   registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
@@ -154,6 +174,9 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   turbo_flow_operation_provider_registration_t capture =
       TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
   int rc;
+  const int record_input =
+      strcmp(path, FLOW_OPERATION_EXECUTE_ALIAS) == 0 ||
+      strcmp(path, FLOW_OPERATION_EXECUTE_FAIL_ALIAS) == 0;
   memset(t, 0, sizeof(*t));
   t->control_thread = &runtime_thread_identity;
   atomic_init(&t->lifecycle_wrong_thread, 0);
@@ -233,7 +256,8 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
     legacy.input_type = legacy.output_type = "Message";
     rc = turbo_flow_register_operation(t->flow, &legacy);
   } else {
-    rc = runtime_register_reflected_operation(t->flow, &operation, fault == 2);
+    rc = runtime_register_reflected_operation(
+        t->flow, &operation, fault == 2, record_input);
   }
   if (rc) return rc;
 
@@ -570,7 +594,7 @@ spec("ABI3 generation operation runtime") {
     check_equal(state.state, (uint32_t)TURBO_FLOW_PLUGIN_RESULT_DOMAIN_DETACHED);
     t.flow = turbo_flow_create();
     check_not_null(t.flow);
-    check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0), SALTS_OK);
+    check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0, 0), SALTS_OK);
     check_equal(turbo_flow_parse_string(t.flow, invalid_dsl, sizeof(invalid_dsl) - 1u), SALTS_OK);
     turbo_flow_t *original = t.flow;
     check_equal(runtime_create(&t), SALTS_EINVAL);
@@ -680,7 +704,7 @@ spec("ABI3 generation operation runtime") {
       turbo_flow_operation_descriptor_t metadata =
           *turbo_flow_find_operation(t.flow, "fixture.double");
       metadata.name = "fixture.other";
-      check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0), SALTS_OK);
+      check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0, 0), SALTS_OK);
       if (fail_second == 2) {
         check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &pe), SALTS_OK);
         t.domain = NULL;
@@ -1201,7 +1225,7 @@ spec("ABI3 generation operation runtime") {
     metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
     metadata.flags = TURBO_FLOW_OPERATION_STAGE;
     metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
-    check_equal(runtime_register_reflected_operation(flow, &metadata, 0), SALTS_OK);
+    check_equal(runtime_register_reflected_operation(flow, &metadata, 0, 0), SALTS_OK);
 
     {
       turbo_flow_operation_descriptor_t capture_metadata = {0};
