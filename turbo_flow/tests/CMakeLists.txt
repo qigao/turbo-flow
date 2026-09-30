@@ -63,8 +63,7 @@ set_target_properties(test_flow_databind_service_plan PROPERTIES
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
 set_tests_properties(test_flow_databind_service_plan PROPERTIES
-  LABELS "graph;databind;plan;service" TIMEOUT 30
-  FIXTURES_SETUP generated_databind_service_plan)
+  LABELS "graph;databind;plan;service" TIMEOUT 30)
 
 add_library(test_flow_plugin_cflow_function_fixture SHARED
   plugin_cflow_function_fixture.c)
@@ -363,10 +362,7 @@ if(TARGET tf_rulesforge_provider)
     FOLDER "turbo_flow/tests")
   target_compile_definitions(test_flow_rulesforge_plugin PRIVATE
     FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>")
-  add_dependencies(test_flow_rulesforge_plugin
-    tf_rulesforge_provider test_flow_databind_service_plan)
-  set_tests_properties(test_flow_rulesforge_plugin PROPERTIES
-    FIXTURES_REQUIRED generated_databind_service_plan)
+  add_dependencies(test_flow_rulesforge_plugin tf_rulesforge_provider)
 
   if(TARGET tf_cnet_plugin AND TARGET tf_durable_memory_plugin)
     cmake_add_test(
