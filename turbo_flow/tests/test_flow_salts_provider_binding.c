@@ -55,7 +55,7 @@ spec("Salts Plugin provider binding") {
     factory = (turbo_flow_provider_factory *)entry->value.interface.value;
     check_not_null(factory);
     check_true(turbo_flow_provider_factory_valid(factory));
-    check_equal(turbo_flow_provider_factory_describe(factory, &contract),
+    check_equal(turbo_flow_provider_factory_contract(factory, &contract),
                 SALTS_OK);
     check_true(turbo_flow_provider_contract_valid(&contract));
     check_equal(contract.config.message_artifact->type_name,
