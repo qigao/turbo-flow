@@ -49,6 +49,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_po
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_materializer.h)
@@ -133,7 +134,9 @@ endif()
 
 add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product_databind.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 cmake_config_target(
   turbo_flow_product
   ALIAS TurboFlow::Product
@@ -145,8 +148,9 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(turbo_flow_product PUBLIC TurboFlow::Graph TurboFlow::Config
-                                        PRIVATE Salts::JsonParser)
+target_link_libraries(turbo_flow_product
+  PUBLIC TurboFlow::Graph TurboFlow::Config Salts::DataBind
+  PRIVATE Salts::JsonParser)
 
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c

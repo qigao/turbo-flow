@@ -83,6 +83,7 @@ void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage) {
   tstr_freep(&stage->adapter_name);
   tstr_freep(&stage->operation_name);
   tstr_freep(&stage->resource_name);
+  flow_databind_stage_binding_clear(stage);
 }
 
 void flow_operation_provider_registration_destroy(

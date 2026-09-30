@@ -5,6 +5,13 @@ on:
     branches: [master]
     paths:
       - 'CMakeLists.txt'
+      - 'turbo_flow/CMakeLists.txt'
+      - 'turbo_flow/include/turbo_flow_databind.h'
+      - 'turbo_flow/src/flow_databind_plan.c'
+      - 'turbo_flow/src/flow_product_databind.c'
+      - 'turbo_flow/tests/test_flow_databind_channel_plan.c'
+      - 'turbo_flow/tests/databind_channel.schema'
+      - 'turbo_flow/tests/databind_channel_projection.json'
       - 'CMakeUserPresets.json'
       - 'cmake/TurboFlowConfig.cmake.in'
       - 'ingress/protocol/CMakeLists.txt'
@@ -22,6 +29,13 @@ on:
     branches: [master]
     paths:
       - 'CMakeLists.txt'
+      - 'turbo_flow/CMakeLists.txt'
+      - 'turbo_flow/include/turbo_flow_databind.h'
+      - 'turbo_flow/src/flow_databind_plan.c'
+      - 'turbo_flow/src/flow_product_databind.c'
+      - 'turbo_flow/tests/test_flow_databind_channel_plan.c'
+      - 'turbo_flow/tests/databind_channel.schema'
+      - 'turbo_flow/tests/databind_channel_projection.json'
       - 'CMakeUserPresets.json'
       - 'cmake/TurboFlowConfig.cmake.in'
       - 'ingress/protocol/CMakeLists.txt'

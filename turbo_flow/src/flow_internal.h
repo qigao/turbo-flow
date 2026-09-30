@@ -30,6 +30,15 @@ enum {
   FLOW_DATA_SCHEMA_MAX_FIELDS = 64
 };
 
+typedef enum flow_databind_transport_kind_e {
+  FLOW_DATABIND_TRANSPORT_NONE = 0,
+  FLOW_DATABIND_TRANSPORT_SOCKET,
+  FLOW_DATABIND_TRANSPORT_FLOWMQ
+} flow_databind_transport_kind_t;
+
+typedef struct flow_databind_source_binding_s
+    flow_databind_source_binding_t;
+
 typedef struct flow_stage_plan_impl_s {
   tstr name;
   uint32_t line;
@@ -63,6 +72,8 @@ typedef struct flow_stage_plan_impl_s {
   turbo_flow_keyed_state_store_t *keyed_store;
   uint32_t max_outputs;
   void *ctx;
+  /** Optional generated DataBind Channel binding owned by this parsed stage. */
+  flow_databind_source_binding_t *databind_source;
 } flow_stage_plan_impl_t;
 
 typedef struct flow_operation_provider_registration_s {
@@ -211,6 +222,12 @@ typedef struct flow_runtime_node_plan_s {
   const char *adapter_name;
   const char *operation_name;
   const char *resource_name;
+  /** DataBind Channel plan index for Source stages, or FLOW_PLAN_INDEX_NONE. */
+  uint32_t databind_channel_index;
+  flow_databind_transport_kind_t databind_transport;
+  uint32_t databind_format;
+  /** Borrowed immutable generated SocketPlan/FlowMQPlan artifact. */
+  const void *databind_transport_plan;
 } flow_runtime_node_plan_t;
 
 typedef struct flow_runtime_edge_plan_s {
@@ -412,6 +429,8 @@ typedef struct flow_compiled_plan_s {
   vec_t cflow_regions;
   /** Compiled CFlow region vector index for a stage, or FLOW_PLAN_INDEX_NONE. */
   vec_t cflow_region_by_stage;
+  /** Deduplicated canonical DataBind Channel/native binding rows. */
+  vec_t databind_channels;
   /** Opaque compile-time resources retained for the complete sealed-plan lifetime. */
   vec_t owned_resources;
   const cmeta_type_desc *message_type;
@@ -858,6 +877,15 @@ TURBO_FLOW_API int flow_plan_owned_resource_unstage_last(
 void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow);
 int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 int flow_plan_build_cflow_regions(const turbo_flow_t *flow, flow_compiled_plan_t *plan);
+TURBO_FLOW_API int flow_databind_source_bind(
+    turbo_flow_t *flow, const char *stage_name,
+    const flow_databind_source_binding_t *binding);
+void flow_databind_stage_binding_clear(flow_stage_plan_impl_t *stage);
+int flow_databind_channels_init(vec_t *channels);
+void flow_databind_channels_destroy(vec_t *channels);
+int flow_databind_channels_verify(const vec_t *channels);
+int flow_plan_build_databind_channels(
+    const turbo_flow_t *flow, flow_compiled_plan_t *plan);
 const flow_cflow_region_plan_t *flow_cflow_region_for_entry(
     const turbo_flow_t *flow, uint32_t stage_index, uint32_t *region_index_out);
 int flow_cflow_region_execute(

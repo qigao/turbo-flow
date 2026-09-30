@@ -46,6 +46,7 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
       turbo_flow_stl_error(
           vec_init_bytes(&plan->cflow_region_by_stage, sizeof(uint32_t),
                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
+      flow_databind_channels_init(&plan->databind_channels) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&plan->owned_resources, sizeof(flow_plan_owned_resource_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
@@ -91,6 +92,7 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->stage_semantics);
   vec_destroy(&plan->cflow_regions);
   vec_destroy(&plan->cflow_region_by_stage);
+  flow_databind_channels_destroy(&plan->databind_channels);
 
   /*
    * Borrowed FunctionDesc/DataDesc/callable code and type traits may belong to
@@ -326,7 +328,15 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         (!!semantics->lowering_candidate !=
          (semantics->candidate_region != FLOW_PLAN_INDEX_NONE)) ||
         (*cflow_region_index != FLOW_PLAN_INDEX_NONE &&
-         *cflow_region_index >= vec_size(&plan->cflow_regions))) {
+         *cflow_region_index >= vec_size(&plan->cflow_regions)) ||
+        (node->databind_channel_index != FLOW_PLAN_INDEX_NONE &&
+         (node->databind_channel_index >= vec_size(&plan->databind_channels) ||
+          (node->flags & FLOW_RUNTIME_NODE_SOURCE) == 0u ||
+          node->databind_transport == FLOW_DATABIND_TRANSPORT_NONE ||
+          node->databind_transport_plan == NULL)) ||
+        (node->databind_channel_index == FLOW_PLAN_INDEX_NONE &&
+         (node->databind_transport != FLOW_DATABIND_TRANSPORT_NONE ||
+          node->databind_transport_plan != NULL))) {
       return SALTS_EPROTO;
     }
     for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
@@ -337,6 +347,9 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
       }
     }
   }
+  if (flow_databind_channels_verify(&plan->databind_channels) != SALTS_OK)
+    return SALTS_EPROTO;
+
   for (size_t region_index = 0u; region_index < vec_size(&plan->cflow_regions);
        ++region_index) {
     const flow_cflow_region_plan_t *region =
@@ -510,6 +523,8 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     node->adapter_name = stage->adapter_name;
     node->operation_name = stage->operation_name;
     node->resource_name = stage->resource_name;
+    node->databind_channel_index = FLOW_PLAN_INDEX_NONE;
+    node->databind_transport = FLOW_DATABIND_TRANSPORT_NONE;
     if (stage->adapter_name) {
       int adapter_index = flow_find_adapter(flow, stage->adapter_name);
       if (adapter_index < 0) {
@@ -633,6 +648,13 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
                                   UINT32_MAX, node->incoming_count, 0u, NULL, NULL);
       if (rc != SALTS_OK) return flow_plan_fail(flow, &candidate, rc, "out of memory");
     }
+  }
+
+  rc = flow_plan_build_databind_channels(flow, &candidate);
+  if (rc != SALTS_OK) {
+    return flow_plan_fail(flow, &candidate, rc,
+                          rc == SALTS_ENOMEM ? "out of memory"
+                                             : "DataBind Channel plan is inconsistent");
   }
 
   rc = flow_plan_build_semantics(flow, &candidate);
