@@ -146,6 +146,15 @@ set_tests_properties(test_flow_plugin_materializer_generation
   PROPERTIES LABELS "graph;plugin;abi3;materializer" TIMEOUT 30)
 
 add_library(test_flow_plugin_projection_fixture SHARED plugin_projection_fixture.c)
+cmake_add_test(
+  test_flow_provider_config
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_config.c
+  LIBS TurboFlow::Graph Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_provider_config
+  PROPERTIES LABELS "graph;config;databind" TIMEOUT 30)
+
 add_executable(test_flow_data_schema test_flow_data_schema.c operation_schema_fixture.c)
 target_link_libraries(test_flow_data_schema PRIVATE TurboFlow::Graph Salts::TinyTest)
 set_target_properties(test_flow_data_schema PROPERTIES FOLDER "turbo_flow/tests")
