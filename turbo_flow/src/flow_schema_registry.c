@@ -135,21 +135,21 @@ int turbo_flow_content_descriptor_declare_schema(turbo_flow_content_descriptor_t
   return SALTS_OK;
 }
 
-typedef struct flow_schema_registry_entry_s {
+typedef struct flow_projection_registry_entry_s {
   turbo_flow_content_descriptor_t match;
   turbo_flow_data_schema_t schema;
   tstr schema_name;
   tstr type_name;
   tstr projection_type;
-} flow_schema_registry_entry_t;
+} flow_projection_registry_entry_t;
 
-struct turbo_flow_schema_registry_s {
+struct turbo_flow_projection_registry_s {
   vec_t entries;
   salts_mutex_t lock;
   int lock_initialized;
 };
 
-static void flow_schema_registry_entry_destroy(flow_schema_registry_entry_t *entry) {
+static void flow_projection_registry_entry_destroy(flow_projection_registry_entry_t *entry) {
   if (!entry) return;
   tstr_freep(&entry->schema_name);
   tstr_freep(&entry->type_name);
@@ -235,7 +235,7 @@ int turbo_flow_content_descriptor_check(const turbo_flow_content_descriptor_t *d
              : SALTS_EINVAL;
 }
 
-static int flow_schema_registry_key_equal(const flow_schema_registry_entry_t *entry,
+static int flow_projection_registry_key_equal(const flow_projection_registry_entry_t *entry,
                                           const turbo_flow_content_descriptor_t *match,
                                           const turbo_flow_data_schema_t *schema) {
   return entry->match.domain == match->domain && entry->match.profile == match->profile &&
@@ -245,14 +245,14 @@ static int flow_schema_registry_key_equal(const flow_schema_registry_entry_t *en
          entry->schema.schema_version == schema->schema_version;
 }
 
-static int flow_schema_registry_definition_equal(const flow_schema_registry_entry_t *entry,
+static int flow_projection_registry_definition_equal(const flow_projection_registry_entry_t *entry,
                                                  const turbo_flow_data_schema_t *schema) {
   return entry->schema.domain == schema->domain && entry->schema.encoding == schema->encoding &&
          entry->schema.schema_id == schema->schema_id &&
          strcmp(entry->schema.projection_type, schema->projection_type) == 0;
 }
 
-static int flow_schema_registry_matches(const flow_schema_registry_entry_t *entry,
+static int flow_projection_registry_matches(const flow_projection_registry_entry_t *entry,
                                         const turbo_flow_content_descriptor_t *descriptor) {
   if (entry->match.domain != descriptor->domain || entry->match.profile != descriptor->profile ||
       strcmp(entry->match.media_type, descriptor->media_type) != 0) {
@@ -264,43 +264,43 @@ static int flow_schema_registry_matches(const flow_schema_registry_entry_t *entr
          strcmp(descriptor->type_name, entry->schema.type_name) == 0;
 }
 
-turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
-  turbo_flow_schema_registry_t *registry =
-      (turbo_flow_schema_registry_t *)calloc(1, sizeof(*registry));
-  if (!registry) return NULL;
+turbo_flow_projection_registry_t *turbo_flow_projection_registry_create(void) {
+  turbo_flow_projection_registry_t *projection_registry =
+      (turbo_flow_projection_registry_t *)calloc(1, sizeof(*projection_registry));
+  if (!projection_registry) return NULL;
   if (turbo_flow_stl_error(
-          vec_init_bytes(&registry->entries, sizeof(flow_schema_registry_entry_t *),
+          vec_init_bytes(&projection_registry->entries, sizeof(flow_projection_registry_entry_t *),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
-    free(registry);
+    free(projection_registry);
     return NULL;
   }
-  salts_mutex_init(&registry->lock);
-  registry->lock_initialized = 1;
-  return registry;
+  salts_mutex_init(&projection_registry->lock);
+  projection_registry->lock_initialized = 1;
+  return projection_registry;
 }
 
-void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) {
-  if (!registry) return;
-  if (registry->lock_initialized) salts_mutex_lock(&registry->lock);
-  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
-    flow_schema_registry_entry_t **entry =
-        (flow_schema_registry_entry_t **)vec_at(&registry->entries, i);
-    if (entry) flow_schema_registry_entry_destroy(*entry);
+void turbo_flow_projection_registry_destroy(turbo_flow_projection_registry_t *projection_registry) {
+  if (!projection_registry) return;
+  if (projection_registry->lock_initialized) salts_mutex_lock(&projection_registry->lock);
+  for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
+    flow_projection_registry_entry_t **entry =
+        (flow_projection_registry_entry_t **)vec_at(&projection_registry->entries, i);
+    if (entry) flow_projection_registry_entry_destroy(*entry);
   }
-  vec_destroy(&registry->entries);
-  if (registry->lock_initialized) {
-    salts_mutex_unlock(&registry->lock);
-    salts_mutex_destroy(&registry->lock);
+  vec_destroy(&projection_registry->entries);
+  if (projection_registry->lock_initialized) {
+    salts_mutex_unlock(&projection_registry->lock);
+    salts_mutex_destroy(&projection_registry->lock);
   }
-  free(registry);
+  free(projection_registry);
 }
 
-int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
+int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *projection_registry,
                                         const turbo_flow_content_descriptor_t *match,
                                         const turbo_flow_data_schema_t *schema) {
-  flow_schema_registry_entry_t *entry;
+  flow_projection_registry_entry_t *entry;
   int rc;
-  if (!registry || turbo_flow_content_descriptor_check(match) != SALTS_OK || !schema ||
+  if (!projection_registry || turbo_flow_content_descriptor_check(match) != SALTS_OK || !schema ||
       schema->size < sizeof(*schema) || schema->domain != match->domain || !schema->schema_name ||
       !schema->schema_name[0] || !schema->type_name || !schema->type_name[0] ||
       !schema->projection_type || !schema->projection_type[0] || schema->schema_version == 0u ||
@@ -313,19 +313,19 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
        strcmp(match->type_name, schema->type_name) != 0)) {
     return SALTS_EPROTO;
   }
-  salts_mutex_lock(&registry->lock);
-  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
-    flow_schema_registry_entry_t *const *current =
-        (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
-    if (current && flow_schema_registry_key_equal(*current, match, schema)) {
-      rc = flow_schema_registry_definition_equal(*current, schema) ? SALTS_EALREADY : SALTS_EPROTO;
-      salts_mutex_unlock(&registry->lock);
+  salts_mutex_lock(&projection_registry->lock);
+  for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
+    flow_projection_registry_entry_t *const *current =
+        (flow_projection_registry_entry_t *const *)vec_at_const(&projection_registry->entries, i);
+    if (current && flow_projection_registry_key_equal(*current, match, schema)) {
+      rc = flow_projection_registry_definition_equal(*current, schema) ? SALTS_EALREADY : SALTS_EPROTO;
+      salts_mutex_unlock(&projection_registry->lock);
       return rc;
     }
   }
-  entry = (flow_schema_registry_entry_t *)calloc(1, sizeof(*entry));
+  entry = (flow_projection_registry_entry_t *)calloc(1, sizeof(*entry));
   if (!entry) {
-    salts_mutex_unlock(&registry->lock);
+    salts_mutex_unlock(&projection_registry->lock);
     return SALTS_ENOMEM;
   }
   entry->match = *match;
@@ -334,8 +334,8 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->type_name = tstr_dup(schema->type_name);
   entry->projection_type = tstr_dup(schema->projection_type);
   if (!entry->schema_name || !entry->type_name || !entry->projection_type) {
-    flow_schema_registry_entry_destroy(entry);
-    salts_mutex_unlock(&registry->lock);
+    flow_projection_registry_entry_destroy(entry);
+    salts_mutex_unlock(&projection_registry->lock);
     return SALTS_ENOMEM;
   }
   entry->schema = *schema;
@@ -344,40 +344,40 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->schema.type_name = entry->type_name;
   entry->schema.projection_type = entry->projection_type;
   entry->schema.schema_text = NULL;
-  rc = turbo_flow_stl_error(vec_push(&registry->entries, &entry));
-  if (rc != SALTS_OK) flow_schema_registry_entry_destroy(entry);
-  salts_mutex_unlock(&registry->lock);
+  rc = turbo_flow_stl_error(vec_push(&projection_registry->entries, &entry));
+  if (rc != SALTS_OK) flow_projection_registry_entry_destroy(entry);
+  salts_mutex_unlock(&projection_registry->lock);
   return rc;
 }
 
-int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *registry,
+int turbo_flow_projection_registry_resolve(const turbo_flow_projection_registry_t *projection_registry,
                                        const turbo_flow_content_descriptor_t *descriptor,
                                        const turbo_flow_data_schema_t **schema_out) {
-  turbo_flow_schema_registry_t *mutable_registry = (turbo_flow_schema_registry_t *)registry;
+  turbo_flow_projection_registry_t *mutable_projection_registry = (turbo_flow_projection_registry_t *)projection_registry;
   if (schema_out) *schema_out = NULL;
-  if (!registry || !schema_out || turbo_flow_content_descriptor_check(descriptor) != SALTS_OK) {
+  if (!projection_registry || !schema_out || turbo_flow_content_descriptor_check(descriptor) != SALTS_OK) {
     return SALTS_EINVAL;
   }
   const turbo_flow_data_schema_t *resolved = NULL;
-  salts_mutex_lock(&mutable_registry->lock);
-  for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
-    flow_schema_registry_entry_t *const *entry =
-        (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
-    if (entry && flow_schema_registry_matches(*entry, descriptor)) {
+  salts_mutex_lock(&mutable_projection_registry->lock);
+  for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
+    flow_projection_registry_entry_t *const *entry =
+        (flow_projection_registry_entry_t *const *)vec_at_const(&projection_registry->entries, i);
+    if (entry && flow_projection_registry_matches(*entry, descriptor)) {
       resolved = &(*entry)->schema;
     }
   }
   if (resolved) {
     *schema_out = resolved;
-    salts_mutex_unlock(&mutable_registry->lock);
+    salts_mutex_unlock(&mutable_projection_registry->lock);
     return SALTS_OK;
   }
-  salts_mutex_unlock(&mutable_registry->lock);
+  salts_mutex_unlock(&mutable_projection_registry->lock);
   return SALTS_ENOENT;
 }
 
 int turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descriptor,
-                                          const turbo_flow_schema_registry_t *registry,
+                                          const turbo_flow_projection_registry_t *projection_registry,
                                           const turbo_flow_content_schema_ref_t *selector) {
   const turbo_flow_data_schema_t *schema = NULL;
   int explicit_selector = selector != NULL;
@@ -386,15 +386,15 @@ int turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descr
   if (selector) {
     if (selector->size < sizeof(*selector) || !selector->schema_name || !selector->schema_name[0] ||
         !selector->type_name || !selector->type_name[0] || selector->schema_version == 0u ||
-        !registry) {
+        !projection_registry) {
       return SALTS_EINVAL;
     }
     rc = turbo_flow_content_descriptor_declare_schema(
         descriptor, selector->schema_name, selector->type_name, selector->schema_version);
     if (rc != SALTS_OK) return rc;
   }
-  if (!registry) return SALTS_OK;
-  rc = turbo_flow_schema_registry_resolve(registry, descriptor, &schema);
+  if (!projection_registry) return SALTS_OK;
+  rc = turbo_flow_projection_registry_resolve(projection_registry, descriptor, &schema);
   if (rc == SALTS_ENOENT) return explicit_selector ? SALTS_EPROTO : SALTS_OK;
   if (rc != SALTS_OK) return rc;
   if (!schema) return SALTS_EPROTO;
@@ -435,7 +435,7 @@ int turbo_flow_content_descriptor_from_media(turbo_flow_content_descriptor_t *de
   rc = turbo_flow_content_descriptor_init(descriptor, domain, profile, encoding,
                                           normalized_media_type, identity);
   if (rc != SALTS_OK) return rc;
-  return turbo_flow_content_descriptor_resolve(descriptor, binding ? binding->registry : NULL,
+  return turbo_flow_content_descriptor_resolve(descriptor, binding ? binding->projection_registry : NULL,
                                                selector);
 }
 
@@ -481,13 +481,13 @@ int turbo_flow_content_descriptor_validate_payload(const turbo_flow_content_desc
   return SALTS_OK;
 }
 
-int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
-                                  const turbo_flow_schema_registry_t *registry,
+int turbo_flow_msg_resolve_projection_schema(const turbo_flow_msg_t *msg,
+                                  const turbo_flow_projection_registry_t *projection_registry,
                                   const turbo_flow_data_schema_t **schema_out) {
   const turbo_flow_content_descriptor_t *descriptor = turbo_flow_msg_content_descriptor(msg);
   if (!descriptor) {
     if (schema_out) *schema_out = NULL;
     return SALTS_ENOENT;
   }
-  return turbo_flow_schema_registry_resolve(registry, descriptor, schema_out);
+  return turbo_flow_projection_registry_resolve(projection_registry, descriptor, schema_out);
 }
