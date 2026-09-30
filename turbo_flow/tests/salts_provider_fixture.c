@@ -72,7 +72,7 @@ static int fixture_materialize(void *self, turbo_flow_t *flow,
 }
 
 CMETA_IMPLEMENTS(turbo_flow_provider_factory, fixture_provider_factory, 0u,
-                 .describe = fixture_describe,
+                 .contract = fixture_describe,
                  .preflight = fixture_preflight,
                  .materialize = fixture_materialize);
 
