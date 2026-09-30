@@ -4,6 +4,7 @@
 #include "platform.h"
 #include "salts_error.h"
 #include "turbo_flow_config_limits.h"
+#include "turbo_flow_diagnostic.h"
 #include "turbo_flow_export.h"
 
 #include <stddef.h>
@@ -13,8 +14,6 @@
 extern "C" {
 #endif
 
-#define TURBO_FLOW_CONFIG_PATH_MAX 255u
-#define TURBO_FLOW_CONFIG_MESSAGE_MAX 255u
 typedef struct turbo_flow_resolved_config_s turbo_flow_resolved_config_t;
 
 /** Borrowed immutable configured DLL identity, valid until its resolved config is destroyed. */
@@ -138,15 +137,6 @@ typedef struct turbo_flow_resolved_channel_view_s {
 
 #define TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT                                                      \
   {sizeof(turbo_flow_resolved_channel_view_t), NULL, NULL, NULL}
-
-typedef struct turbo_flow_config_error_s {
-  size_t size;
-  int status;
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
-  char message[TURBO_FLOW_CONFIG_MESSAGE_MAX + 1u];
-} turbo_flow_config_error_t;
-
-#define TURBO_FLOW_CONFIG_ERROR_INIT {sizeof(turbo_flow_config_error_t), SALTS_OK, {0}, {0}}
 
 /**
  * Resolve one YAML document into a canonical immutable configuration snapshot.
