@@ -52,6 +52,27 @@ typedef enum flow_node_config_kind_e {
   FLOW_NODE_CONFIG_STAGE
 } flow_node_config_kind_t;
 
+typedef enum flow_provider_config_value_kind_e {
+  FLOW_PROVIDER_CONFIG_VALUE_TEXT = 1,
+  FLOW_PROVIDER_CONFIG_VALUE_UINT,
+  FLOW_PROVIDER_CONFIG_VALUE_IDENT
+} flow_provider_config_value_kind_t;
+
+typedef struct flow_provider_config_value_spec_s {
+  flow_provider_config_value_kind_t kind;
+  flow_token_t token;
+} flow_provider_config_value_spec_t;
+
+typedef struct flow_provider_config_literal_spec_s {
+  vstr name;
+  flow_provider_config_literal_kind_t kind;
+  vstr text;
+  uint64_t uint_value;
+  int bool_value;
+  uint32_t line;
+  uint32_t column;
+} flow_provider_config_literal_spec_t;
+
 typedef struct flow_stage_spec_s {
   turbo_flow_data_strategy_t data_strategy;
   uint32_t data_worker_count;
@@ -88,6 +109,7 @@ typedef struct flow_parse_ctx_s {
   flow_token_t node_config_name;
   flow_stage_spec_t node_config_spec;
   flow_node_config_kind_t node_config_kind;
+  vec_t node_config_literals; /* flow_provider_config_literal_spec_t */
   int has_root_stage;
   int in_root_stage;
   int in_stage_template;
@@ -125,6 +147,9 @@ int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *option
 
 int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
                                  flow_stage_spec_t spec, flow_node_config_kind_t kind);
+int flow_parse_add_provider_config_literal(
+    flow_parse_ctx_t *ctx, flow_token_t name,
+    flow_provider_config_value_spec_t value);
 int flow_parse_finish_node_config(flow_parse_ctx_t *ctx);
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource);
