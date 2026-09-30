@@ -442,6 +442,26 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
     turbo_flow_destroy(flow);
   }
 
+  it("rejects a generated FunctionAbi that does not match the Service FunctionDesc") {
+    turbo_flow_t *flow = databind_service_flow();
+
+    check_not_null(flow);
+    service_codec_calls = 0u;
+    service_resolver_calls = 0u;
+    check_equal(
+        turbo_flow_product_bind_databind_http_service(
+            flow, "http_service", "Calc", "Add",
+            counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_5_Other__databind_function_abi(),
+            &databind_tf_service_http_projection),
+        SALTS_EPROTO);
+    check_equal(service_resolver_calls, (size_t)1u);
+    check_equal(service_codec_calls, (size_t)0u);
+    check_false(flow->compiled_plan.sealed);
+
+    turbo_flow_destroy(flow);
+  }
+
   it("rejects a reflected provider with a different canonical FunctionDesc") {
     turbo_flow_t *flow = databind_service_flow_with_function(1);
 
