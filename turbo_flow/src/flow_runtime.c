@@ -1283,8 +1283,8 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
       executor->keyed_fn || executor->keyed_emit_fn || executor->window_fn) {
     return NULL;
   }
-  runtime = flow_stage_operation_runtime(flow, stage);
-  if (runtime &&
+  runtime = &executor->runtime;
+  if (
       (runtime->handoff != TURBO_FLOW_HANDOFF_DIRECT || runtime->deadline_ms != 0u ||
        runtime->settlement != 0u)) {
     return NULL;

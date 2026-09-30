@@ -567,6 +567,17 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       memset(&executor, 0, sizeof(executor));
       executor.stage_index = (uint32_t)stage_index;
       executor.exec = stage->exec;
+      {
+        const turbo_flow_operation_runtime_contract_t *runtime =
+            flow_stage_operation_runtime(flow, stage);
+        /*
+         * Structural/template stages can exist in the parsed stage table without
+         * becoming executable runtime nodes. Their zeroed executor policy is never
+         * dispatched. Executable stages have their resolved runtime contract
+         * frozen here; runtime paths never consult the mutable stage copy.
+         */
+        if (runtime) executor.runtime = *runtime;
+      }
       executor.fn = stage->fn;
       executor.emit_fn = stage->emit_fn;
       executor.key_selector = stage->key_selector;

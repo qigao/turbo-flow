@@ -215,6 +215,7 @@ cmake_add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plan_introspection.c
     ${CMAKE_CURRENT_SOURCE_DIR}/plan_introspection_header_cpp.cpp
   LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 set_target_properties(test_flow_plan_introspection PROPERTIES
   C_STANDARD 11

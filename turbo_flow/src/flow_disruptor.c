@@ -480,7 +480,7 @@ int flow_worker_pool_submit(flow_worker_pool_adapter_t *adapter, turbo_flow_msg_
 
   memset(&request, 0, sizeof(request));
   request.adapter = adapter;
-  runtime = flow_stage_operation_runtime(adapter->flow, adapter->stage);
+  runtime = adapter->executor ? &adapter->executor->runtime : NULL;
   record = flow_pool_record_at(adapter->flow, adapter->pool_record_index);
   rc = flow_execution_task_init(
       &request.execution, FLOW_EXECUTION_DISRUPTOR, flow_worker_request_run, &request, msg,

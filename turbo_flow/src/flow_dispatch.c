@@ -108,7 +108,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
                                     const flow_adapter_registration_t *adapter,
                                     flow_stage_completion_t *completion) {
   const turbo_flow_operation_runtime_contract_t *runtime =
-      flow_stage_operation_runtime(flow, stage);
+      executor ? &executor->runtime : NULL;
   uint64_t started_at = 0u;
   int status;
   flow_stage_completion_t *previous_settlement;

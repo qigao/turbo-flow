@@ -56,6 +56,7 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
                                   uint32_t stage_index, turbo_flow_msg_t *msg,
                                   flow_stage_completion_t *completion, int callback_status) {
   const turbo_flow_operation_runtime_contract_t *runtime;
+  const flow_executor_plan_t *executor;
   const flow_adapter_registration_t *adapter;
   turbo_flow_settlement_result_t automatic = TURBO_FLOW_SETTLEMENT_RESULT_INIT;
   turbo_flow_settlement_result_t *result;
@@ -64,7 +65,8 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
   int rc;
 
   if (!flow || !stage || !msg || !completion) return SALTS_EINVAL;
-  runtime = flow_stage_operation_runtime(flow, stage);
+  executor = flow_executor_plan_for_stage(flow, stage_index);
+  runtime = executor ? &executor->runtime : NULL;
   if (!runtime || runtime->settlement == 0u) return callback_status;
   if ((runtime->settlement & ~TURBO_FLOW_SETTLEMENT_RETRY) == 0u) return callback_status;
   if (completion->settlement_duplicate) {
