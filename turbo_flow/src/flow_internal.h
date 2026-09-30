@@ -266,6 +266,8 @@ typedef struct flow_data_segment_plan_s {
 typedef struct flow_executor_plan_s {
   uint32_t stage_index;
   turbo_flow_exec_config_t exec;
+  /** Frozen operation runtime contract copied into the sealed ExecutionPlan. */
+  turbo_flow_operation_runtime_contract_t runtime;
   turbo_flow_stage_fn fn;
   turbo_flow_emitting_stage_fn emit_fn;
   turbo_flow_key_selector_fn key_selector;
