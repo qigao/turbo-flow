@@ -178,7 +178,9 @@ foreach(required_fragment IN ITEMS
         "SALTS_ROOT SALTS_UTILS_ROOT"
         "find_package(Salts CONFIG REQUIRED"
         "find_package(SaltsUtils CONFIG REQUIRED"
-        "resolved SaltsUtils package is missing required target Salts::DataBind")
+        "find_package(TurboDB CONFIG REQUIRED"
+        "resolved SaltsUtils package is missing required target Salts::DataBind"
+        "resolved TurboDB package is missing required target Orm::C")
   string(FIND "${root_cmake}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "source package cut missing fragment: ${required_fragment}")
@@ -187,6 +189,7 @@ endforeach()
 foreach(forbidden_fragment IN ITEMS
         "DATABIND_ROOT"
         "find_package(DataBind"
+        "find_package(Orm"
         "find_package(Salts 1."
         "find_package(SaltsUtils 4."
         " EXACT CONFIG REQUIRED"
@@ -201,7 +204,9 @@ file(READ "${TURBO_FLOW_SOURCE_DIR}/cmake/TurboFlowConfig.cmake.in" config_templ
 foreach(required_fragment IN ITEMS
         "find_dependency(Salts CONFIG REQUIRED"
         "find_dependency(SaltsUtils CONFIG REQUIRED"
-        "resolved SaltsUtils package is missing Salts::DataBind")
+        "find_dependency(TurboDB CONFIG REQUIRED"
+        "resolved SaltsUtils package is missing Salts::DataBind"
+        "resolved TurboDB package is missing Orm::C")
   string(FIND "${config_template}" "${required_fragment}" fragment_pos)
   if(fragment_pos EQUAL -1)
     message(FATAL_ERROR "installed config missing fragment: ${required_fragment}")
@@ -210,10 +215,10 @@ endforeach()
 foreach(forbidden_fragment IN ITEMS
         "DATABIND_ROOT"
         "find_dependency(DataBind"
+        "find_dependency(Orm"
         "find_dependency(Salts 1."
         "find_dependency(SaltsUtils 4."
         "find_dependency(RulesForge 0."
-        "find_dependency(Orm 2."
         " EXACT CONFIG REQUIRED"
         "Salts::TbeSchema")
   string(FIND "${config_template}" "${forbidden_fragment}" fragment_pos)
