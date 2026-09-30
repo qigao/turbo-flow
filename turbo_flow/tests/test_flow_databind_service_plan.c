@@ -246,6 +246,14 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
     check_equal(service_resolver_calls, (size_t)2u);
     check_equal(service_codec_calls, (size_t)0u);
 
+    {
+      const turbo_flow_operation_descriptor_t *registered =
+          turbo_flow_find_operation(flow, "test.databind.service");
+      check_not_null(registered);
+      check_null(registered->input_type);
+      check_null(registered->output_type);
+    }
+
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(service_resolver_calls, (size_t)2u);
     check_equal(service_codec_calls, (size_t)2u);
@@ -320,6 +328,18 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
                 TURBO_FLOW_EXECUTION_BACKEND_PROVIDER_BOUNDARY);
     check_equal(stage_view.cflow_region_index,
                 TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE);
+    {
+      const flow_stage_plan_impl_t *stage =
+          (const flow_stage_plan_impl_t *)vec_at_const(
+              &flow->stages, (size_t)http_stage);
+      check_not_null(stage);
+      check_equal(stage->resolved_operation.input_domain,
+                  TURBO_FLOW_DOMAIN_DATA);
+      check_equal(stage->resolved_operation.output_domain,
+                  TURBO_FLOW_DOMAIN_DATA);
+      check_equal(strcmp(stage->resolved_operation.input_type, "Message"), 0);
+      check_equal(strcmp(stage->resolved_operation.output_type, "Message"), 0);
+    }
     stage_view = (turbo_flow_execution_stage_view_t)
         TURBO_FLOW_EXECUTION_STAGE_VIEW_INIT;
     check_equal(
