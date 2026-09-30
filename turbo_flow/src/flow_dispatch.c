@@ -121,7 +121,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
     } else if (adapter->async_emit_ops.submit) {
       status = flow_async_emit_submit_stage(flow, stage, adapter, msg, completion);
     } else {
-      status = flow_adapter_consume_stage(flow, stage, adapter, msg);
+      status = flow_adapter_consume_stage(flow, stage, executor->stage_index, adapter, msg);
     }
   } else {
     status = flow_dispatch_inline_stage(executor, msg);
