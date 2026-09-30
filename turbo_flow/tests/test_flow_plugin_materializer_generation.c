@@ -4,6 +4,7 @@
 #include "../src/flow_projection_owner_internal.h"
 #include "../../tests/flow_operation_fixture.h"
 
+#include <cmeta/function.h>
 #include <cmeta/type_select.h>
 #include <stdlib.h>
 #include <string.h>
