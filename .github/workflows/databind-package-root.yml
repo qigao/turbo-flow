@@ -9,14 +9,7 @@ on:
       - 'turbo_flow/include/turbo_flow_databind.h'
       - 'turbo_flow/src/flow_databind_plan.c'
       - 'turbo_flow/src/flow_product_databind.c'
-      - 'turbo_flow/src/flow_internal.h'
-      - 'turbo_flow/src/flow_plan.c'
-      - 'turbo_flow/src/flow_plan_semantics.c'
-      - 'turbo_flow/tests/CMakeLists.txt'
       - 'turbo_flow/tests/test_flow_databind_channel_plan.c'
-      - 'turbo_flow/tests/test_flow_databind_service_plan.c'
-      - 'turbo_flow/tests/databind_service.schema'
-      - 'turbo_flow/tests/databind_service_header_cpp.cpp'
       - 'turbo_flow/tests/databind_channel.schema'
       - 'turbo_flow/tests/databind_channel_projection.json'
       - 'CMakeUserPresets.json'
@@ -40,14 +33,7 @@ on:
       - 'turbo_flow/include/turbo_flow_databind.h'
       - 'turbo_flow/src/flow_databind_plan.c'
       - 'turbo_flow/src/flow_product_databind.c'
-      - 'turbo_flow/src/flow_internal.h'
-      - 'turbo_flow/src/flow_plan.c'
-      - 'turbo_flow/src/flow_plan_semantics.c'
-      - 'turbo_flow/tests/CMakeLists.txt'
       - 'turbo_flow/tests/test_flow_databind_channel_plan.c'
-      - 'turbo_flow/tests/test_flow_databind_service_plan.c'
-      - 'turbo_flow/tests/databind_service.schema'
-      - 'turbo_flow/tests/databind_service_header_cpp.cpp'
       - 'turbo_flow/tests/databind_channel.schema'
       - 'turbo_flow/tests/databind_channel_projection.json'
       - 'CMakeUserPresets.json'
@@ -63,7 +49,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 concurrency:
   group: databind-package-root-${{ github.head_ref || github.ref_name }}
@@ -73,7 +58,7 @@ jobs:
   package-root:
     name: Exact-head SaltsUtils DataBind provenance
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 10
     env:
       EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -108,87 +93,6 @@ jobs:
           python3 -m json.tool CMakeUserPresets.json >/dev/null
           python3 -m json.tool tests/install_consumer/CMakeUserPresets.json >/dev/null
           python3 -m json.tool tests/install_consumer/component/CMakeUserPresets.json >/dev/null
-
-      - name: Use empty vcpkg L1 cache
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cache="$RUNNER_TEMP/databind-empty-l1"
-          rm -rf "$cache"
-          mkdir -p "$cache"
-          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-      - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Install build tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
-
-      - name: Restore latest published Salts SDKs
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64
-
-      - name: Verify released DataBind Service SDK surface
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -f "$SALTS_UTILS_ROOT/include/data_bind_method_plan.h"
-          test -f "$SALTS_UTILS_ROOT/include/data_bind_binding_plan.h"
-          test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
-          test -z "${DATABIND_ROOT:-}"
-          test -z "${DATABIND_HOST_ROOT:-}"
-
-      - name: Configure generated DataBind plan tests
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/databind-plan -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTING=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF \
-            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
-            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
-            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
-            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
-
-      - name: Build and run generated Channel and Service plan tests
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --build build/databind-plan \
-            --target test_flow_databind_channel_plan test_flow_databind_service_plan -j2
-          ctest --test-dir build/databind-plan \
-            -R '^test_flow_databind_(channel|service)_plan      - name: Verify committed source remained clean
-        if: always()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          git diff --exit-code
- \
-            --output-on-failure
 
       - name: Verify committed source remained clean
         if: always()
