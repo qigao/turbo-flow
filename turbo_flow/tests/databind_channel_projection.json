@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "socket": {
+    "channel": "Device.Telemetry",
+    "mode": "stream",
+    "framing": "length32-be",
+    "format": "binary",
+    "max_frame_bytes": 65536
+  },
+  "flowmq": {
+    "channel": "Device.Telemetry",
+    "pattern": "pubsub",
+    "format": "binary",
+    "max_payload_bytes": 65536
+  }
+}
