@@ -6,6 +6,67 @@
 #include <stdlib.h>
 #include <string.h>
 
+FunctionDecl(value, int, runtime_fixture_double,
+    (int, value, CMETA_PARAM_IN));
+int runtime_fixture_double(int value) {
+  return value * 2;
+}
+
+FunctionDecl(value, long, runtime_fixture_changed_output,
+    (int, value, CMETA_PARAM_IN));
+long runtime_fixture_changed_output(int value) {
+  return (long)value * 2L;
+}
+
+static turbo_flow_operation_port_binding_t runtime_input_port(void) {
+  turbo_flow_operation_port_binding_t port =
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  port.port_index = 0u;
+  port.domain = TURBO_FLOW_DOMAIN_DATA;
+  port.direction = TURBO_FLOW_OPERATION_PORT_INPUT;
+  port.value_kind = TURBO_FLOW_OPERATION_VALUE_PARAMETER;
+  port.storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  port.parameter_index = 0u;
+  port.data = &cmeta_data_int;
+  return port;
+}
+
+static turbo_flow_operation_port_binding_t runtime_output_port(
+    const cmeta_data_desc *data) {
+  turbo_flow_operation_port_binding_t port =
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  port.port_index = 0u;
+  port.domain = TURBO_FLOW_DOMAIN_DATA;
+  port.direction = TURBO_FLOW_OPERATION_PORT_OUTPUT;
+  port.value_kind = TURBO_FLOW_OPERATION_VALUE_RETURN;
+  port.storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  port.parameter_index = SIZE_MAX;
+  port.data = data;
+  return port;
+}
+
+static int runtime_register_reflected_operation(
+    turbo_flow_t *flow, const turbo_flow_operation_descriptor_t *operation,
+    int changed_output) {
+  turbo_flow_reflected_operation_registration_t registration =
+      TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+  turbo_flow_operation_port_binding_t ports[2];
+  ports[0] = runtime_input_port();
+  ports[1] = runtime_output_port(
+      changed_output ? &cmeta_data_long : &cmeta_data_int);
+  registration.operation = operation;
+  registration.function =
+      changed_output ? FunctionMeta(runtime_fixture_changed_output)
+                     : FunctionMeta(runtime_fixture_double);
+  registration.abi =
+      changed_output ? FunctionAbi(runtime_fixture_changed_output)
+                     : FunctionAbi(runtime_fixture_double);
+  registration.ports = ports;
+  registration.port_count = 2u;
+  registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
+  return turbo_flow_register_reflected_operation(flow, &registration);
+}
+
 static const char operation_yaml[] =
     "version: 1\noperation_bindings:\n"
     "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
@@ -87,7 +148,8 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_plugin_operation_catalog_v3_t catalog;
-  turbo_flow_operation_descriptor_t m = {0};
+  turbo_flow_operation_descriptor_t operation = {0};
+  turbo_flow_operation_descriptor_t capture_operation = {0};
   turbo_flow_operation_provider_registration_t capture =
       TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
   int rc;
@@ -117,58 +179,70 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   if (rc) return rc;
   t->flow = turbo_flow_create();
   if (!t->flow) return SALTS_ENOMEM;
-  m.size = sizeof(m);
-  m.name = "fixture.double";
-  m.version = 1;
-  m.domain = m.input_domain = m.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  m.input_type = m.output_type = "Message";
-  m.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
-  m.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
-  m.flags = TURBO_FLOW_OPERATION_STAGE;
-  m.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+
+  /*
+   * fixture.double owns no native signature strings. CMeta reflection is the
+   * semantic authority; ABI3 supplies only the implementation/runtime profile.
+   */
+  operation.size = sizeof(operation);
+  operation.name = "fixture.double";
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   switch (fault) {
   case 1:
-    m.version = 2;
-    break;
-  case 2:
-    m.output_type = "changed";
+    operation.version = 2u;
     break;
   case 3:
-    m.scope.state = TURBO_FLOW_STATE_SCOPE_NODE;
+    operation.scope.state = TURBO_FLOW_STATE_SCOPE_NODE;
     break;
   case 4:
-    m.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
+    operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_OWNER_CONTEXT;
     break;
   case 5:
-    m.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+    operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
     break;
   case 6:
-    m.runtime.settlement = 1;
+    operation.runtime.settlement = 1u;
     break;
   case 7:
-    m.runtime.deadline_ms = 1;
+    operation.runtime.deadline_ms = 1u;
     break;
   case 8:
-    m.execution_mask |= TURBO_FLOW_OPERATION_EXEC_THREAD;
+    operation.execution_mask |= TURBO_FLOW_OPERATION_EXEC_THREAD;
     break;
   case 9:
-    m.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
+    operation.runtime.handoff = TURBO_FLOW_HANDOFF_BOUNDED;
     break;
   case 13:
-    --m.size;
+    --operation.size;
     break;
   case 14:
-    m.version = 0;
+    operation.version = 0u;
     break;
   default:
     break;
   }
-  rc = turbo_flow_register_operation(t->flow, &m);
+  rc = runtime_register_reflected_operation(t->flow, &operation, fault == 2);
   if (rc) return rc;
-  m.name = "fixture.capture";
-  rc = turbo_flow_register_operation(t->flow, &m);
+
+  capture_operation.size = sizeof(capture_operation);
+  capture_operation.name = "fixture.capture";
+  capture_operation.version = 1u;
+  capture_operation.domain =
+      capture_operation.input_domain =
+      capture_operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  capture_operation.input_type = capture_operation.output_type = "Message";
+  capture_operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  capture_operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  capture_operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  capture_operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  rc = turbo_flow_register_operation(t->flow, &capture_operation);
   if (rc) return rc;
-  capture.operation_name = m.name;
+  capture.operation_name = capture_operation.name;
   capture.fn = capture_result;
   capture.ctx = &t->result;
   rc = turbo_flow_register_operation_provider(t->flow, &capture);
