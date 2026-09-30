@@ -119,10 +119,10 @@ static turbo_flow_t *plan_diag_build_native(void) {
   operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
   operation.output_type = "diag.Int";
   operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
-  operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
-  operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_PRIVATE;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_TASK;
   operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
-  operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
   operation.flags = TURBO_FLOW_OPERATION_STAGE;
   operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
