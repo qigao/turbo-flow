@@ -165,8 +165,8 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
     check_equal(
         turbo_flow_execution_plan_databind_service_at(flow, 1u, &rpc_view),
         SALTS_OK);
-    check_equal(http_view.transport, TURBO_FLOW_DATABIND_SERVICE_HTTP);
-    check_equal(rpc_view.transport, TURBO_FLOW_DATABIND_SERVICE_RPC);
+    check_equal(http_view.transport, DATA_BIND_TRANSPORT_HTTP);
+    check_equal(rpc_view.transport, DATA_BIND_TRANSPORT_RPC);
     check_equal(strcmp(http_view.service_name, "Calc"), 0);
     check_equal(strcmp(http_view.operation_name, "Add"), 0);
     check_equal(strcmp(http_view.function_name, "ServiceSdk.Calc.Add"), 0);
