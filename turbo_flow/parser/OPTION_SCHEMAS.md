@@ -87,12 +87,10 @@ databind_schema   optional inbound/outbound schema reference
 ```
 
 The implementation represents this as copied C metadata registered through
-`turbo_flow_register_adapter_ex()`. Existing callers can continue to use
-`turbo_flow_register_adapter()` without a schema. The public YAML v1 resolver
-maps external configuration onto immutable typed views and emits canonical
-resolved JSON for diagnostics and tooling. Module registration projects those
-views into the same typed adapter/owner configs before allocation. TOML,
-human-authored JSON, and resolved JSON are not alternate runtime config inputs.
+`turbo_flow_register_adapter_ex()`. Provider-specific node configuration is
+admitted during `.flow` compile/preflight through the selected provider's
+canonical typed contract (#238). TurboFlow does not maintain a second YAML/JSON
+product-configuration schema.
 
 ## Common Option Field Types
 
@@ -406,14 +404,12 @@ form:
 stage out adapter "host.output"
 ```
 
-Config profiles are resolved by the external YAML v1 configuration layer and
-are not currently part of the `.flow` grammar. The parser therefore never
-accepts a profile reference that the runtime would ignore. Binding a resolved
-profile directly from `.flow` requires the proposed parameterized-stage and
-`with` expansion. A possible future syntax is:
+External YAML profiles are not part of the TurboFlow architecture. Reusable
+stage configuration, if added, must be expressed directly in `.flow` with
+deterministic compile-time semantics. A possible future `.flow`-native shape is:
 
 ```flow
-stage out adapter "host.output" with "prod.output"
+stage out adapter "host.output" with output_policy
 ```
 
 Here `prod.output` would name a host config profile, not embed secrets in the DSL.
