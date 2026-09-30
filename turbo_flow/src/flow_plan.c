@@ -567,6 +567,15 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       memset(&executor, 0, sizeof(executor));
       executor.stage_index = (uint32_t)stage_index;
       executor.exec = stage->exec;
+      {
+        const turbo_flow_operation_runtime_contract_t *runtime =
+            flow_stage_operation_runtime(flow, stage);
+        if (!runtime) {
+          return flow_plan_fail(flow, &candidate, SALTS_EPROTO,
+                                "compiled executor has no operation runtime contract");
+        }
+        executor.runtime = *runtime;
+      }
       executor.fn = stage->fn;
       executor.emit_fn = stage->emit_fn;
       executor.key_selector = stage->key_selector;
