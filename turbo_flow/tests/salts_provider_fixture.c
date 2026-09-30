@@ -1,4 +1,5 @@
 #include "turbo_flow_provider.h"
+#include "salts_resource_fixture.h"
 
 #include <salts/plugin.h>
 #include <salts/thread.h>
@@ -44,6 +45,10 @@ static int fixture_describe(void *self, turbo_flow_provider_contract_v1_t *out) 
   *out = (turbo_flow_provider_contract_v1_t)TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
   out->config.codec_factory = fixture_codec_factory;
   out->config.message_artifact = &FIXTURE_CONFIG_ARTIFACT;
+  out->resource.contract_id = FLOW_TEST_RESOURCE_CONTRACT_ID;
+  out->resource.contract_version = FLOW_TEST_RESOURCE_CONTRACT_VERSION;
+  out->resource.required_capabilities = FLOW_TEST_RESOURCE_CAP_READ;
+  out->resource.expected_interface = flow_test_resource_interface();
   return SALTS_OK;
 }
 
@@ -51,10 +56,30 @@ static int fixture_preflight(void *self,
                              const turbo_flow_provider_instance_v1_t *instance,
                              turbo_flow_config_error_t *error) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  const turbo_flow_provider_resource_view_v1_t *resource;
+  flow_test_resource *resource_value;
+
   if (!state || !state->started || state->stopping || !instance ||
       instance->size != sizeof(*instance) || !instance->instance_name ||
       !instance->instance_name[0])
     return SALTS_EINVAL;
+
+  resource = instance->resource;
+  if (!resource || resource->size != sizeof(*resource) ||
+      !resource->identity || strcmp(resource->identity, "db-main") != 0 ||
+      !resource->export_id ||
+      strcmp(resource->export_id, "fixture.resource") != 0 ||
+      !resource->interface_desc ||
+      !cmeta_interface_desc_equal(
+          resource->interface_desc, flow_test_resource_interface()) ||
+      !resource->interface_value)
+    return SALTS_EPROTO;
+
+  resource_value = (flow_test_resource *)resource->interface_value;
+  if (!flow_test_resource_valid(resource_value) ||
+      flow_test_resource_ping(resource_value) != 7)
+    return SALTS_EPROTO;
+
   if (error) *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   return SALTS_OK;
 }
