@@ -24,6 +24,7 @@
 #define TURBO_FLOW_COLUMN_START 1u
 #define FLOW_WORKER_POOL_DEFAULT_CAPACITY 1024u
 #define FLOW_WORKER_POOL_MAX_CAPACITY 1048576u
+#define FLOW_PROVIDER_CONFIG_MAX_FIELDS 256u
 enum {
   FLOW_DATA_SCHEMA_MAX_DEPTH = 16,
   FLOW_DATA_SCHEMA_MAX_NODES = 256,
@@ -35,6 +36,22 @@ typedef enum flow_databind_transport_kind_e {
   FLOW_DATABIND_TRANSPORT_SOCKET,
   FLOW_DATABIND_TRANSPORT_FLOWMQ
 } flow_databind_transport_kind_t;
+
+typedef enum flow_provider_config_literal_kind_e {
+  FLOW_PROVIDER_CONFIG_LITERAL_TEXT = 1,
+  FLOW_PROVIDER_CONFIG_LITERAL_UINT,
+  FLOW_PROVIDER_CONFIG_LITERAL_BOOL
+} flow_provider_config_literal_kind_t;
+
+typedef struct flow_provider_config_literal_s {
+  tstr name;
+  flow_provider_config_literal_kind_t kind;
+  tstr text;
+  uint64_t uint_value;
+  int bool_value;
+  uint32_t line;
+  uint32_t column;
+} flow_provider_config_literal_t;
 
 typedef struct flow_databind_source_binding_s
     flow_databind_source_binding_t;
@@ -53,6 +70,8 @@ typedef struct flow_stage_plan_impl_s {
   tstr adapter_name;
   tstr operation_name;
   tstr resource_name;
+  /** Bounded source literals used only by compile/preflight provider binding. */
+  vec_t provider_config_literals; /* flow_provider_config_literal_t */
   turbo_flow_operation_descriptor_t resolved_operation;
   int operation_resolved;
   turbo_flow_data_strategy_t data_strategy;
