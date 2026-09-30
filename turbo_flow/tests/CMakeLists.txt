@@ -191,15 +191,27 @@ set_target_properties(test_flow_salts_provider_fixture PROPERTIES
   C_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES)
 
+add_library(test_flow_salts_resource_fixture SHARED
+  salts_resource_fixture.c
+  salts_resource_fixture.h)
+target_link_libraries(test_flow_salts_resource_fixture
+  PRIVATE TurboFlow::Product Salts::Plugin)
+set_target_properties(test_flow_salts_resource_fixture PROPERTIES
+  FOLDER "turbo_flow/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 cmake_add_test(
   test_flow_salts_provider_binding
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_salts_provider_binding.c
   LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_salts_provider_binding
-  test_flow_salts_provider_fixture)
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture)
 target_compile_definitions(test_flow_salts_provider_binding PRIVATE
-  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>")
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_tests_properties(test_flow_salts_provider_binding PROPERTIES
   LABELS "graph;provider;plugin;interface;lease"
   TIMEOUT 30)
