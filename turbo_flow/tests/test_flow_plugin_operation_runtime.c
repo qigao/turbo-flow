@@ -447,8 +447,8 @@ static void runtime_reject_error_header(uint32_t phase, int mode, int fault, int
   }
   if (phase == TURBO_FLOW_PLUGIN_OPERATION_PHASE_EXECUTE || had_cleanup) {
     check_equal(diagnostic.size, sizeof(diagnostic));
-    check_equal(diagnostic.abi_major, 3u);
-    check_equal(diagnostic.abi_minor, 0u);
+    check_equal(diagnostic.abi_major, TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR);
+    check_equal(diagnostic.abi_minor, TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR);
     if (fault != OP_ERROR_VALID) {
       check_equal(diagnostic.status, SALTS_EINVAL);
       check_equal(diagnostic.phase, phase);
@@ -1122,7 +1122,16 @@ spec("ABI3 generation operation runtime") {
                          : (i == 4 || i == 6 ? "max_steps: 1" : "max_steps: 2"));
       check_equal(runtime_open(&t, path, yaml, operation_dsl), SALTS_OK);
       t.observer->mode = modes[i];
-      check_equal(runtime_create(&t), SALTS_OK);
+      {
+        const int create_rc = runtime_create(&t);
+        info("execute mode %d create=%d path=%s message=%s",
+             modes[i], create_rc, t.error.path, t.error.message);
+        check_equal(create_rc, SALTS_OK);
+        if (create_rc != SALTS_OK) {
+          check_equal(runtime_close(&t), SALTS_OK);
+          continue;
+        }
+      }
       runtime_bind(&t, alias);
       const void *original = turbo_flow_msg_projection(&t.input, NULL);
       void *content = t.input._content_handle;
