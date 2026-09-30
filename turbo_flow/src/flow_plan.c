@@ -570,11 +570,13 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
       {
         const turbo_flow_operation_runtime_contract_t *runtime =
             flow_stage_operation_runtime(flow, stage);
-        if (!runtime) {
-          return flow_plan_fail(flow, &candidate, SALTS_EPROTO,
-                                "compiled executor has no operation runtime contract");
-        }
-        executor.runtime = *runtime;
+        /*
+         * Structural/template stages can exist in the parsed stage table without
+         * becoming executable runtime nodes. Their zeroed executor policy is never
+         * dispatched. Executable stages have their resolved runtime contract
+         * frozen here; runtime paths never consult the mutable stage copy.
+         */
+        if (runtime) executor.runtime = *runtime;
       }
       executor.fn = stage->fn;
       executor.emit_fn = stage->emit_fn;
