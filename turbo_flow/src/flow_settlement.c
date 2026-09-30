@@ -61,7 +61,7 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
   turbo_flow_settlement_result_t automatic = TURBO_FLOW_SETTLEMENT_RESULT_INIT;
   turbo_flow_settlement_result_t *result;
   uint32_t required;
-  turbo_flow_stage_plan_t view;
+  const turbo_flow_stage_plan_t *view;
   int rc;
 
   if (!flow || !stage || !msg || !completion) return SALTS_EINVAL;
@@ -105,8 +105,12 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
     return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                      "operation settlement owner is not configured");
   }
-  flow_make_stage_view(stage, &view);
-  rc = adapter->settlement_ops.apply(adapter->settlement_ctx, flow, &view, msg, result);
+  view = flow_compiled_stage_view(flow, stage_index);
+  if (!view) {
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "sealed stage contract is unavailable");
+  }
+  rc = adapter->settlement_ops.apply(adapter->settlement_ctx, flow, view, msg, result);
   if (rc != SALTS_OK) {
     return flow_set_error_keep_state(flow, rc, stage->line, stage->column,
                                      "settlement owner rejected result");
