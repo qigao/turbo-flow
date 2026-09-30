@@ -1,6 +1,7 @@
 #include "../src/flow_plugin_operation_internal.h"
 #include "plugin_operation_fixture.h"
 #include "tinytest.h"
+#include <cmeta/function.h>
 #include <salts/clock.h>
 #include <stdio.h>
 #include <stdlib.h>
