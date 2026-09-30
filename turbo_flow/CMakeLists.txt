@@ -30,6 +30,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_config_operation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_resource.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
@@ -52,6 +53,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_co
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_diagnostic.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_binding.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resource.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h)
@@ -140,8 +142,10 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product_databind.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_resource.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_binding.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resource.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 cmake_config_target(
