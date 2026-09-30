@@ -37,21 +37,62 @@ static int databind_service_stage(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-static int register_service_stage(turbo_flow_t *flow) {
+static turbo_flow_operation_port_binding_t service_param_port(
+    uint32_t port_index,
+    turbo_flow_operation_port_direction_t direction,
+    size_t parameter_index,
+    const cmeta_data_desc *data) {
+  turbo_flow_operation_port_binding_t port =
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  port.port_index = port_index;
+  port.domain = TURBO_FLOW_DOMAIN_DATA;
+  port.direction = direction;
+  port.value_kind = TURBO_FLOW_OPERATION_VALUE_PARAMETER;
+  port.storage = TURBO_FLOW_OPERATION_STORAGE_POINTEE;
+  port.parameter_index = parameter_index;
+  port.data = data;
+  return port;
+}
+
+static int register_service_stage(
+    turbo_flow_t *flow, int use_other_function) {
   turbo_flow_operation_descriptor_t operation;
+  turbo_flow_operation_port_binding_t ports[2];
+  turbo_flow_reflected_operation_registration_t registration =
+      TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
   turbo_flow_operation_provider_registration_t provider =
       TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+  DataBindNativeTypeBinding request = {0};
+  DataBindNativeTypeBinding response = {0};
+  DataBindServiceNativeBinding native = {0};
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  const cmeta_function_abi_desc *abi;
+  DataBindStatus status;
 
   if (!flow) return SALTS_EINVAL;
+
+  if (use_other_function) {
+    status =
+        databind_10_ServiceSdk_4_Calc_5_Other__databind_native_binding(
+            &request, &response, &native, &error);
+    abi =
+        databind_10_ServiceSdk_4_Calc_5_Other__databind_function_abi();
+  } else {
+    status =
+        databind_10_ServiceSdk_4_Calc_3_Add__databind_native_binding(
+            &request, &response, &native, &error);
+    abi =
+        databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi();
+  }
+  if (status != DATA_BIND_OK || !native.function || !abi ||
+      !request.data || !response.data)
+    return SALTS_EPROTO;
+
   memset(&operation, 0, sizeof(operation));
   operation.size = sizeof(operation);
   operation.name = "test.databind.service";
   operation.version = 1u;
   operation.domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_type = "Message";
-  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.output_type = "Message";
   operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
   operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
@@ -61,11 +102,23 @@ static int register_service_stage(turbo_flow_t *flow) {
   operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
 
+  ports[0] = service_param_port(
+      0u, TURBO_FLOW_OPERATION_PORT_INPUT, 0u, request.data);
+  ports[1] = service_param_port(
+      0u, TURBO_FLOW_OPERATION_PORT_OUTPUT, 1u, response.data);
+
+  registration.operation = &operation;
+  registration.function = native.function;
+  registration.abi = abi;
+  registration.ports = ports;
+  registration.port_count = 2u;
+  registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
+
   provider.operation_name = operation.name;
   provider.fn = databind_service_stage;
 
   {
-    int rc = turbo_flow_register_operation(flow, &operation);
+    int rc = turbo_flow_register_reflected_operation(flow, &registration);
     if (rc != SALTS_OK) return rc;
   }
   return turbo_flow_register_operation_provider(flow, &provider);
@@ -80,10 +133,11 @@ static const char DATABIND_SERVICE_GRAPH[] =
     "  http_service -> rpc_service\n"
     "}\n";
 
-static turbo_flow_t *databind_service_flow(void) {
+static turbo_flow_t *databind_service_flow_with_function(
+    int use_other_function) {
   turbo_flow_t *flow = turbo_flow_create();
   if (!flow) return NULL;
-  if (register_service_stage(flow) != SALTS_OK ||
+  if (register_service_stage(flow, use_other_function) != SALTS_OK ||
       turbo_flow_parse_string(
           flow, DATABIND_SERVICE_GRAPH,
           sizeof(DATABIND_SERVICE_GRAPH) - 1u) != SALTS_OK) {
@@ -91,6 +145,10 @@ static turbo_flow_t *databind_service_flow(void) {
     return NULL;
   }
   return flow;
+}
+
+static turbo_flow_t *databind_service_flow(void) {
+  return databind_service_flow_with_function(0);
 }
 
 spec("TurboFlow generated DataBind Service MethodPlan") {
