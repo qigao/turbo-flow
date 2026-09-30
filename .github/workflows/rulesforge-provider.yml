@@ -115,11 +115,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/rulesforge-provider \
-            --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network \
-                     test_flow_databind_service_plan -j2
-          ctest --test-dir build/rulesforge-provider \
-            -R '^(test_flow_rulesforge_(plugin|durable_network)|test_flow_databind_service_plan)
+          cmake --build build/rulesforge-provider --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network test_flow_databind_service_plan -j2
+          ctest --test-dir build/rulesforge-provider -R "^(test_flow_rulesforge_(plugin|durable_network)|test_flow_databind_service_plan)\$" --output-on-failure
+
       - name: Install and load composed providers from install tree
         shell: bash
         run: |
