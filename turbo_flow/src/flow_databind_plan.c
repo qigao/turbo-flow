@@ -310,6 +310,10 @@ static int flow_databind_service_native_valid(
          native->size == sizeof(*native) &&
          native->abi_version == DATA_BIND_BINDING_PLAN_ABI_VERSION &&
          native->function && cmeta_function_desc_valid(native->function) &&
+         binding->native_abi &&
+         cmeta_function_abi_desc_valid(binding->native_abi) &&
+         cmeta_function_desc_equal(binding->native_abi->function,
+                                   native->function) &&
          native->request && native->response &&
          flow_databind_native_equal(native->request, &binding->request) &&
          flow_databind_native_equal(native->response, &binding->response) &&
@@ -347,7 +351,9 @@ int flow_databind_service_bind(
       !cmeta_function_desc_equal(operation->abi->function,
                                  operation->function) ||
       !cmeta_function_desc_equal(operation->function,
-                                 binding->native.function))
+                                 binding->native.function) ||
+      !cmeta_function_abi_desc_equal(operation->abi,
+                                     binding->native_abi))
     return SALTS_EPROTO;
   if (stage->databind_service) return SALTS_EALREADY;
 
@@ -472,13 +478,17 @@ int flow_plan_build_databind_services(
     source = stage->databind_service;
     if (!source) continue;
     if (!flow_databind_service_native_valid(source) ||
+        !source->native_abi ||
         !source->provider_function || !source->provider_abi ||
         !cmeta_function_desc_valid(source->provider_function) ||
+        !cmeta_function_abi_desc_valid(source->native_abi) ||
         !cmeta_function_abi_desc_valid(source->provider_abi) ||
         !cmeta_function_desc_equal(source->provider_abi->function,
                                    source->provider_function) ||
         !cmeta_function_desc_equal(source->provider_function,
                                    source->native.function) ||
+        !cmeta_function_abi_desc_equal(source->provider_abi,
+                                       source->native_abi) ||
         stage->is_source || stage->is_port || stage->is_buffer ||
         !stage->operation_resolved)
       return SALTS_EPROTO;
