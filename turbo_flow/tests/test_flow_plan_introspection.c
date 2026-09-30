@@ -115,9 +115,9 @@ static turbo_flow_t *plan_diag_build_native(void) {
   operation.version = 1u;
   operation.domain = TURBO_FLOW_DOMAIN_DATA;
   operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_type = "diag.Int";
+  operation.input_type = "Message";
   operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.output_type = "diag.Int";
+  operation.output_type = "Message";
   operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
   operation.scope.state = TURBO_FLOW_STATE_SCOPE_PRIVATE;
   operation.scope.lifetime = TURBO_FLOW_LIFETIME_TASK;
