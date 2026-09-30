@@ -272,7 +272,7 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
             ? (const flow_data_segment_plan_t *)vec_at_const(&plan->data_segments, *segment_index)
             : NULL;
     if (!node || !executor_index || !adapter_index || !segment_index || !cflow_region_index ||
-        node->stage_index != stage_index ||
+        node->stage_index != stage_index || !node->stage_name ||
         node->outgoing_begin > vec_size(&plan->edges) ||
         node->outgoing_count > vec_size(&plan->edges) - node->outgoing_begin ||
         (*executor_index != FLOW_PLAN_INDEX_NONE &&
@@ -303,6 +303,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           (!!semantics->typed !=
            (semantics->canonical_input_type != NULL &&
             semantics->canonical_output_type != NULL)) ||
+          (semantics->typed &&
+           (!semantics->input_semantic_id || !semantics->output_semantic_id)) ||
           (semantics->typed && !semantics->reflected_typed_adapter &&
            !cmeta_callable_contract_valid(semantics->callable)) ||
           (semantics->reflected_typed_adapter &&
@@ -314,7 +316,11 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           semantics->canonical_output_type != NULL ||
           (!!semantics->typed !=
            (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
-            semantics->output_type_index != FLOW_PLAN_INDEX_NONE)))) ||
+            semantics->output_type_index != FLOW_PLAN_INDEX_NONE)) ||
+          (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
+           !semantics->input_semantic_id) ||
+          (semantics->output_type_index != FLOW_PLAN_INDEX_NONE &&
+           !semantics->output_semantic_id))) ||
         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE &&
          semantics->candidate_region >= plan->candidate_region_count) ||
         (!!semantics->lowering_candidate !=
