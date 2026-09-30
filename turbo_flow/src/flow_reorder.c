@@ -41,13 +41,15 @@ int flow_start_reorder_states(turbo_flow_t *flow) {
   for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
+    const turbo_flow_stage_plan_t *stage_view =
+        flow_compiled_stage_view(flow, (uint32_t)i);
     flow_reorder_state_t state;
-    if (!stage || stage->reorder.capacity == 0) continue;
+    if (!stage || !stage_view || stage_view->reorder.capacity == 0) continue;
 
     memset(&state, 0, sizeof(state));
     state.stage_index = (uint32_t)i;
-    state.capacity = stage->reorder.capacity;
-    state.timeout_ms = stage->reorder.timeout_ms;
+    state.capacity = stage_view->reorder.capacity;
+    state.timeout_ms = stage_view->reorder.timeout_ms;
     state.next_sequence = 1u;
     if (turbo_flow_stl_error(hash_set_init_bytes(&state.canceled_sequences, sizeof(uint64_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX, ((NULL) ? (NULL) : hash_bytes), ((NULL) ? (NULL) : hash_key_equal), NULL)) != SALTS_OK ||
         turbo_flow_stl_error(hash_set_reserve(&state.canceled_sequences, (size_t)state.capacity + 1u)) != SALTS_OK) {
