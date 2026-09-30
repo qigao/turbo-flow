@@ -126,7 +126,6 @@ if ($WithTurboDB) {
   $turboDb = Get-NativeSdk "TurboDB.Native"
   $turboDbRoot = $turboDb.Root
   $required += (Join-Path $turboDbRoot "lib/cmake/TurboDB/TurboDBConfig.cmake")
-  $required += (Join-Path $turboDbRoot "include/shared/orm/orm.h")
 }
 
 foreach ($path in $required) {
