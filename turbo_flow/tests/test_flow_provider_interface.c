@@ -175,7 +175,7 @@ spec("canonical TurboFlow provider Interface") {
     check_equal(turbo_flow_provider_factory_contract(&factory, &contract), SALTS_OK);
     check_true(turbo_flow_provider_contract_valid(&contract));
     check_true(contract.config.message_artifact == &FIXTURE_ARTIFACT);
-    check_equal(contract.resource.contract_id, NULL);
+    check_null(contract.resource.contract_id);
 
     instance.instance_name = "stage_a";
     instance.config.type_name = "FixtureConfig";
