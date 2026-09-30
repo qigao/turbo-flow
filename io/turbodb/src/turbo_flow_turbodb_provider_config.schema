@@ -1,0 +1,26 @@
+schema TurboFlowTurboDbProviderConfig [version(1)];
+
+enum DurableIdentityMode <uint8> {
+  Generated = 0;
+  StableRequired = 1;
+}
+
+enum InboxOpenMode <uint8> {
+  Exclusive = 0;
+  Takeover = 1;
+}
+
+message DurableTurboDbConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Min(1) @Max(9223372036854775807) uint64 max_message_bytes;
+  @Min(1) @Max(9223372036854775807) uint64 max_records;
+  @Min(1) @Max(9223372036854775807) uint64 max_total_bytes;
+  @Min(1) @Max(9223372036854775807) uint64 max_record_bytes;
+  @Min(1) @Max(9223372036854775807) uint64 max_claims;
+  @Min(1) @Max(64) uint32 connection_count;
+  DurableIdentityMode identity_mode;
+  @Size(min = 1, max = 4095) string filename;
+  @Size(min = 1, max = 63) @Pattern("^[A-Za-z_][A-Za-z0-9_]*$") string namespace_name;
+  @Max(9223372036854775807) uint64 expected_generation;
+  InboxOpenMode open_mode;
+}
