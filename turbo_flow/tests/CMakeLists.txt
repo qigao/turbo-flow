@@ -33,6 +33,33 @@ set_tests_properties(test_flow_databind_channel_plan PROPERTIES
   LABELS "graph;databind;plan;transport" TIMEOUT 30)
 
 salts_idl_target(
+  TARGET turbo_flow_provider_config_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/provider_config.schema"
+  ARTIFACT_NAME "provider_config"
+  ARTIFACTS MESSAGE)
+
+cmake_add_test(
+  test_flow_provider_typed_config
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_typed_config.c
+  LIBS
+    TurboFlow::Graph
+    Salts::TinyTest
+    ${turbo_flow_provider_config_fixture_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${turbo_flow_provider_config_fixture_GENERATED_DIR}
+  FOLDER "turbo_flow/tests")
+add_dependencies(
+  test_flow_provider_typed_config
+  turbo_flow_provider_config_fixture_idl_codegen)
+set_target_properties(test_flow_provider_typed_config PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+set_tests_properties(test_flow_provider_typed_config PROPERTIES
+  LABELS "graph;config;databind;provider" TIMEOUT 30)
+
+salts_idl_target(
   TARGET turbo_flow_databind_service_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind_service.schema"
   ARTIFACT_NAME "tf_service"
