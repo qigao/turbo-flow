@@ -559,6 +559,47 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
   return SALTS_OK;
 }
 
+int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
+                                 flow_stage_spec_t spec, flow_node_config_kind_t kind) {
+  if (!ctx || kind == FLOW_NODE_CONFIG_NONE || ctx->node_config_kind != FLOW_NODE_CONFIG_NONE) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "node configuration block state is invalid");
+  }
+  ctx->node_config_name = name;
+  ctx->node_config_spec = spec;
+  ctx->node_config_kind = kind;
+  return SALTS_OK;
+}
+
+int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
+  flow_token_t name;
+  flow_stage_spec_t spec;
+  flow_node_config_kind_t kind;
+  int rc;
+
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE) {
+    return parse_fail(ctx, SALTS_EINVAL, 0u, 0u,
+                      "node configuration block state is invalid");
+  }
+
+  name = ctx->node_config_name;
+  spec = ctx->node_config_spec;
+  kind = ctx->node_config_kind;
+  memset(&ctx->node_config_name, 0, sizeof(ctx->node_config_name));
+  ctx->node_config_spec = flow_stage_spec_default();
+  ctx->node_config_kind = FLOW_NODE_CONFIG_NONE;
+
+  if (kind == FLOW_NODE_CONFIG_SOURCE) {
+    rc = flow_parse_add_source(ctx, name, spec);
+  } else if (kind == FLOW_NODE_CONFIG_STAGE) {
+    rc = flow_parse_add_stage(ctx, name, spec);
+  } else {
+    rc = parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                    "unknown node configuration block kind");
+  }
+  return rc;
+}
+
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec) {
   if (ctx->in_stage_template) {
     return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
