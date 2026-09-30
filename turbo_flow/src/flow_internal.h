@@ -223,6 +223,9 @@ typedef struct flow_runtime_node_plan_s {
   uint32_t flags;
   /** Frozen public stage contract consumed by runtime/provider callbacks. */
   turbo_flow_stage_plan_t stage_view;
+  /** Frozen resolved operation descriptor; valid when operation_resolved is nonzero. */
+  turbo_flow_operation_descriptor_t operation;
+  int operation_resolved;
   /** Borrowed immutable compile-time names; valid for the sealed plan lifetime. */
   const char *stage_name;
   const char *adapter_name;
@@ -1007,6 +1010,8 @@ flow_stage_completion_t *flow_settlement_scope_enter(flow_stage_completion_t *co
 void flow_settlement_scope_leave(flow_stage_completion_t *previous);
 TURBO_FLOW_C_API const turbo_flow_stage_plan_t *
 flow_compiled_stage_view(const turbo_flow_t *flow, uint32_t stage_index);
+TURBO_FLOW_C_API const turbo_flow_operation_descriptor_t *
+flow_compiled_stage_operation(const turbo_flow_t *flow, uint32_t stage_index);
 TURBO_FLOW_C_API const flow_executor_plan_t *flow_executor_plan_for_stage(const turbo_flow_t *flow,
                                                                           uint32_t stage_index);
 TURBO_FLOW_C_API const flow_data_segment_plan_t *
