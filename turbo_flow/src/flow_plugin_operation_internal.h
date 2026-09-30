@@ -70,6 +70,11 @@ typedef struct flow_plugin_cflow_function_binding_s {
  * Internal product-composition bridge. Salts Plugin remains the loader/lease
  * authority; TurboFlow consumes only canonical CMeta reflection and exact
  * invoke exported by that module.
+ *
+ * The caller-owned registry must outlive the TurboFlow registry/compiled plan
+ * that receives this binding. A successful bind retains one Salts Plugin lease
+ * until TurboFlow registry teardown (including across registry-preserving
+ * reset/recompile). Destroying the Salts registry first is an ownership error.
  */
 TURBO_FLOW_API int flow_plugin_bind_cflow_function(
     turbo_flow_t *flow,
