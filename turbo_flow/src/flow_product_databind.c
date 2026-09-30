@@ -99,6 +99,7 @@ static int flow_product_databind_service_bind(
     DataBindTransportKind transport,
     flow_databind_codec_factory_fn codec_factory,
     flow_databind_service_native_resolver_fn native_resolver,
+    const cmeta_function_abi_desc *native_abi,
     const void *projection) {
   DataBindNativeTypeBinding request = {0};
   DataBindNativeTypeBinding response = {0};
@@ -110,7 +111,8 @@ static int flow_product_databind_service_bind(
   if (!flow || !stage_name || !stage_name[0] ||
       !service_name || !service_name[0] ||
       !operation_name || !operation_name[0] ||
-      !codec_factory || !native_resolver || !projection)
+      !codec_factory || !native_resolver || !native_abi || !projection ||
+      !cmeta_function_abi_desc_valid(native_abi))
     return SALTS_EINVAL;
 
   status = native_resolver(&request, &response, &native, &error);
@@ -127,6 +129,7 @@ static int flow_product_databind_service_bind(
   binding.native = native;
   binding.native.request = &binding.request;
   binding.native.response = &binding.response;
+  binding.native_abi = native_abi;
   if (transport == DATA_BIND_TRANSPORT_HTTP)
     binding.projection.http =
         (const DataBindHttpProjectionConfig *)projection;
@@ -141,6 +144,7 @@ int turbo_flow_product_bind_databind_http_service(
     const char *service_name, const char *operation_name,
     turbo_flow_databind_codec_factory_fn codec_factory,
     turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const cmeta_function_abi_desc *native_abi,
     const DataBindHttpProjectionArtifact *projection_artifact) {
   const DataBindHttpProjectionConfig *projection;
   if (!projection_artifact ||
@@ -153,7 +157,7 @@ int turbo_flow_product_bind_databind_http_service(
   return flow_product_databind_service_bind(
       flow, stage_name, service_name, operation_name,
       DATA_BIND_TRANSPORT_HTTP, codec_factory,
-      native_resolver, projection);
+      native_resolver, native_abi, projection);
 }
 
 int turbo_flow_product_bind_databind_rpc_service(
@@ -161,6 +165,7 @@ int turbo_flow_product_bind_databind_rpc_service(
     const char *service_name, const char *operation_name,
     turbo_flow_databind_codec_factory_fn codec_factory,
     turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const cmeta_function_abi_desc *native_abi,
     const DataBindRpcProjectionArtifact *projection_artifact) {
   const DataBindRpcProjectionConfig *projection;
   if (!projection_artifact ||
@@ -173,7 +178,7 @@ int turbo_flow_product_bind_databind_rpc_service(
   return flow_product_databind_service_bind(
       flow, stage_name, service_name, operation_name,
       DATA_BIND_TRANSPORT_RPC, codec_factory,
-      native_resolver, projection);
+      native_resolver, native_abi, projection);
 }
 
 
@@ -208,7 +213,9 @@ int turbo_flow_execution_plan_databind_service_at(
   if (!service || !service->binding_plan) return SALTS_ENOENT;
 
   function = data_bind_binding_plan_function(service->binding_plan);
-  if (!function || function != service->function) return SALTS_EPROTO;
+  if (!function || !service->function ||
+      !cmeta_function_desc_equal(function, service->function))
+    return SALTS_EPROTO;
 
   *out = (turbo_flow_databind_service_plan_view_t)
       TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT;

@@ -310,6 +310,10 @@ static int flow_databind_service_native_valid(
          native->size == sizeof(*native) &&
          native->abi_version == DATA_BIND_BINDING_PLAN_ABI_VERSION &&
          native->function && cmeta_function_desc_valid(native->function) &&
+         binding->native_abi &&
+         cmeta_function_abi_desc_valid(binding->native_abi) &&
+         cmeta_function_desc_equal(binding->native_abi->function,
+                                   native->function) &&
          native->request && native->response &&
          flow_databind_native_equal(native->request, &binding->request) &&
          flow_databind_native_equal(native->response, &binding->response) &&
@@ -323,6 +327,7 @@ int flow_databind_service_bind(
     turbo_flow_t *flow, const char *stage_name,
     const flow_databind_service_binding_t *binding) {
   flow_stage_plan_impl_t *stage;
+  const flow_operation_registration_t *operation;
   flow_databind_service_binding_t *owned;
   int stage_index;
 
@@ -337,8 +342,19 @@ int flow_databind_service_bind(
   if (!stage || stage->is_source || stage->is_port || stage->is_buffer ||
       !stage->operation_name || !stage->operation_name[0])
     return SALTS_ENOTSUP;
-  if (!flow_find_operation_registration(flow, stage->operation_name))
-    return SALTS_ENOENT;
+  operation = flow_find_operation_registration(flow, stage->operation_name);
+  if (!operation) return SALTS_ENOENT;
+  if (!operation->reflected || !operation->function || !operation->abi)
+    return SALTS_ENOTSUP;
+  if (!cmeta_function_desc_valid(operation->function) ||
+      !cmeta_function_abi_desc_valid(operation->abi) ||
+      !cmeta_function_desc_equal(operation->abi->function,
+                                 operation->function) ||
+      !cmeta_function_desc_equal(operation->function,
+                                 binding->native.function) ||
+      !cmeta_function_abi_desc_equal(operation->abi,
+                                     binding->native_abi))
+    return SALTS_EPROTO;
   if (stage->databind_service) return SALTS_EALREADY;
 
   owned = (flow_databind_service_binding_t *)calloc(1, sizeof(*owned));
@@ -360,6 +376,8 @@ int flow_databind_service_bind(
    */
   owned->native.request = &owned->request;
   owned->native.response = &owned->response;
+  owned->provider_function = operation->function;
+  owned->provider_abi = operation->abi;
   stage->databind_service = owned;
   return SALTS_OK;
 }
@@ -398,7 +416,11 @@ int flow_databind_services_verify(
     DataBindTransportPlanInfo info = DATA_BIND_TRANSPORT_PLAN_INFO_INIT;
     if (!service || service->stage_index >= stage_count ||
         !service->service_name || !service->operation_name ||
-        !service->function || !cmeta_function_desc_valid(service->function))
+        !service->function || !service->abi ||
+        !cmeta_function_desc_valid(service->function) ||
+        !cmeta_function_abi_desc_valid(service->abi) ||
+        !cmeta_function_desc_equal(service->abi->function,
+                                   service->function))
       return SALTS_EPROTO;
 
     if (service->transport == DATA_BIND_TRANSPORT_HTTP &&
@@ -414,7 +436,8 @@ int flow_databind_services_verify(
     }
 
     if (!binding || binding != service->binding_plan ||
-        data_bind_binding_plan_function(binding) != service->function ||
+        !cmeta_function_desc_equal(
+            data_bind_binding_plan_function(binding), service->function) ||
         !transport_plan ||
         !data_bind_transport_plan_info(transport_plan, &info) ||
         !flow_databind_text_equal(info.service_name, service->service_name) ||
@@ -455,6 +478,17 @@ int flow_plan_build_databind_services(
     source = stage->databind_service;
     if (!source) continue;
     if (!flow_databind_service_native_valid(source) ||
+        !source->native_abi ||
+        !source->provider_function || !source->provider_abi ||
+        !cmeta_function_desc_valid(source->provider_function) ||
+        !cmeta_function_abi_desc_valid(source->native_abi) ||
+        !cmeta_function_abi_desc_valid(source->provider_abi) ||
+        !cmeta_function_desc_equal(source->provider_abi->function,
+                                   source->provider_function) ||
+        !cmeta_function_desc_equal(source->provider_function,
+                                   source->native.function) ||
+        !cmeta_function_abi_desc_equal(source->provider_abi,
+                                       source->native_abi) ||
         stage->is_source || stage->is_port || stage->is_buffer ||
         !stage->operation_resolved)
       return SALTS_EPROTO;
@@ -468,7 +502,8 @@ int flow_plan_build_databind_services(
     compiled.transport = source->transport;
     compiled.service_name = source->service_name;
     compiled.operation_name = source->operation_name;
-    compiled.function = source->native.function;
+    compiled.function = source->provider_function;
+    compiled.abi = source->provider_abi;
 
     if (source->transport == DATA_BIND_TRANSPORT_HTTP) {
       status = data_bind_http_method_plan_compile_service(
@@ -491,8 +526,9 @@ int flow_plan_build_databind_services(
     data_bind_free(codec);
     codec = NULL;
     if (status != DATA_BIND_OK || !compiled.binding_plan ||
-        data_bind_binding_plan_function(compiled.binding_plan) !=
-            source->native.function) {
+        !cmeta_function_desc_equal(
+            data_bind_binding_plan_function(compiled.binding_plan),
+            source->provider_function)) {
       if (compiled.transport == DATA_BIND_TRANSPORT_HTTP)
         data_bind_http_method_plan_free(compiled.method.http);
       else

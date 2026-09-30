@@ -40,6 +40,11 @@ struct flow_databind_service_binding_s {
   DataBindNativeTypeBinding request;
   DataBindNativeTypeBinding response;
   DataBindServiceNativeBinding native;
+  /** Generated canonical ABI paired with native.function. */
+  const cmeta_function_abi_desc *native_abi;
+  /** Canonical reflected provider semantics resolved during Product bind. */
+  const cmeta_function_desc *provider_function;
+  const cmeta_function_abi_desc *provider_abi;
   union {
     const DataBindHttpProjectionConfig *http;
     const DataBindRpcProjectionConfig *rpc;
@@ -51,7 +56,9 @@ typedef struct flow_databind_service_plan_s {
   DataBindTransportKind transport;
   const char *service_name;
   const char *operation_name;
+  /** Canonical reflected provider identity; DataBind function is semantically equal. */
   const cmeta_function_desc *function;
+  const cmeta_function_abi_desc *abi;
   const DataBindBindingPlan *binding_plan;
   union {
     DataBindHttpMethodPlan *http;

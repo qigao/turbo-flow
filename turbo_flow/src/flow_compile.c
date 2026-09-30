@@ -752,12 +752,24 @@ static int compile_resolve_operations(turbo_flow_t *flow) {
       const char *output_type = NULL;
 
       /*
-       * This is a compile-local compatibility view only. Canonical reflected
-       * type/effect semantics remain owned by CMeta and reflected_ports.
+       * A generated DataBind Service is an explicit provider boundary around
+       * the TurboFlow Message envelope. Its native request/response/status
+       * contract remains exclusively in DataBind + CMeta; these two strings
+       * exist only on the compile-local graph view and are never written back
+       * to the reflected operation registry.
        */
-      if (flow_reflected_unary_graph_contract(
-              registered, &input_domain, &input_type,
-              &output_domain, &output_type)) {
+      if (stage->databind_service) {
+        stage->resolved_operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+        stage->resolved_operation.input_type = FLOW_CORE_MESSAGE_TYPE;
+        stage->resolved_operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+        stage->resolved_operation.output_type = FLOW_CORE_MESSAGE_TYPE;
+      } else if (flow_reflected_unary_graph_contract(
+                     registered, &input_domain, &input_type,
+                     &output_domain, &output_type)) {
+        /*
+         * Ordinary unary reflected operations derive their graph value types
+         * directly from canonical CMeta port metadata.
+         */
         stage->resolved_operation.input_domain = input_domain;
         stage->resolved_operation.input_type = input_type;
         stage->resolved_operation.output_domain = output_domain;

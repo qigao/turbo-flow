@@ -46,16 +46,23 @@ typedef DataBindStatus (*turbo_flow_databind_service_native_resolver_fn)(
 /**
  * Bind one generated DataBind Service operation to a parsed TurboFlow stage.
  *
+ * The stage must already reference a canonical reflected TurboFlow operation.
+ * Its FunctionDesc/FunctionAbi are the execution-provider identity and must
+ * match the generated Service FunctionDesc/FunctionAbi exactly by CMeta
+ * semantics. Legacy
+ * string/type operations are rejected; there is no compatibility fallback.
+ *
  * The resolver is invoked by this control-plane call exactly once. The codec
  * factory is invoked during graph compilation exactly once per bound stage;
  * the codec is freed before the immutable ExecutionPlan is sealed. Runtime
- * message execution performs no IDL/schema/projection lookup.
+ * message execution performs no IDL/schema/projection/reflection lookup.
  */
 TURBO_FLOW_C_API int turbo_flow_product_bind_databind_http_service(
     turbo_flow_t *flow, const char *stage_name,
     const char *service_name, const char *operation_name,
     turbo_flow_databind_codec_factory_fn codec_factory,
     turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const cmeta_function_abi_desc *native_abi,
     const DataBindHttpProjectionArtifact *projection_artifact);
 
 TURBO_FLOW_C_API int turbo_flow_product_bind_databind_rpc_service(
@@ -63,6 +70,7 @@ TURBO_FLOW_C_API int turbo_flow_product_bind_databind_rpc_service(
     const char *service_name, const char *operation_name,
     turbo_flow_databind_codec_factory_fn codec_factory,
     turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const cmeta_function_abi_desc *native_abi,
     const DataBindRpcProjectionArtifact *projection_artifact);
 
 enum { TURBO_FLOW_DATABIND_SERVICE_PLAN_API_VERSION = 1u };
