@@ -139,49 +139,38 @@ void flow_plan_owned_resources_clear_pending(turbo_flow_t *flow) {
 
 static int flow_plan_owned_resources_transfer(
     turbo_flow_t *flow, flow_compiled_plan_t *candidate) {
-  vec_t replacement = {0};
-  int rc;
+  vec_t empty;
   if (!flow || !candidate || candidate->sealed ||
       !vec_empty(&candidate->owned_resources))
     return SALTS_EINVAL;
-  rc = turbo_flow_stl_error(
-      vec_init_bytes(&replacement, sizeof(flow_plan_owned_resource_t),
-                     _Alignof(turbo_flow_max_align_t), SIZE_MAX));
-  if (rc != SALTS_OK) return rc;
 
   /*
-   * vec_t is the owning storage handle. Move it only after all fallible plan
-   * construction/validation work has succeeded and a fresh pending owner is
-   * ready, so either the mutable flow or the sealed plan owns every resource.
+   * Both vectors are already initialized owners. Swap the empty candidate
+   * handle with the pending mutable-flow handle after all fallible compile and
+   * verification work has succeeded. Ownership transfer is allocation-free.
    */
-  vec_destroy(&candidate->owned_resources);
+  empty = candidate->owned_resources;
   candidate->owned_resources = flow->pending_plan_resources;
-  flow->pending_plan_resources = replacement;
+  flow->pending_plan_resources = empty;
   return SALTS_OK;
 }
 
 static void flow_plan_owned_resources_return_to_flow(
     turbo_flow_t *flow, flow_compiled_plan_t *plan) {
-  vec_t replacement = {0};
+  vec_t empty;
   if (!flow || !plan || vec_empty(&plan->owned_resources)) return;
 
   /*
    * The operation registry still borrows FunctionDesc/DataDesc/callable code
-   * after a runtime plan is cleared for reset/recompile. Return plan resources
-   * to the mutable flow rather than releasing them here; registry teardown is
-   * the final borrow boundary.
+   * after a registry-preserving reset. Pending resources must therefore regain
+   * ownership before the compiled plan is destroyed. This path must not
+   * allocate: an OOM here would otherwise release the lease while registry
+   * metadata still contains provider-owned pointers.
    */
-  if (turbo_flow_stl_error(
-          vec_init_bytes(&replacement, sizeof(flow_plan_owned_resource_t),
-                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK)
-    return;
-  if (!vec_empty(&flow->pending_plan_resources)) {
-    vec_destroy(&replacement);
-    return;
-  }
-  vec_destroy(&flow->pending_plan_resources);
+  if (!vec_empty(&flow->pending_plan_resources)) return;
+  empty = flow->pending_plan_resources;
   flow->pending_plan_resources = plan->owned_resources;
-  plan->owned_resources = replacement;
+  plan->owned_resources = empty;
 }
 
 void flow_clear_runtime_plan(turbo_flow_t *flow) {
