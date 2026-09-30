@@ -272,7 +272,7 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
             ? (const flow_data_segment_plan_t *)vec_at_const(&plan->data_segments, *segment_index)
             : NULL;
     if (!node || !executor_index || !adapter_index || !segment_index || !cflow_region_index ||
-        node->stage_index != stage_index || !node->stage_name ||
+        node->stage_index != stage_index ||
         node->outgoing_begin > vec_size(&plan->edges) ||
         node->outgoing_count > vec_size(&plan->edges) - node->outgoing_begin ||
         (*executor_index != FLOW_PLAN_INDEX_NONE &&
