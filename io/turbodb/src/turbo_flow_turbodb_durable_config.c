@@ -142,3 +142,117 @@ int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, co
   out->inbox.expected_generation = expected_generation;
   return SALTS_OK;
 }
+
+
+static int typed_fail(turbo_flow_config_error_t *error, int status,
+                      const char *name, const char *field,
+                      const char *message) {
+  if (error && error->size >= sizeof(*error)) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = status;
+    (void)snprintf(error->path, sizeof(error->path),
+                   "$.resources.%s.config%s%s", name ? name : "",
+                   field && field[0] ? "." : "", field ? field : "");
+    (void)snprintf(error->message, sizeof(error->message), "%s",
+                   message ? message : "invalid TurboDB provider configuration");
+  }
+  return status;
+}
+
+static int copy_typed_text(tstr source, char *target, size_t capacity) {
+  const size_t length = source ? tstr_len(source) : 0u;
+  if (!source || length == 0u || length >= capacity) return SALTS_ERANGE;
+  memcpy(target, source, length);
+  target[length] = '\0';
+  return SALTS_OK;
+}
+
+int durable_turbodb_config_from_typed(
+    const DurableTurboDbConfig_t *typed, const char *name,
+    durable_turbodb_config_t *out, turbo_flow_config_error_t *error) {
+  int rc;
+
+  if (!typed || !name || !name[0] || !out) return SALTS_EINVAL;
+  memset(out, 0, sizeof(*out));
+
+  if (typed->schema_version != 2u)
+    return typed_fail(error, SALTS_EPROTO, name, "schema_version",
+                      "TurboDB provider config schema version must be 2");
+
+  if (typed->max_message_bytes > SIZE_MAX ||
+      typed->max_records > SIZE_MAX ||
+      typed->max_total_bytes > SIZE_MAX ||
+      typed->max_record_bytes > SIZE_MAX ||
+      typed->max_claims > SIZE_MAX)
+    return typed_fail(error, SALTS_ERANGE, name, NULL,
+                      "TurboDB provider size exceeds this platform");
+
+  if (typed->max_record_bytes > typed->max_total_bytes)
+    return typed_fail(error, SALTS_ERANGE, name, "max_record_bytes",
+                      "max_record_bytes exceeds max_total_bytes");
+  if (typed->max_claims > typed->max_records)
+    return typed_fail(error, SALTS_ERANGE, name, "max_claims",
+                      "max_claims exceeds max_records");
+  if (typed->connection_count == 0u ||
+      typed->connection_count > TURBO_FLOW_TURBODB_INBOX_MAX_CONNECTIONS)
+    return typed_fail(error, SALTS_ERANGE, name, "connection_count",
+                      "connection_count is outside the supported bound");
+
+  out->inbox = turbo_flow_turbodb_inbox_config_default();
+
+  switch (typed->identity_mode) {
+    case DurableIdentityMode_Generated:
+      out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_GENERATED;
+      break;
+    case DurableIdentityMode_StableRequired:
+      out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
+      break;
+    default:
+      return typed_fail(error, SALTS_EINVAL, name, "identity_mode",
+                        "unknown durable identity mode");
+  }
+
+  rc = copy_typed_text(typed->filename, out->filename, sizeof(out->filename));
+  if (rc != SALTS_OK)
+    return typed_fail(error, rc, name, "filename",
+                      "filename exceeds the admitted native bound");
+  if (strcmp(out->filename, ":memory:") == 0)
+    return typed_fail(error, SALTS_ENOTSUP, name, "filename",
+                      "in-memory TurboDB durable storage is not supported");
+
+  rc = copy_typed_text(
+      typed->namespace_name, out->namespace_name, sizeof(out->namespace_name));
+  if (rc != SALTS_OK)
+    return typed_fail(error, rc, name, "namespace_name",
+                      "namespace exceeds the admitted native bound");
+
+  switch (typed->open_mode) {
+    case InboxOpenMode_Exclusive:
+      if (typed->expected_generation != 0u)
+        return typed_fail(
+            error, SALTS_EINVAL, name, "expected_generation",
+            "exclusive open requires expected_generation == 0");
+      out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE;
+      break;
+    case InboxOpenMode_Takeover:
+      if (typed->expected_generation == 0u)
+        return typed_fail(
+            error, SALTS_EINVAL, name, "expected_generation",
+            "takeover open requires a non-zero expected_generation");
+      out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_TAKEOVER;
+      break;
+    default:
+      return typed_fail(error, SALTS_EINVAL, name, "open_mode",
+                        "unknown TurboDB inbox open mode");
+  }
+
+  out->max_message_bytes = (size_t)typed->max_message_bytes;
+  out->inbox.namespace_name = out->namespace_name;
+  out->inbox.max_records = (size_t)typed->max_records;
+  out->inbox.max_total_bytes = (size_t)typed->max_total_bytes;
+  out->inbox.max_record_bytes = (size_t)typed->max_record_bytes;
+  out->inbox.max_claims = (size_t)typed->max_claims;
+  out->inbox.connection_count = typed->connection_count;
+  out->inbox.expected_generation = typed->expected_generation;
+  return SALTS_OK;
+}
