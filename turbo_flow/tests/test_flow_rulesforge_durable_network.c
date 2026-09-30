@@ -418,10 +418,6 @@ static turbo_flow_operation_descriptor_t rulesforge_operation_metadata(void) {
   descriptor.name = TURBO_FLOW_RULESFORGE_OPERATION;
   descriptor.version = 1u;
   descriptor.domain = TURBO_FLOW_DOMAIN_DATA;
-  descriptor.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  descriptor.input_type = "Message";
-  descriptor.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  descriptor.output_type = "Message";
   descriptor.resource_domain = TURBO_FLOW_DOMAIN_RULES;
   descriptor.resource_type = COMPOSITION_RULE_RESOURCE_TYPE;
   descriptor.resource_min_version = 1u;
@@ -431,6 +427,41 @@ static turbo_flow_operation_descriptor_t rulesforge_operation_metadata(void) {
   descriptor.flags = TURBO_FLOW_OPERATION_STAGE;
   descriptor.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
   return descriptor;
+}
+
+static int rulesforge_register_reflected_operation(turbo_flow_t *flow) {
+  turbo_flow_operation_descriptor_t operation = rulesforge_operation_metadata();
+  turbo_flow_operation_port_binding_t ports[2];
+  turbo_flow_reflected_operation_registration_t registration =
+      TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+
+  ports[0] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[0].port_index = 0u;
+  ports[0].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[0].direction = TURBO_FLOW_OPERATION_PORT_INPUT;
+  ports[0].value_kind = TURBO_FLOW_OPERATION_VALUE_PARAMETER;
+  ports[0].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[0].parameter_index = 0u;
+  ports[0].data = &turbo_flow_rulesforge_applicant_data;
+
+  ports[1] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[1].port_index = 0u;
+  ports[1].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[1].direction = TURBO_FLOW_OPERATION_PORT_OUTPUT;
+  ports[1].value_kind = TURBO_FLOW_OPERATION_VALUE_RETURN;
+  ports[1].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[1].parameter_index = SIZE_MAX;
+  ports[1].data = &turbo_flow_rulesforge_decision_data;
+
+  registration.operation = &operation;
+  registration.function = FunctionMeta(turbo_flow_rulesforge_apply_contract);
+  registration.abi = FunctionAbi(turbo_flow_rulesforge_apply_contract);
+  registration.ports = ports;
+  registration.port_count = 2u;
+  registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
+  return turbo_flow_register_reflected_operation(flow, &registration);
 }
 
 spec("RulesForge real network composition") {
@@ -744,8 +775,7 @@ spec("RulesForge real network composition") {
           TURBO_FLOW_PRIMITIVE_RESOURCE};
       check_equal(turbo_flow_register_primitive(flow, &rules_resource), SALTS_OK);
     }
-    turbo_flow_operation_descriptor_t rulesforge_metadata = rulesforge_operation_metadata();
-    check_equal(turbo_flow_register_operation(flow, &rulesforge_metadata), SALTS_OK);
+    check_equal(rulesforge_register_reflected_operation(flow), SALTS_OK);
     flow_test_operation_t verify =
         flow_test_operation_init("test.verify_decision", verify_decision, &decisions);
     verify.descriptor.scope.state = TURBO_FLOW_STATE_SCOPE_GRAPH;
