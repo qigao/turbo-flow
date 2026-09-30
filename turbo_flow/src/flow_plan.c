@@ -275,6 +275,11 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
         segment_index && *segment_index != FLOW_PLAN_INDEX_NONE
             ? (const flow_data_segment_plan_t *)vec_at_const(&plan->data_segments, *segment_index)
             : NULL;
+    const flow_databind_service_plan_t *databind_service =
+        node && node->databind_service_index != FLOW_PLAN_INDEX_NONE
+            ? (const flow_databind_service_plan_t *)vec_at_const(
+                  &plan->databind_services, node->databind_service_index)
+            : NULL;
     if (!node || !executor_index || !adapter_index || !segment_index || !cflow_region_index ||
         node->stage_index != stage_index ||
         node->outgoing_begin > vec_size(&plan->edges) ||
@@ -341,6 +346,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           node->databind_transport_plan != NULL)) ||
         (node->databind_service_index != FLOW_PLAN_INDEX_NONE &&
          (node->databind_service_index >= vec_size(&plan->databind_services) ||
+          !databind_service ||
+          databind_service->stage_index != stage_index ||
           (node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
                           FLOW_RUNTIME_NODE_BUFFER)) != 0u))) {
       return SALTS_EPROTO;
