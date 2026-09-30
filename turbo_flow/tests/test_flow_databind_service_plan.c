@@ -337,6 +337,8 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
                   TURBO_FLOW_DOMAIN_DATA);
       check_equal(stage->resolved_operation.output_domain,
                   TURBO_FLOW_DOMAIN_DATA);
+      check_not_null(stage->resolved_operation.input_type);
+      check_not_null(stage->resolved_operation.output_type);
       check_equal(strcmp(stage->resolved_operation.input_type, "Message"), 0);
       check_equal(strcmp(stage->resolved_operation.output_type, "Message"), 0);
     }
