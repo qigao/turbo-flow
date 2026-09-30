@@ -985,6 +985,7 @@ const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *fl
 TURBO_FLOW_C_API const flow_adapter_registration_t *
 flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                               uint32_t stage_index,
                                const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg);
 int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
                                      const flow_adapter_registration_t *adapter,
