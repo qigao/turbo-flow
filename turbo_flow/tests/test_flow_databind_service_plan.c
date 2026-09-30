@@ -201,10 +201,20 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
     check_not_null(http_plan);
     check_not_null(rpc_plan);
     check_true(http_plan->function == rpc_plan->function);
+    check_true(http_plan->abi == rpc_plan->abi);
+    check_true(cmeta_function_abi_desc_valid(http_plan->abi));
+    check_true(cmeta_function_desc_equal(
+        http_plan->abi->function, http_plan->function));
     check_true(http_plan->binding_plan ==
                data_bind_http_method_plan_binding(http_plan->method.http));
     check_true(rpc_plan->binding_plan ==
                data_bind_rpc_method_plan_binding(rpc_plan->method.rpc));
+    check_true(cmeta_function_desc_equal(
+        data_bind_binding_plan_function(http_plan->binding_plan),
+        http_plan->function));
+    check_true(cmeta_function_desc_equal(
+        data_bind_binding_plan_function(rpc_plan->binding_plan),
+        rpc_plan->function));
     check_equal(
         strcmp(data_bind_http_method_plan_method(http_plan->method.http), "POST"),
         0);
@@ -304,6 +314,28 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
      * lifetime assertion: leaking or double-freeing the opaque MethodPlan
      * fails the focused materializer gate.
      */
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects a reflected provider with a different canonical FunctionDesc") {
+    turbo_flow_t *flow = databind_service_flow_with_function(1);
+
+    check_not_null(flow);
+    service_codec_calls = 0u;
+    service_resolver_calls = 0u;
+    check_equal(
+        turbo_flow_product_bind_databind_http_service(
+            flow, "http_service", "Calc", "Add",
+            counting_service_codec, counting_service_resolver,
+            &databind_tf_service_http_projection),
+        SALTS_EPROTO);
+    check_equal(service_resolver_calls, (size_t)1u);
+    check_equal(service_codec_calls, (size_t)0u);
+    check_equal(
+        turbo_flow_execution_plan_databind_service_count(flow),
+        (size_t)0u);
+    check_false(flow->compiled_plan.sealed);
+
     turbo_flow_destroy(flow);
   }
 
