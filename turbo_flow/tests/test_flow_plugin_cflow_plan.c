@@ -101,6 +101,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     binding.registry = &registry;
     binding.plugin = plugin;
     binding.export_id = "test.turboflow.cflow.double";
+    binding.contract_id = "test.turboflow.cflow";
+    binding.contract_version = 1u;
+    binding.required_capabilities = 1u;
     binding.operation = &operation;
     binding.input_data = &cmeta_data_int;
     binding.output_data = &cmeta_data_int;
@@ -240,6 +243,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     binding.registry = &registry;
     binding.plugin = plugin;
     binding.export_id = "test.turboflow.cflow.double";
+    binding.contract_id = "test.turboflow.cflow";
+    binding.contract_version = 1u;
+    binding.required_capabilities = 1u;
     binding.operation = &operation;
     binding.input_data = &cmeta_data_int;
     binding.output_data = &cmeta_data_int;
@@ -259,6 +265,58 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+    check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
+    check_equal(
+        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)0u);
+
+    turbo_flow_destroy(flow);
+    check_equal(
+        salts_plugin_registry_request_stop(&registry, plugin), SALTS_PLUGIN_OK);
+    {
+      bool quiescent = false;
+      check_equal(
+          salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+          SALTS_PLUGIN_OK);
+      check_true(quiescent);
+    }
+    check_equal(
+        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_OK);
+    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+  }
+
+  it("rejects a mismatched plugin contract before plan retention") {
+    static const char graph[] =
+        "source input\n"
+        "stage plugin operation test.plugin.cflow.contract_mismatch\n"
+        "stage main {\n"
+        "  input -> plugin\n"
+        "}\n";
+    salts_plugin_registry registry = {0};
+    salts_plugin_ref plugin = {0};
+    salts_plugin_lifecycle_info lifecycle = {0};
+    turbo_flow_t *flow = turbo_flow_create();
+    turbo_flow_operation_descriptor_t operation =
+        plugin_cflow_operation_descriptor(
+            "test.plugin.cflow.contract_mismatch");
+    flow_plugin_cflow_function_binding_t binding = {0};
+
+    check_not_null(flow);
+    plugin_cflow_registry_open(&registry, &plugin);
+    check_equal(
+        turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+
+    binding.registry = &registry;
+    binding.plugin = plugin;
+    binding.export_id = "test.turboflow.cflow.double";
+    binding.contract_id = "test.turboflow.wrong";
+    binding.contract_version = 1u;
+    binding.required_capabilities = 1u;
+    binding.operation = &operation;
+    binding.input_data = &cmeta_data_int;
+    binding.output_data = &cmeta_data_int;
+    check_equal(flow_plugin_bind_cflow_function(flow, &binding), SALTS_ENOTSUP);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(
         salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
@@ -303,6 +361,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     binding.registry = &registry;
     binding.plugin = plugin;
     binding.export_id = "test.turboflow.cflow.double";
+    binding.contract_id = "test.turboflow.cflow";
+    binding.contract_version = 1u;
+    binding.required_capabilities = 1u;
     binding.operation = &operation;
     binding.input_data = &cmeta_data_long;
     binding.output_data = &cmeta_data_int;
