@@ -180,6 +180,13 @@ static const char DATABIND_SERVICE_GRAPH[] =
     "  http_service -> rpc_service\n"
     "}\n";
 
+static const char DATABIND_SINGLE_SERVICE_GRAPH[] =
+    "source input\n"
+    "stage http_service operation test.databind.service\n"
+    "stage main {\n"
+    "  input -> http_service\n"
+    "}\n";
+
 static turbo_flow_t *databind_service_flow_with_function(
     int use_other_function) {
   turbo_flow_t *flow = turbo_flow_create();
@@ -196,6 +203,19 @@ static turbo_flow_t *databind_service_flow_with_function(
 
 static turbo_flow_t *databind_service_flow(void) {
   return databind_service_flow_with_function(0);
+}
+
+static turbo_flow_t *databind_single_service_flow(void) {
+  turbo_flow_t *flow = turbo_flow_create();
+  if (!flow) return NULL;
+  if (register_service_stage(flow, 0) != SALTS_OK ||
+      turbo_flow_parse_string(
+          flow, DATABIND_SINGLE_SERVICE_GRAPH,
+          sizeof(DATABIND_SINGLE_SERVICE_GRAPH) - 1u) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return NULL;
+  }
+  return flow;
 }
 
 static turbo_flow_t *databind_service_legacy_flow(void) {
@@ -373,7 +393,7 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
   }
 
   it("releases a live generated MethodPlan on destroy") {
-    turbo_flow_t *flow = databind_service_flow();
+    turbo_flow_t *flow = databind_single_service_flow();
 
     check_not_null(flow);
     service_codec_calls = 0u;
