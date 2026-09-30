@@ -1,5 +1,6 @@
 #include "flow_databind_internal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 void flow_databind_stage_binding_clear(flow_stage_plan_impl_t *stage) {
