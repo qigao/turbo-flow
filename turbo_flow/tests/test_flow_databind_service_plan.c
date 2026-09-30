@@ -124,6 +124,39 @@ static int register_service_stage(
   return turbo_flow_register_operation_provider(flow, &provider);
 }
 
+static int register_legacy_service_stage(turbo_flow_t *flow) {
+  turbo_flow_operation_descriptor_t operation;
+  turbo_flow_operation_provider_registration_t provider =
+      TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
+
+  if (!flow) return SALTS_EINVAL;
+  memset(&operation, 0, sizeof(operation));
+  operation.size = sizeof(operation);
+  operation.name = "test.databind.service";
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.input_type = "Message";
+  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.output_type = "Message";
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.state = TURBO_FLOW_STATE_SCOPE_NONE;
+  operation.scope.lifetime = TURBO_FLOW_LIFETIME_DISPATCH;
+  operation.scope.concurrency = TURBO_FLOW_CONCURRENCY_INLINE_LANE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_PURE;
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+  operation.runtime.error_mode = TURBO_FLOW_ERROR_PROPAGATE;
+
+  provider.operation_name = operation.name;
+  provider.fn = databind_service_stage;
+  {
+    int rc = turbo_flow_register_operation(flow, &operation);
+    if (rc != SALTS_OK) return rc;
+  }
+  return turbo_flow_register_operation_provider(flow, &provider);
+}
+
 static const char DATABIND_SERVICE_GRAPH[] =
     "source input\n"
     "stage http_service operation test.databind.service\n"
@@ -149,6 +182,19 @@ static turbo_flow_t *databind_service_flow_with_function(
 
 static turbo_flow_t *databind_service_flow(void) {
   return databind_service_flow_with_function(0);
+}
+
+static turbo_flow_t *databind_service_legacy_flow(void) {
+  turbo_flow_t *flow = turbo_flow_create();
+  if (!flow) return NULL;
+  if (register_legacy_service_stage(flow) != SALTS_OK ||
+      turbo_flow_parse_string(
+          flow, DATABIND_SERVICE_GRAPH,
+          sizeof(DATABIND_SERVICE_GRAPH) - 1u) != SALTS_OK) {
+    turbo_flow_destroy(flow);
+    return NULL;
+  }
+  return flow;
 }
 
 spec("TurboFlow generated DataBind Service MethodPlan") {
@@ -314,6 +360,25 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
      * lifetime assertion: leaking or double-freeing the opaque MethodPlan
      * fails the focused materializer gate.
      */
+    turbo_flow_destroy(flow);
+  }
+
+  it("rejects legacy operation providers instead of falling back") {
+    turbo_flow_t *flow = databind_service_legacy_flow();
+
+    check_not_null(flow);
+    service_codec_calls = 0u;
+    service_resolver_calls = 0u;
+    check_equal(
+        turbo_flow_product_bind_databind_http_service(
+            flow, "http_service", "Calc", "Add",
+            counting_service_codec, counting_service_resolver,
+            &databind_tf_service_http_projection),
+        SALTS_ENOTSUP);
+    check_equal(service_resolver_calls, (size_t)1u);
+    check_equal(service_codec_calls, (size_t)0u);
+    check_false(flow->compiled_plan.sealed);
+
     turbo_flow_destroy(flow);
   }
 
