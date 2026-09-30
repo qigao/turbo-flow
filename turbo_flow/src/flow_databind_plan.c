@@ -335,8 +335,10 @@ int flow_databind_service_bind(
   if (stage_index < 0) return SALTS_ENOENT;
   stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
   if (!stage || stage->is_source || stage->is_port || stage->is_buffer ||
-      !stage->operation_resolved)
+      !stage->operation_name || !stage->operation_name[0])
     return SALTS_ENOTSUP;
+  if (!flow_find_operation_registration(flow, stage->operation_name))
+    return SALTS_ENOENT;
   if (stage->databind_service) return SALTS_EALREADY;
 
   owned = (flow_databind_service_binding_t *)calloc(1, sizeof(*owned));
