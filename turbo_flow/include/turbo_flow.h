@@ -23,7 +23,7 @@ extern "C" {
 typedef struct turbo_flow_s turbo_flow_t;
 typedef struct turbo_flow_run_s turbo_flow_run_t;
 typedef struct turbo_flow_stage_plan_s turbo_flow_stage_plan_t;
-typedef struct turbo_flow_schema_registry_s turbo_flow_schema_registry_t;
+typedef struct turbo_flow_projection_registry_s turbo_flow_projection_registry_t;
 typedef struct turbo_flow_emitter_s turbo_flow_emitter_t;
 typedef struct turbo_flow_keyed_state_store_s turbo_flow_keyed_state_store_t;
 typedef struct turbo_flow_keyed_state_s turbo_flow_keyed_state_t;
@@ -256,7 +256,7 @@ typedef enum turbo_flow_content_flags_e {
  * Immutable content identity owned by a domain adapter or registry-facing host.
  *
  * It describes the original payload bytes and never owns a parsed value. Empty
- * schema fields mean that content is opaque or awaits registry resolution.
+ * schema fields mean that content is opaque or awaits explicit projection binding.
  */
 typedef struct turbo_flow_content_descriptor_s {
   size_t size;
@@ -283,7 +283,7 @@ typedef struct turbo_flow_content_schema_ref_s {
 
 typedef struct turbo_flow_content_binding_s {
   size_t size;
-  const turbo_flow_schema_registry_t *registry;
+  const turbo_flow_projection_registry_t *projection_registry;
   turbo_flow_content_schema_ref_t schema;
 } turbo_flow_content_binding_t;
 
@@ -319,7 +319,7 @@ TURBO_FLOW_C_API int turbo_flow_content_media_type_normalize(const char *media_t
 /** Resolve and declare a trusted schema while the owner may still mutate the descriptor. */
 TURBO_FLOW_C_API int
 turbo_flow_content_descriptor_resolve(turbo_flow_content_descriptor_t *descriptor,
-                                      const turbo_flow_schema_registry_t *registry,
+                                      const turbo_flow_projection_registry_t *projection_registry,
                                       const turbo_flow_content_schema_ref_t *selector);
 
 /** Normalize domain metadata, initialize a descriptor, and apply one host binding. */
@@ -340,11 +340,13 @@ turbo_flow_content_descriptor_validate_payload(const turbo_flow_content_descript
                                                const turbo_flow_content_descriptor_t *actual);
 
 /**
- * Trusted, immutable identity for an optional schema-bound data projection.
+ * Trusted, immutable identity for an optional typed data projection.
  *
+ * This is projection/binding identity, not a logical-schema or ValidationPlan
+ * authority. DataBind remains authoritative for field semantics and validation.
  * The provider owns this descriptor and every pointed-to string. The descriptor
- * must outlive each message projection that refers to it. `schema_text` may be
- * NULL when the trusted schema is resolved by name/id through a registry.
+ * must outlive each message projection that refers to it. TurboFlow never parses
+ * or interprets `schema_text`; the projection registry rejects non-NULL text.
  */
 typedef struct turbo_flow_data_schema_s {
   size_t size;
@@ -2845,17 +2847,18 @@ turbo_flow_msg_content_descriptor(const turbo_flow_msg_t *msg);
 /** Return non-zero only when the descriptor storage belongs to the message. */
 TURBO_FLOW_C_API int turbo_flow_msg_content_descriptor_owned(const turbo_flow_msg_t *msg);
 
-/** Explicit host-owned trusted schema registry; no process-global registry is created. */
-TURBO_FLOW_C_API turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void);
-TURBO_FLOW_C_API void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry);
+/** Explicit host-owned content-to-projection binding cache; no schema authority is created. */
+TURBO_FLOW_C_API turbo_flow_projection_registry_t *turbo_flow_projection_registry_create(void);
+TURBO_FLOW_C_API void turbo_flow_projection_registry_destroy(turbo_flow_projection_registry_t *registry);
 
 /**
- * Register one exact content match and a copied trusted schema descriptor.
- * `match.identity` is diagnostic and is not part of the registry key.
- * Runtime schema text is rejected; providers must compile/load schemas outside
- * this identity registry and register a descriptor with `schema_text == NULL`.
+ * Register one exact content match and copied projection identity.
+ * `match.identity` is diagnostic and is not part of the binding key.
+ * DataBind schema/validation semantics are not stored here. Runtime schema text
+ * is rejected; providers must compile/load binding plans outside this cache and
+ * register projection identity with `schema_text == NULL`.
  */
-TURBO_FLOW_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
+TURBO_FLOW_C_API int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *registry,
                                                   const turbo_flow_content_descriptor_t *match,
                                                   const turbo_flow_data_schema_t *schema);
 
@@ -2864,13 +2867,13 @@ TURBO_FLOW_C_API int turbo_flow_schema_registry_register(turbo_flow_schema_regis
  * The pointer remains valid until the host destroys the registry; destruction
  * must be serialized after all adapters and callers stop using it.
  */
-TURBO_FLOW_C_API int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *registry,
+TURBO_FLOW_C_API int turbo_flow_projection_registry_resolve(const turbo_flow_projection_registry_t *projection_registry,
                                                  const turbo_flow_content_descriptor_t *descriptor,
                                                  const turbo_flow_data_schema_t **schema_out);
 
-/** Resolve the current message descriptor through a trusted registry. */
-TURBO_FLOW_C_API int turbo_flow_msg_resolve_schema(const turbo_flow_msg_t *msg,
-                                            const turbo_flow_schema_registry_t *registry,
+/** Resolve the current message descriptor through the projection binding cache. */
+TURBO_FLOW_C_API int turbo_flow_msg_resolve_projection_schema(const turbo_flow_msg_t *msg,
+                                            const turbo_flow_projection_registry_t *projection_registry,
                                             const turbo_flow_data_schema_t **schema_out);
 
 /** Execute an explicit bounded adapter retry policy with isolated per-attempt messages. */
