@@ -4,6 +4,7 @@
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_turbodb.h"
+#include "turbodb_provider_config_native.h"
 
 #define FLOW_DURABLE_TURBODB_KIND "flow.durable.turbodb"
 #define FLOW_DURABLE_TURBODB_FILENAME_BYTES 4096u
@@ -19,5 +20,9 @@ typedef struct durable_turbodb_config_s {
 int durable_turbodb_config_read(const turbo_flow_resolved_config_t *resolved, const char *name,
                                 durable_turbodb_config_t *out,
                                 turbo_flow_config_error_t *error);
+
+int durable_turbodb_config_from_typed(
+    const DurableTurboDbConfig_t *typed, const char *name,
+    durable_turbodb_config_t *out, turbo_flow_config_error_t *error);
 
 #endif
