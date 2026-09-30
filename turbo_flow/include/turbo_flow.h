@@ -45,6 +45,89 @@ typedef struct turbo_flow_segment_plan_s {
   turbo_flow_operation_runtime_contract_t operation;
 } turbo_flow_segment_plan_t;
 
+#define TURBO_FLOW_EXECUTION_PLAN_API_VERSION 1u
+#define TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE UINT32_MAX
+
+/** Compile-time backend/boundary classification for one immutable plan stage. */
+typedef enum turbo_flow_execution_backend_e {
+  TURBO_FLOW_EXECUTION_BACKEND_SOURCE = 1,
+  TURBO_FLOW_EXECUTION_BACKEND_PORT,
+  TURBO_FLOW_EXECUTION_BACKEND_BUFFER,
+  TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT,
+  TURBO_FLOW_EXECUTION_BACKEND_PROVIDER_BOUNDARY,
+  TURBO_FLOW_EXECUTION_BACKEND_NATIVE
+} turbo_flow_execution_backend_t;
+
+/** Size-versioned summary of one currently sealed TurboFlow ExecutionPlan. */
+typedef struct turbo_flow_execution_plan_summary_s {
+  size_t size;
+  uint32_t version;
+  size_t stage_count;
+  size_t edge_count;
+  size_t segment_count;
+  size_t cflow_region_count;
+} turbo_flow_execution_plan_summary_t;
+
+#define TURBO_FLOW_EXECUTION_PLAN_SUMMARY_INIT                                      \
+  {sizeof(turbo_flow_execution_plan_summary_t),                                     \
+   TURBO_FLOW_EXECUTION_PLAN_API_VERSION, 0u, 0u, 0u, 0u}
+
+/**
+ * Deterministic indexed stage diagnostics.
+ *
+ * All string pointers are borrowed from the immutable compiled plan/registry
+ * and remain valid only until reset or destroy. The API performs no name,
+ * registry, Plugin, CMeta-catalog, or schema lookup.
+ */
+typedef struct turbo_flow_execution_stage_view_s {
+  size_t size;
+  uint32_t version;
+  uint32_t stage_index;
+  turbo_flow_execution_backend_t backend;
+  uint32_t cflow_region_index;
+  const char *stage_name;
+  const char *adapter_name;
+  const char *operation_name;
+  const char *resource_name;
+  const char *input_semantic_id;
+  const char *output_semantic_id;
+} turbo_flow_execution_stage_view_t;
+
+#define TURBO_FLOW_EXECUTION_STAGE_VIEW_INIT                                        \
+  {sizeof(turbo_flow_execution_stage_view_t),                                       \
+   TURBO_FLOW_EXECUTION_PLAN_API_VERSION,                                           \
+   TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
+   TURBO_FLOW_EXECUTION_BACKEND_NATIVE,                                             \
+   TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
+   NULL, NULL, NULL, NULL, NULL, NULL}
+
+/** Deterministic indexed diagnostics for one compiled direct CFlow region. */
+typedef struct turbo_flow_execution_cflow_region_view_s {
+  size_t size;
+  uint32_t version;
+  uint32_t region_index;
+  turbo_flow_execution_backend_t backend;
+  uint32_t entry_stage;
+  uint32_t exit_stage;
+  uint32_t stage_count;
+  int batch_safe;
+  const char *input_data_id;
+  const char *output_data_id;
+  size_t graph_nodes;
+  size_t instructions;
+  size_t map_callbacks;
+  size_t inference_queries;
+} turbo_flow_execution_cflow_region_view_t;
+
+#define TURBO_FLOW_EXECUTION_CFLOW_REGION_VIEW_INIT                                \
+  {sizeof(turbo_flow_execution_cflow_region_view_t),                               \
+   TURBO_FLOW_EXECUTION_PLAN_API_VERSION,                                          \
+   TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                           \
+   TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT,                                      \
+   TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                           \
+   TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                           \
+   0u, 0, NULL, NULL, 0u, 0u, 0u, 0u}
+
 typedef enum turbo_flow_pool_kind_e {
   TURBO_FLOW_POOL_THREAD = 0,
   TURBO_FLOW_POOL_CORO,
@@ -2660,6 +2743,22 @@ TURBO_FLOW_C_API const turbo_flow_edge_plan_t *turbo_flow_edge_at(const turbo_fl
 TURBO_FLOW_C_API size_t turbo_flow_segment_count(const turbo_flow_t *flow);
 TURBO_FLOW_C_API int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
                                          turbo_flow_segment_plan_t *out);
+
+/**
+ * Read deterministic immutable ExecutionPlan diagnostics.
+ *
+ * Callers must initialize outputs with the matching *_INIT macro. Queries are
+ * valid only while the flow is COMPILED, STARTED, or STOPPED. Reset/destroy
+ * invalidates every borrowed string returned by these views.
+ */
+TURBO_FLOW_C_API int turbo_flow_execution_plan_summary(
+    const turbo_flow_t *flow, turbo_flow_execution_plan_summary_t *out);
+TURBO_FLOW_C_API int turbo_flow_execution_plan_stage_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_execution_stage_view_t *out);
+TURBO_FLOW_C_API int turbo_flow_execution_plan_cflow_region_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_execution_cflow_region_view_t *out);
 
 TURBO_FLOW_C_API void turbo_flow_msg_init(turbo_flow_msg_t *msg);
 TURBO_FLOW_C_API void turbo_flow_msg_cleanup(turbo_flow_msg_t *msg);

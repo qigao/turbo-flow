@@ -8,6 +8,7 @@ on:
       - 'CMakeOptions.cmake'
       - 'cmake/**'
       - 'turbo_flow/CMakeLists.txt'
+      - 'turbo_flow/include/turbo_flow.h'
       - 'turbo_flow/benchmarks/**'
       - 'turbo_flow/src/flow_cflow_region.c'
       - 'turbo_flow/src/flow_runtime.c'
@@ -23,6 +24,8 @@ on:
       - 'turbo_flow/tests/test_flow_plugin_cflow_plan.c'
       - 'turbo_flow/tests/test_flow_reflected_operation.c'
       - 'turbo_flow/tests/reflected_operation_header_cpp.cpp'
+      - 'turbo_flow/tests/test_flow_plan_introspection.c'
+      - 'turbo_flow/tests/plan_introspection_header_cpp.cpp'
       - '.github/workflows/cflow-region-benchmark.yml'
   workflow_dispatch:
 
@@ -138,13 +141,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-benchmark --target bench_turbo_flow test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
+          cmake --build build/cflow-region-benchmark --target bench_turbo_flow test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
 
       - name: Run reflected CFlow region contract
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/cflow-region-benchmark --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
+          ctest --test-dir build/cflow-region-benchmark --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Configure CFlow ASan and UBSan contract
         shell: bash
@@ -176,9 +179,9 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           set -euxo pipefail
-          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan -j2
+          cmake --build build/cflow-region-sanitizers --target test_flow_reflected_operation test_flow_plugin_cflow_plan test_flow_plan_introspection -j2
           ctest --test-dir build/cflow-region-sanitizers \
-            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan)$' --output-on-failure
+            --tests-regex '^(test_flow_reflected_operation|test_flow_plugin_cflow_plan|test_flow_plan_introspection)$' --output-on-failure
 
       - name: Run fixed CFlow region benchmark
         shell: bash

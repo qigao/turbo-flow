@@ -303,6 +303,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           (!!semantics->typed !=
            (semantics->canonical_input_type != NULL &&
             semantics->canonical_output_type != NULL)) ||
+          (semantics->typed &&
+           (!semantics->input_semantic_id || !semantics->output_semantic_id)) ||
           (semantics->typed && !semantics->reflected_typed_adapter &&
            !cmeta_callable_contract_valid(semantics->callable)) ||
           (semantics->reflected_typed_adapter &&
@@ -314,7 +316,11 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           semantics->canonical_output_type != NULL ||
           (!!semantics->typed !=
            (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
-            semantics->output_type_index != FLOW_PLAN_INDEX_NONE)))) ||
+            semantics->output_type_index != FLOW_PLAN_INDEX_NONE)) ||
+          (semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
+           !semantics->input_semantic_id) ||
+          (semantics->output_type_index != FLOW_PLAN_INDEX_NONE &&
+           !semantics->output_semantic_id))) ||
         (semantics->candidate_region != FLOW_PLAN_INDEX_NONE &&
          semantics->candidate_region >= plan->candidate_region_count) ||
         (!!semantics->lowering_candidate !=
@@ -500,6 +506,10 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
         (flow_runtime_node_plan_t *)vec_at(&candidate.nodes, stage_index);
 
     node->stage_index = (uint32_t)stage_index;
+    node->stage_name = stage->name;
+    node->adapter_name = stage->adapter_name;
+    node->operation_name = stage->operation_name;
+    node->resource_name = stage->resource_name;
     if (stage->adapter_name) {
       int adapter_index = flow_find_adapter(flow, stage->adapter_name);
       if (adapter_index < 0) {
@@ -703,6 +713,116 @@ int turbo_flow_segment_plan_at(const turbo_flow_t *flow, size_t index,
   out->width = segment->width;
   out->capacity = segment->capacity;
   out->operation = segment->operation;
+  return SALTS_OK;
+}
+
+static int flow_execution_plan_available(const turbo_flow_t *flow) {
+  return flow && flow->compiled_plan.sealed &&
+         (flow->state == TURBO_FLOW_STATE_COMPILED ||
+          flow->state == TURBO_FLOW_STATE_STARTED ||
+          flow->state == TURBO_FLOW_STATE_STOPPED);
+}
+
+static turbo_flow_execution_backend_t flow_execution_stage_backend(
+    const flow_runtime_node_plan_t *node, uint32_t region_index) {
+  if (!node) return TURBO_FLOW_EXECUTION_BACKEND_NATIVE;
+  if (node->flags & FLOW_RUNTIME_NODE_BUFFER)
+    return TURBO_FLOW_EXECUTION_BACKEND_BUFFER;
+  if (node->flags & FLOW_RUNTIME_NODE_SOURCE)
+    return TURBO_FLOW_EXECUTION_BACKEND_SOURCE;
+  if (node->flags & FLOW_RUNTIME_NODE_PORT)
+    return TURBO_FLOW_EXECUTION_BACKEND_PORT;
+  if (region_index != FLOW_PLAN_INDEX_NONE)
+    return TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT;
+  if (node->adapter_name || node->resource_name)
+    return TURBO_FLOW_EXECUTION_BACKEND_PROVIDER_BOUNDARY;
+  return TURBO_FLOW_EXECUTION_BACKEND_NATIVE;
+}
+
+int turbo_flow_execution_plan_summary(
+    const turbo_flow_t *flow, turbo_flow_execution_plan_summary_t *out) {
+  if (!flow_execution_plan_available(flow) || !out ||
+      out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_EXECUTION_PLAN_API_VERSION)
+    return SALTS_EINVAL;
+
+  *out = (turbo_flow_execution_plan_summary_t)
+      TURBO_FLOW_EXECUTION_PLAN_SUMMARY_INIT;
+  out->stage_count = vec_size(&flow->compiled_plan.nodes);
+  out->edge_count = vec_size(&flow->compiled_plan.edges);
+  out->segment_count = vec_size(&flow->compiled_plan.data_segments);
+  out->cflow_region_count = vec_size(&flow->compiled_plan.cflow_regions);
+  return SALTS_OK;
+}
+
+int turbo_flow_execution_plan_stage_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_execution_stage_view_t *out) {
+  const flow_runtime_node_plan_t *node;
+  const flow_stage_semantic_plan_t *semantics;
+  const uint32_t *region_index;
+
+  if (!flow_execution_plan_available(flow) || !out ||
+      out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_EXECUTION_PLAN_API_VERSION)
+    return SALTS_EINVAL;
+
+  node = (const flow_runtime_node_plan_t *)vec_at_const(
+      &flow->compiled_plan.nodes, index);
+  semantics = (const flow_stage_semantic_plan_t *)vec_at_const(
+      &flow->compiled_plan.stage_semantics, index);
+  region_index = (const uint32_t *)vec_at_const(
+      &flow->compiled_plan.cflow_region_by_stage, index);
+  if (!node || !semantics || !region_index) return SALTS_ENOENT;
+
+  *out = (turbo_flow_execution_stage_view_t)
+      TURBO_FLOW_EXECUTION_STAGE_VIEW_INIT;
+  out->stage_index = node->stage_index;
+  out->backend = flow_execution_stage_backend(node, *region_index);
+  out->cflow_region_index =
+      *region_index == FLOW_PLAN_INDEX_NONE
+          ? TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE
+          : *region_index;
+  out->stage_name = node->stage_name;
+  out->adapter_name = node->adapter_name;
+  out->operation_name = node->operation_name;
+  out->resource_name = node->resource_name;
+  out->input_semantic_id = semantics->input_semantic_id;
+  out->output_semantic_id = semantics->output_semantic_id;
+  return SALTS_OK;
+}
+
+int turbo_flow_execution_plan_cflow_region_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_execution_cflow_region_view_t *out) {
+  const flow_cflow_region_plan_t *region;
+
+  if (!flow_execution_plan_available(flow) || !out ||
+      out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_EXECUTION_PLAN_API_VERSION)
+    return SALTS_EINVAL;
+
+  region = (const flow_cflow_region_plan_t *)vec_at_const(
+      &flow->compiled_plan.cflow_regions, index);
+  if (!region) return SALTS_ENOENT;
+  if (index > UINT32_MAX) return SALTS_ERANGE;
+
+  *out = (turbo_flow_execution_cflow_region_view_t)
+      TURBO_FLOW_EXECUTION_CFLOW_REGION_VIEW_INIT;
+  out->region_index = (uint32_t)index;
+  out->backend = TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT;
+  out->entry_stage = region->entry_stage;
+  out->exit_stage = region->exit_stage;
+  out->stage_count = region->stage_count;
+  out->batch_safe = region->batch_safe;
+  out->input_data_id =
+      region->input_data ? region->input_data->stable_id : NULL;
+  out->output_data_id =
+      region->output_data ? region->output_data->stable_id : NULL;
+  out->graph_nodes = region->stats.graph_nodes;
+  out->instructions = region->stats.instructions;
+  out->map_callbacks = region->stats.map_callbacks;
+  out->inference_queries = region->stats.inference_queries;
   return SALTS_OK;
 }
 
