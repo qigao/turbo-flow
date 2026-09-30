@@ -47,6 +47,7 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
           vec_init_bytes(&plan->cflow_region_by_stage, sizeof(uint32_t),
                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
       flow_databind_channels_init(&plan->databind_channels) != SALTS_OK ||
+      flow_databind_services_init(&plan->databind_services) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&plan->owned_resources, sizeof(flow_plan_owned_resource_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
@@ -93,6 +94,7 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->cflow_regions);
   vec_destroy(&plan->cflow_region_by_stage);
   flow_databind_channels_destroy(&plan->databind_channels);
+  flow_databind_services_destroy(&plan->databind_services);
 
   /*
    * Borrowed FunctionDesc/DataDesc/callable code and type traits may belong to
@@ -336,7 +338,11 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
           node->databind_transport_plan == NULL)) ||
         (node->databind_channel_index == FLOW_PLAN_INDEX_NONE &&
          (node->databind_transport != FLOW_DATABIND_TRANSPORT_NONE ||
-          node->databind_transport_plan != NULL))) {
+          node->databind_transport_plan != NULL)) ||
+        (node->databind_service_index != FLOW_PLAN_INDEX_NONE &&
+         (node->databind_service_index >= vec_size(&plan->databind_services) ||
+          (node->flags & (FLOW_RUNTIME_NODE_SOURCE | FLOW_RUNTIME_NODE_PORT |
+                          FLOW_RUNTIME_NODE_BUFFER)) != 0u))) {
       return SALTS_EPROTO;
     }
     for (size_t offset = 0u; offset < node->outgoing_count; ++offset) {
@@ -347,7 +353,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
       }
     }
   }
-  if (flow_databind_channels_verify(&plan->databind_channels) != SALTS_OK)
+  if (flow_databind_channels_verify(&plan->databind_channels) != SALTS_OK ||
+      flow_databind_services_verify(&plan->databind_services, stage_count) != SALTS_OK)
     return SALTS_EPROTO;
 
   for (size_t region_index = 0u; region_index < vec_size(&plan->cflow_regions);
@@ -525,6 +532,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     node->resource_name = stage->resource_name;
     node->databind_channel_index = FLOW_PLAN_INDEX_NONE;
     node->databind_transport = FLOW_DATABIND_TRANSPORT_NONE;
+    node->databind_service_index = FLOW_PLAN_INDEX_NONE;
     if (stage->adapter_name) {
       int adapter_index = flow_find_adapter(flow, stage->adapter_name);
       if (adapter_index < 0) {
@@ -657,6 +665,13 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
                                              : "DataBind Channel plan is inconsistent");
   }
 
+  rc = flow_plan_build_databind_services(flow, &candidate);
+  if (rc != SALTS_OK) {
+    return flow_plan_fail(flow, &candidate, rc,
+                          rc == SALTS_ENOMEM ? "out of memory"
+                                             : "DataBind Service MethodPlan is inconsistent");
+  }
+
   rc = flow_plan_build_semantics(flow, &candidate);
   if (rc != SALTS_OK) {
     return flow_plan_fail(flow, &candidate, rc,
@@ -754,6 +769,8 @@ static turbo_flow_execution_backend_t flow_execution_stage_backend(
     return TURBO_FLOW_EXECUTION_BACKEND_SOURCE;
   if (node->flags & FLOW_RUNTIME_NODE_PORT)
     return TURBO_FLOW_EXECUTION_BACKEND_PORT;
+  if (node->databind_service_index != FLOW_PLAN_INDEX_NONE)
+    return TURBO_FLOW_EXECUTION_BACKEND_PROVIDER_BOUNDARY;
   if (region_index != FLOW_PLAN_INDEX_NONE)
     return TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT;
   if (node->adapter_name || node->resource_name)
