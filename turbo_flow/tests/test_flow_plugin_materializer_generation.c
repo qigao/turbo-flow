@@ -9,6 +9,57 @@
 #include <string.h>
 #include <tinytest.h>
 
+FunctionDecl(value, int, materializer_operation_semantic,
+    (int, value, CMETA_PARAM_IN));
+int materializer_operation_semantic(int value) {
+  return value * 2;
+}
+
+static int materializer_register_reflected_operation(
+    turbo_flow_t *flow, const char *name) {
+  turbo_flow_operation_descriptor_t operation = {0};
+  turbo_flow_operation_port_binding_t ports[2];
+  turbo_flow_reflected_operation_registration_t registration =
+      TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
+
+  operation.size = sizeof(operation);
+  operation.name = name;
+  operation.version = 1u;
+  operation.domain = TURBO_FLOW_DOMAIN_DATA;
+  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+  operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+  operation.flags = TURBO_FLOW_OPERATION_STAGE;
+  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+
+  ports[0] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[0].port_index = 0u;
+  ports[0].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[0].direction = TURBO_FLOW_OPERATION_PORT_INPUT;
+  ports[0].value_kind = TURBO_FLOW_OPERATION_VALUE_PARAMETER;
+  ports[0].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[0].parameter_index = 0u;
+  ports[0].data = &cmeta_data_int;
+
+  ports[1] = (turbo_flow_operation_port_binding_t)
+      TURBO_FLOW_OPERATION_PORT_BINDING_INIT;
+  ports[1].port_index = 0u;
+  ports[1].domain = TURBO_FLOW_DOMAIN_DATA;
+  ports[1].direction = TURBO_FLOW_OPERATION_PORT_OUTPUT;
+  ports[1].value_kind = TURBO_FLOW_OPERATION_VALUE_RETURN;
+  ports[1].storage = TURBO_FLOW_OPERATION_STORAGE_DIRECT;
+  ports[1].parameter_index = SIZE_MAX;
+  ports[1].data = &cmeta_data_int;
+
+  registration.operation = &operation;
+  registration.function = FunctionMeta(materializer_operation_semantic);
+  registration.abi = FunctionAbi(materializer_operation_semantic);
+  registration.ports = ports;
+  registration.port_count = 2u;
+  registration.lowering = TURBO_FLOW_REFLECTED_LOWERING_NONE;
+  return turbo_flow_register_reflected_operation(flow, &registration);
+}
+
 static int materializer_noop_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)msg;
   (void)ctx;
@@ -121,7 +172,6 @@ static int open_test_with_operation(materializer_generation_test_t *t,
                                     size_t result_capacity, int register_other) {
   turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
-  turbo_flow_operation_descriptor_t operation = {0};
   int rc;
   memset(t, 0, sizeof(*t));
   t->error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -143,23 +193,10 @@ static int open_test_with_operation(materializer_generation_test_t *t,
   if (rc != SALTS_OK) return rc;
   t->flow = turbo_flow_create();
   if (!t->flow) return SALTS_ENOMEM;
-  operation.size = sizeof(operation);
-  operation.name = "fixture.double";
-  operation.version = 1u;
-  operation.domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.input_type = "Message";
-  operation.output_domain = TURBO_FLOW_DOMAIN_DATA;
-  operation.output_type = "Message";
-  operation.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
-  operation.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
-  operation.flags = TURBO_FLOW_OPERATION_STAGE;
-  operation.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
-  rc = turbo_flow_register_operation(t->flow, &operation);
+  rc = materializer_register_reflected_operation(t->flow, "fixture.double");
   if (rc != SALTS_OK) return rc;
   if (register_other) {
-    operation.name = "fixture.other";
-    rc = turbo_flow_register_operation(t->flow, &operation);
+    rc = materializer_register_reflected_operation(t->flow, "fixture.other");
     if (rc != SALTS_OK) return rc;
   }
   return turbo_flow_parse_string(t->flow, graph, strlen(graph));
