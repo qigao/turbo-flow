@@ -1,0 +1,15 @@
+schema ProviderConfig [version(1)];
+
+message HttpConfig {
+  @Min(1) @Max(65535) uint32 port;
+  bool tls;
+  @Size(min = 1, max = 16) @Pattern("^[a-z]+$") string mode;
+  optional string label default "default";
+}
+
+message BatchConfig {
+  @Min(1) @Max(1024) uint32 batch;
+  bool durable;
+}
+
+
