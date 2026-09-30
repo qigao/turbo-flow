@@ -60,7 +60,7 @@ spec("Salts Plugin provider binding") {
     check_true(turbo_flow_provider_contract_valid(&contract));
     check_equal(contract.config.message_artifact->type_name,
                 "FixtureProviderConfig");
-    check_equal(contract.resource.contract_id, NULL);
+    check_null(contract.resource.contract_id);
 
     check_equal(salts_plugin_registry_request_stop(&registry, ref),
                 SALTS_PLUGIN_OK);
