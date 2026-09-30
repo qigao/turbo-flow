@@ -548,7 +548,6 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_operation_descriptor_t metadata =
         *turbo_flow_find_operation(t.flow, "fixture.double");
     metadata.name = "fixture.double";
-    metadata.input_type = metadata.output_type = "Message";
     t.observer->mode = OP_FIXTURE_RELEASE_SESSION_ONCE;
     check_equal(runtime_create(&t), SALTS_EINVAL);
     check_equal(t.error.path, "$.graph");
