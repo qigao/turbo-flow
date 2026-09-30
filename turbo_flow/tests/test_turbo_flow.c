@@ -3018,7 +3018,7 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
-    it("defines reset behavior for keeping or clearing operation registry") {
+    it("defines reset behavior for keeping or clearing operation projection_registry") {
       static const char *src = "source input\n"
                                "stage parse operation test.parse\n"
                                "stage main {\n"
@@ -3368,23 +3368,23 @@ suite("Turbo Flow") {
       turbo_flow_content_descriptor_t control;
       turbo_flow_content_descriptor_t wrong_domain;
       turbo_flow_content_schema_ref_t selector = TURBO_FLOW_CONTENT_SCHEMA_REF_INIT;
-      turbo_flow_schema_registry_t *registry = turbo_flow_schema_registry_create();
+      turbo_flow_projection_registry_t *projection_registry = turbo_flow_projection_registry_create();
       const turbo_flow_data_schema_t *resolved = NULL;
 
-      check_not_null(registry);
+      check_not_null(projection_registry);
       check_equal(turbo_flow_content_descriptor_init(
                        &application, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
                        TURBO_FLOW_CONTENT_PROFILE_MQTT_APPLICATION, TURBO_FLOW_DATA_ENCODING_JSON,
                        "application/json", "sensors/temperature"),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_register(registry, &application, &mqtt_schema),
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &application, &mqtt_schema),
                    SALTS_OK);
       selector.schema_name = mqtt_schema.schema_name;
       selector.type_name = mqtt_schema.type_name;
       selector.schema_version = mqtt_schema.schema_version;
-      check_equal(turbo_flow_content_descriptor_resolve(&application, registry, &selector),
+      check_equal(turbo_flow_content_descriptor_resolve(&application, projection_registry, &selector),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &application, &resolved), SALTS_OK);
+      check_equal(turbo_flow_projection_registry_resolve(projection_registry, &application, &resolved), SALTS_OK);
       check_equal(resolved->schema_name, mqtt_schema.schema_name);
 
       wrong_domain = application;
@@ -3400,16 +3400,16 @@ suite("Turbo Flow") {
                    SALTS_OK);
       control.flags |= TURBO_FLOW_CONTENT_PROTOCOL_CONTROL;
       check_equal(turbo_flow_content_descriptor_check(&control), SALTS_OK);
-      turbo_flow_schema_registry_destroy(registry);
+      turbo_flow_projection_registry_destroy(projection_registry);
     }
 
     it("normalizes media types and resolves a trusted schema into an owner descriptor") {
       turbo_flow_content_descriptor_t descriptor;
       turbo_flow_content_schema_ref_t selector = TURBO_FLOW_CONTENT_SCHEMA_REF_INIT;
-      turbo_flow_schema_registry_t *registry = turbo_flow_schema_registry_create();
+      turbo_flow_projection_registry_t *projection_registry = turbo_flow_projection_registry_create();
       turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
       const char *media_type = NULL;
-      check_not_null(registry);
+      check_not_null(projection_registry);
       check_equal(turbo_flow_content_media_type_normalize("Application/JSON; charset=utf-8",
                                                            &encoding, &media_type),
                    SALTS_OK);
@@ -3420,12 +3420,12 @@ suite("Turbo Flow") {
                                                       encoding, media_type, "/orders"),
                    SALTS_OK);
       check_equal(
-          turbo_flow_schema_registry_register(registry, &descriptor, &TEST_HTTP_DATA_SCHEMA),
+          turbo_flow_projection_registry_register(projection_registry, &descriptor, &TEST_HTTP_DATA_SCHEMA),
           SALTS_OK);
       selector.schema_name = TEST_HTTP_DATA_SCHEMA.schema_name;
       selector.type_name = TEST_HTTP_DATA_SCHEMA.type_name;
       selector.schema_version = TEST_HTTP_DATA_SCHEMA.schema_version;
-      check_equal(turbo_flow_content_descriptor_resolve(&descriptor, registry, &selector),
+      check_equal(turbo_flow_content_descriptor_resolve(&descriptor, projection_registry, &selector),
                    SALTS_OK);
       check_bits(descriptor.flags, TURBO_FLOW_CONTENT_SCHEMA_DECLARED);
       check_equal(descriptor.schema_name, TEST_HTTP_DATA_SCHEMA.schema_name);
@@ -3441,46 +3441,46 @@ suite("Turbo Flow") {
       check_equal(
           turbo_flow_content_media_type_normalize("application/x-unknown", &encoding, &media_type),
           SALTS_ENOENT);
-      turbo_flow_schema_registry_destroy(registry);
+      turbo_flow_projection_registry_destroy(projection_registry);
     }
 
     it("resolves trusted schemas by domain content identity") {
       turbo_flow_content_descriptor_t match;
       turbo_flow_content_descriptor_t declared;
-      turbo_flow_schema_registry_t *registry = turbo_flow_schema_registry_create();
+      turbo_flow_projection_registry_t *projection_registry = turbo_flow_projection_registry_create();
       const turbo_flow_data_schema_t *resolved = NULL;
       turbo_flow_msg_t msg;
 
-      check_not_null(registry);
+      check_not_null(projection_registry);
       check_equal(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_REQUEST_BODY,
                                                       TURBO_FLOW_DATA_ENCODING_JSON,
                                                       "application/json", NULL),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &TEST_HTTP_DATA_SCHEMA),
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &match, &TEST_HTTP_DATA_SCHEMA),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &TEST_HTTP_DATA_SCHEMA),
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &match, &TEST_HTTP_DATA_SCHEMA),
                    SALTS_EALREADY);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &match, &resolved), SALTS_ENOENT);
+      check_equal(turbo_flow_projection_registry_resolve(projection_registry, &match, &resolved), SALTS_ENOENT);
       declared = match;
       check_equal(turbo_flow_content_descriptor_declare_schema(
                        &declared, TEST_HTTP_DATA_SCHEMA.schema_name,
                        TEST_HTTP_DATA_SCHEMA.type_name, TEST_HTTP_DATA_SCHEMA.schema_version),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), SALTS_OK);
+      check_equal(turbo_flow_projection_registry_resolve(projection_registry, &declared, &resolved), SALTS_OK);
       check_not_null(resolved);
       check_equal(resolved->projection_type, "test.int");
 
       turbo_flow_msg_init(&msg);
       check_equal(turbo_flow_msg_set_content_descriptor(&msg, &declared), SALTS_OK);
       resolved = NULL;
-      check_equal(turbo_flow_msg_resolve_schema(&msg, registry, &resolved), SALTS_OK);
+      check_equal(turbo_flow_msg_resolve_projection_schema(&msg, projection_registry, &resolved), SALTS_OK);
       check_not_null(resolved);
       declared.schema_version = 3u;
-      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved),
+      check_equal(turbo_flow_projection_registry_resolve(projection_registry, &declared, &resolved),
                    SALTS_ENOENT);
       turbo_flow_msg_cleanup(&msg);
-      turbo_flow_schema_registry_destroy(registry);
+      turbo_flow_projection_registry_destroy(projection_registry);
     }
 
     it("deep copies schema identities and rejects runtime schema text") {
@@ -3489,7 +3489,7 @@ suite("Turbo Flow") {
       char projection_type[] = "test.mutable";
       turbo_flow_content_descriptor_t match;
       turbo_flow_content_descriptor_t declared;
-      turbo_flow_schema_registry_t *registry = turbo_flow_schema_registry_create();
+      turbo_flow_projection_registry_t *projection_registry = turbo_flow_projection_registry_create();
       turbo_flow_data_schema_t schema = {sizeof(turbo_flow_data_schema_t),
                                          TURBO_FLOW_DOMAIN_IO_TRANSPORT,
                                          TURBO_FLOW_DATA_ENCODING_JSON,
@@ -3502,18 +3502,18 @@ suite("Turbo Flow") {
       turbo_flow_data_schema_t conflicting = schema;
       const turbo_flow_data_schema_t *resolved = NULL;
 
-      check_not_null(registry);
+      check_not_null(projection_registry);
       check_equal(turbo_flow_content_descriptor_init(&match, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
                                                       TURBO_FLOW_CONTENT_PROFILE_HTTP_RESPONSE_BODY,
                                                       TURBO_FLOW_DATA_ENCODING_JSON,
                                                       "application/json", NULL),
                    SALTS_OK);
       schema.schema_text = "message MutableOrder { uint32 id; }";
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), SALTS_EINVAL);
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &match, &schema), SALTS_EINVAL);
       schema.schema_text = NULL;
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &schema), SALTS_OK);
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &match, &schema), SALTS_OK);
       conflicting.schema_id = 20u;
-      check_equal(turbo_flow_schema_registry_register(registry, &match, &conflicting),
+      check_equal(turbo_flow_projection_registry_register(projection_registry, &match, &conflicting),
                    SALTS_EPROTO);
 
       schema_name[0] = 'X';
@@ -3523,12 +3523,12 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_content_descriptor_declare_schema(&declared, "test.http.mutable",
                                                                 "MutableOrder", 2u),
                    SALTS_OK);
-      check_equal(turbo_flow_schema_registry_resolve(registry, &declared, &resolved), SALTS_OK);
+      check_equal(turbo_flow_projection_registry_resolve(projection_registry, &declared, &resolved), SALTS_OK);
       check_not_null(resolved);
       check_equal(resolved->schema_name, "test.http.mutable");
       check_equal(resolved->type_name, "MutableOrder");
       check_equal(resolved->projection_type, "test.mutable");
-      turbo_flow_schema_registry_destroy(registry);
+      turbo_flow_projection_registry_destroy(projection_registry);
     }
 
     it("retains borrowed buffer views and releases them independently") {
