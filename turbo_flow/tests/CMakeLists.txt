@@ -32,6 +32,39 @@ set_target_properties(test_flow_databind_channel_plan PROPERTIES
 set_tests_properties(test_flow_databind_channel_plan PROPERTIES
   LABELS "graph;databind;plan;transport" TIMEOUT 30)
 
+salts_idl_target(
+  TARGET turbo_flow_databind_service_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind_service.schema"
+  ARTIFACT_NAME "tf_service"
+  ARTIFACTS NATIVE
+  TRANSPORTS HTTP RPC)
+
+cmake_add_test(
+  test_flow_databind_service_plan
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_databind_service_plan.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/databind_service_header_cpp.cpp
+  LIBS
+    TurboFlow::Product
+    Salts::TinyTest
+    ${turbo_flow_databind_service_fixture_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${turbo_flow_databind_service_fixture_GENERATED_DIR}
+  FOLDER "turbo_flow/tests")
+add_dependencies(
+  test_flow_databind_service_plan
+  turbo_flow_databind_service_fixture_idl_codegen)
+set_target_properties(test_flow_databind_service_plan PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)
+set_tests_properties(test_flow_databind_service_plan PROPERTIES
+  LABELS "graph;databind;plan;service" TIMEOUT 30)
+
 add_library(test_flow_plugin_cflow_function_fixture SHARED
   plugin_cflow_function_fixture.c)
 target_link_libraries(test_flow_plugin_cflow_function_fixture
