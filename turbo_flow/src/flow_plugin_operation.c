@@ -106,6 +106,8 @@ TURBO_FLOW_API int flow_plugin_bind_cflow_function(
   if (!flow || !binding || !binding->registry ||
       !salts_plugin_ref_valid(binding->plugin) ||
       !binding->export_id || !binding->export_id[0] ||
+      !binding->contract_id || !binding->contract_id[0] ||
+      binding->contract_version == 0u ||
       !binding->operation || !binding->input_data || !binding->output_data ||
       turbo_flow_state(flow) != TURBO_FLOW_STATE_PARSED) {
     return SALTS_EINVAL;
@@ -126,17 +128,15 @@ TURBO_FLOW_API int flow_plugin_bind_cflow_function(
   }
   plugin_status = salts_plugin_manifest_find_export(
       manifest, binding->export_id, &entry);
-  if (plugin_status != SALTS_PLUGIN_OK || !entry ||
-      entry->kind != SALTS_PLUGIN_EXPORT_FUNCTION) {
+  if (plugin_status == SALTS_PLUGIN_OK && entry) {
+    plugin_status = salts_plugin_export_require_function(
+        entry, binding->contract_id, binding->contract_version,
+        binding->required_capabilities);
+  }
+  if (plugin_status != SALTS_PLUGIN_OK || !entry) {
     rc = flow_set_error_keep_state(
-        flow,
-        plugin_status == SALTS_PLUGIN_OK
-            ? SALTS_ENOTSUP
-            : flow_plugin_status_to_salts(plugin_status),
-        0u, 0u,
-        plugin_status == SALTS_PLUGIN_OK
-            ? "plugin export is not a canonical function"
-            : salts_plugin_status_string(plugin_status));
+        flow, flow_plugin_status_to_salts(plugin_status), 0u, 0u,
+        salts_plugin_status_string(plugin_status));
     goto release_lease;
   }
 
