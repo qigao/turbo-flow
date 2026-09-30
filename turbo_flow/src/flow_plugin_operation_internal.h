@@ -38,6 +38,9 @@ int flow_plugin_result_domain_materialize(turbo_flow_plugin_result_domain_t *dom
 
 typedef struct flow_plugin_operation_binding_s {
   turbo_flow_plugin_operation_v3_t operation;
+  /** Canonical reflected graph value semantics; ABI3 schema wrappers are subordinate. */
+  const cmeta_data_desc *input_data;
+  const cmeta_data_desc *output_data;
   turbo_flow_plugin_operation_request_v3_t request;
   flow_plugin_result_entry_t *result;
   void *session;
