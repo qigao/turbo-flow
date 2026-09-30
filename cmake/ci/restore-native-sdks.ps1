@@ -39,8 +39,8 @@ $sourceArgs = @(
 if ($LASTEXITCODE -ne 0) { throw "failed to configure qigao GitHub Packages source" }
 
 # Floating '*' is intentional: CI always validates the latest published stable
-# producer SDKs. Compatibility is enforced by exported targets and ABI checks,
-# not by hard-coded package version numbers.
+# producer SDKs. Consumer contracts are enforced by their canonical exported
+# packages and targets; there is no legacy package fallback.
 $refs = @(
   '    <PackageReference Include="Salts.Native" Version="*" />',
   '    <PackageReference Include="SaltsUtils.Native" Version="*" />'
