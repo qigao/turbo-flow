@@ -726,12 +726,12 @@ static int flow_execution_plan_available(const turbo_flow_t *flow) {
 static turbo_flow_execution_backend_t flow_execution_stage_backend(
     const flow_runtime_node_plan_t *node, uint32_t region_index) {
   if (!node) return TURBO_FLOW_EXECUTION_BACKEND_NATIVE;
+  if (node->flags & FLOW_RUNTIME_NODE_BUFFER)
+    return TURBO_FLOW_EXECUTION_BACKEND_BUFFER;
   if (node->flags & FLOW_RUNTIME_NODE_SOURCE)
     return TURBO_FLOW_EXECUTION_BACKEND_SOURCE;
   if (node->flags & FLOW_RUNTIME_NODE_PORT)
     return TURBO_FLOW_EXECUTION_BACKEND_PORT;
-  if (node->flags & FLOW_RUNTIME_NODE_BUFFER)
-    return TURBO_FLOW_EXECUTION_BACKEND_BUFFER;
   if (region_index != FLOW_PLAN_INDEX_NONE)
     return TURBO_FLOW_EXECUTION_BACKEND_CFLOW_DIRECT;
   if (node->adapter_name || node->resource_name)
