@@ -1,3 +1,4 @@
+#include "flow_internal.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_domain.h"
@@ -312,6 +313,37 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
     check_not_null(native.output_semantic_id);
     check_equal(strcmp(native.input_semantic_id, native.output_semantic_id), 0);
 
+    turbo_flow_destroy(flow);
+  }
+
+  it("executes native stages from the frozen sealed-plan runtime contract") {
+    turbo_flow_t *flow = plan_diag_build_native();
+    flow_stage_plan_impl_t *stage;
+    const flow_executor_plan_t *executor;
+    turbo_flow_msg_t message;
+
+    check_not_null(flow);
+    stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, 1u);
+    executor = flow_executor_plan_for_stage(flow, 1u);
+    check_not_null(stage);
+    check_not_null(executor);
+    check_equal(executor->runtime.deadline_ms, (uint64_t)0u);
+    check_equal(executor->runtime.settlement, (uint32_t)0u);
+
+    /*
+     * Deliberately poison the mutable compile-time stage copy after the plan is
+     * sealed. Runtime dispatch/settlement must use executor->runtime instead.
+     */
+    stage->resolved_operation.runtime.deadline_ms = 1u;
+    stage->resolved_operation.runtime.settlement = TURBO_FLOW_SETTLEMENT_COMPLETE;
+
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+
+    check_equal(executor->runtime.deadline_ms, (uint64_t)0u);
+    check_equal(executor->runtime.settlement, (uint32_t)0u);
     turbo_flow_destroy(flow);
   }
 
