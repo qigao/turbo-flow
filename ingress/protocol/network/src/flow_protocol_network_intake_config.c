@@ -18,7 +18,7 @@ static int intake_config_error(turbo_flow_config_error_t *error, int status, con
 static int intake_config_field_error(turbo_flow_config_error_t *error, int status,
                                      const char *adapter_name, const char *field,
                                      const char *message) {
-  char path[TURBO_FLOW_CONFIG_PATH_MAX + 1u];
+  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
   (void)snprintf(path, sizeof(path), "$.adapters.%s.config%s%s",
                  adapter_name ? adapter_name : "?", field ? "." : "", field ? field : "");
   return intake_config_error(error, status, path, message);
