@@ -67,16 +67,11 @@ TURBO_FLOW_C_API int turbo_flow_product_bind_databind_rpc_service(
 
 enum { TURBO_FLOW_DATABIND_SERVICE_PLAN_API_VERSION = 1u };
 
-typedef enum turbo_flow_databind_service_transport_e {
-  TURBO_FLOW_DATABIND_SERVICE_HTTP = 1,
-  TURBO_FLOW_DATABIND_SERVICE_RPC = 2
-} turbo_flow_databind_service_transport_t;
-
 typedef struct turbo_flow_databind_service_plan_view_s {
   size_t size;
   uint32_t version;
   uint32_t stage_index;
-  turbo_flow_databind_service_transport_t transport;
+  DataBindTransportKind transport;
   const char *service_name;
   const char *operation_name;
   const char *function_name;
@@ -88,7 +83,7 @@ typedef struct turbo_flow_databind_service_plan_view_s {
 #define TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT \
   {sizeof(turbo_flow_databind_service_plan_view_t), \
    TURBO_FLOW_DATABIND_SERVICE_PLAN_API_VERSION, 0u, \
-   TURBO_FLOW_DATABIND_SERVICE_HTTP, NULL, NULL, NULL, 0u, 0u, 0u}
+   DATA_BIND_TRANSPORT_HTTP, NULL, NULL, NULL, 0u, 0u, 0u}
 
 TURBO_FLOW_C_API size_t
 turbo_flow_execution_plan_databind_service_count(const turbo_flow_t *flow);
