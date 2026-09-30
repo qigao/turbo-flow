@@ -226,7 +226,14 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   default:
     break;
   }
-  rc = runtime_register_reflected_operation(t->flow, &operation, fault == 2);
+  if (fault == 15) {
+    turbo_flow_operation_descriptor_t legacy = operation;
+    legacy.input_domain = legacy.output_domain = TURBO_FLOW_DOMAIN_DATA;
+    legacy.input_type = legacy.output_type = "Message";
+    rc = turbo_flow_register_operation(t->flow, &legacy);
+  } else {
+    rc = runtime_register_reflected_operation(t->flow, &operation, fault == 2);
+  }
   if (rc) return rc;
 
   capture_operation.size = sizeof(capture_operation);
@@ -563,7 +570,7 @@ spec("ABI3 generation operation runtime") {
     check_equal(state.state, (uint32_t)TURBO_FLOW_PLUGIN_RESULT_DOMAIN_DETACHED);
     t.flow = turbo_flow_create();
     check_not_null(t.flow);
-    check_equal(turbo_flow_register_operation(t.flow, &metadata), SALTS_OK);
+    check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0), SALTS_OK);
     check_equal(turbo_flow_parse_string(t.flow, invalid_dsl, sizeof(invalid_dsl) - 1u), SALTS_OK);
     turbo_flow_t *original = t.flow;
     check_equal(runtime_create(&t), SALTS_EINVAL);
@@ -628,7 +635,7 @@ spec("ABI3 generation operation runtime") {
     }
   }
   it("validates Graph contracts and exact generation descriptors before transfer") {
-    for (int fault = 1; fault <= 14; ++fault) {
+    for (int fault = 1; fault <= 15; ++fault) {
       runtime_test_t t;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       int open_rc =
@@ -641,8 +648,8 @@ spec("ABI3 generation operation runtime") {
       int rc = open_rc == SALTS_OK ? runtime_create(&t) : open_rc;
       info("Graph/config fault %d: %d %s", fault, rc, t.error.path);
       check_equal(rc, fault <= 2 ? SALTS_EPROTO
-                      : fault <= 8 ? SALTS_ENOTSUP
-                                   : SALTS_EINVAL);
+                      : fault <= 8 || fault == 15 ? SALTS_ENOTSUP
+                                                  : SALTS_EINVAL);
       check(t.flow == original);
       check_null(t.generation);
       check_null(t.cleanup);
@@ -673,7 +680,7 @@ spec("ABI3 generation operation runtime") {
       turbo_flow_operation_descriptor_t metadata =
           *turbo_flow_find_operation(t.flow, "fixture.double");
       metadata.name = "fixture.other";
-      check_equal(turbo_flow_register_operation(t.flow, &metadata), SALTS_OK);
+      check_equal(runtime_register_reflected_operation(t.flow, &metadata, 0), SALTS_OK);
       if (fail_second == 2) {
         check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &pe), SALTS_OK);
         t.domain = NULL;
@@ -1179,17 +1186,30 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_msg_init(&clone);
     metadata.size = sizeof(metadata);
     metadata.name = "fixture.double";
-    metadata.version = 1;
-    metadata.domain = metadata.input_domain = metadata.output_domain = TURBO_FLOW_DOMAIN_DATA;
-    metadata.input_type = metadata.output_type = "Message";
+    metadata.version = 1u;
+    metadata.domain = TURBO_FLOW_DOMAIN_DATA;
     metadata.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
     metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
     metadata.flags = TURBO_FLOW_OPERATION_STAGE;
     metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
-    check_equal(turbo_flow_register_operation(flow, &metadata), SALTS_OK);
-    metadata.name = "fixture.capture";
-    check_equal(turbo_flow_register_operation(flow, &metadata), SALTS_OK);
-    capture.operation_name = metadata.name;
+    check_equal(runtime_register_reflected_operation(flow, &metadata, 0), SALTS_OK);
+
+    {
+      turbo_flow_operation_descriptor_t capture_metadata = {0};
+      capture_metadata.size = sizeof(capture_metadata);
+      capture_metadata.name = "fixture.capture";
+      capture_metadata.version = 1u;
+      capture_metadata.domain =
+          capture_metadata.input_domain =
+          capture_metadata.output_domain = TURBO_FLOW_DOMAIN_DATA;
+      capture_metadata.input_type = capture_metadata.output_type = "Message";
+      capture_metadata.scope.data = TURBO_FLOW_DATA_SCOPE_MESSAGE;
+      capture_metadata.scope.authority = TURBO_FLOW_AUTHORITY_DATA_MUTATION;
+      capture_metadata.flags = TURBO_FLOW_OPERATION_STAGE;
+      capture_metadata.execution_mask = TURBO_FLOW_OPERATION_EXEC_INLINE;
+      check_equal(turbo_flow_register_operation(flow, &capture_metadata), SALTS_OK);
+    }
+    capture.operation_name = "fixture.capture";
     capture.fn = capture_result;
     capture.ctx = &result;
     check_equal(turbo_flow_register_operation_provider(flow, &capture), SALTS_OK);
