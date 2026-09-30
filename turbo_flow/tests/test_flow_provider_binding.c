@@ -1,5 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow_provider_binding.h"
+#include "turbo_flow_resource.h"
+#include "salts_resource_fixture.h"
 
 #include <salts/plugin.h>
 
@@ -8,6 +10,9 @@
 #ifndef FLOW_SALTS_PROVIDER_FIXTURE
 #error "FLOW_SALTS_PROVIDER_FIXTURE is required"
 #endif
+#ifndef FLOW_SALTS_RESOURCE_FIXTURE
+#error "FLOW_SALTS_RESOURCE_FIXTURE is required"
+#endif
 
 typedef struct provider_resolver_fixture_s {
   salts_plugin_registry *registry;
@@ -15,6 +20,37 @@ typedef struct provider_resolver_fixture_s {
   unsigned calls;
   int accept_any_identity;
 } provider_resolver_fixture_t;
+
+typedef struct resource_resolver_fixture_s {
+  salts_plugin_registry *registry;
+  salts_plugin_ref plugin;
+  unsigned calls;
+} resource_resolver_fixture_t;
+
+static int resolve_resource(
+    void *ctx, const char *resource_name,
+    const turbo_flow_provider_resource_requirement_v1_t *requirement,
+    turbo_flow_resource_candidate_v1_t *out,
+    turbo_flow_config_error_t *error) {
+  resource_resolver_fixture_t *fixture =
+      (resource_resolver_fixture_t *)ctx;
+  (void)requirement;
+  if (!fixture || !out || out->size != sizeof(*out))
+    return SALTS_EINVAL;
+  ++fixture->calls;
+  if (!resource_name || strcmp(resource_name, "db-main") != 0) {
+    if (error && error->size == sizeof(*error)) {
+      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+      error->status = SALTS_ENOENT;
+    }
+    return SALTS_ENOENT;
+  }
+  out->identity = "db-main";
+  out->registry = fixture->registry;
+  out->plugin = fixture->plugin;
+  out->export_id = "fixture.resource";
+  return SALTS_OK;
+}
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
@@ -43,14 +79,21 @@ static int resolve_provider(
 spec("TurboFlow Salts provider binding") {
   it("retains the exact provider factory Interface under one module lease") {
     salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref ref = {0};
+    salts_plugin_registry_config registry_config = {2u};
+    salts_plugin_ref provider_ref = {0};
+    salts_plugin_ref resource_ref = {0};
     provider_resolver_fixture_t fixture = {0};
+    resource_resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v1_t resolver =
         TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_resource_resolver_v1_t resource_resolver =
+        TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     turbo_flow_provider_binding_t *binding = NULL;
+    turbo_flow_resource_binding_t *resource_binding = NULL;
     turbo_flow_provider_contract_v1_t contract =
         TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
+    turbo_flow_provider_resource_view_v1_t resource_view =
+        TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT;
     turbo_flow_provider_instance_v1_t instance =
         TURBO_FLOW_PROVIDER_INSTANCE_V1_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -59,13 +102,18 @@ spec("TurboFlow Salts provider binding") {
     check_equal(salts_plugin_registry_init(&registry, &registry_config),
                 SALTS_PLUGIN_OK);
     check_equal(salts_plugin_registry_load(
-                    &registry, FLOW_SALTS_PROVIDER_FIXTURE, &ref),
+                    &registry, FLOW_SALTS_PROVIDER_FIXTURE, &provider_ref),
                 SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, ref),
+    check_equal(salts_plugin_registry_load(
+                    &registry, FLOW_SALTS_RESOURCE_FIXTURE, &resource_ref),
+                SALTS_PLUGIN_OK);
+    check_equal(salts_plugin_registry_start(&registry, provider_ref),
+                SALTS_PLUGIN_OK);
+    check_equal(salts_plugin_registry_start(&registry, resource_ref),
                 SALTS_PLUGIN_OK);
 
     fixture.registry = &registry;
-    fixture.plugin = ref;
+    fixture.plugin = provider_ref;
     resolver.ctx = &fixture;
     resolver.resolve = resolve_provider;
 
@@ -81,29 +129,57 @@ spec("TurboFlow Salts provider binding") {
     check_true(strcmp(contract.config.message_artifact->type_name,
                       "FixtureProviderConfig") == 0);
 
+    resource_fixture.registry = &registry;
+    resource_fixture.plugin = resource_ref;
+    resource_resolver.ctx = &resource_fixture;
+    resource_resolver.resolve = resolve_resource;
+    check_equal(turbo_flow_resource_binding_acquire(
+                    &resource_resolver, "db-main", &contract.resource,
+                    &resource_binding, &error),
+                SALTS_OK);
+    check_not_null(resource_binding);
+    check_equal(resource_fixture.calls, 1u);
+    check_equal(turbo_flow_resource_binding_view(
+                    resource_binding, &resource_view),
+                SALTS_OK);
+
     instance.instance_name = "stage_a";
     instance.config.type_name = "FixtureProviderConfig";
+    instance.resource = &resource_view;
     check_equal(turbo_flow_provider_binding_preflight(
                     binding, &instance, &error),
                 SALTS_OK);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, ref),
+    check_equal(salts_plugin_registry_request_stop(&registry, provider_ref),
                 SALTS_PLUGIN_OK);
     check_equal(salts_plugin_registry_poll_quiescent(
-                    &registry, ref, &quiescent),
+                    &registry, provider_ref, &quiescent),
                 SALTS_PLUGIN_OK);
     check_false(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, ref),
+    check_equal(salts_plugin_registry_unload(&registry, provider_ref),
                 SALTS_PLUGIN_BUSY);
 
     check_equal(turbo_flow_provider_binding_release(&binding), SALTS_OK);
     check_null(binding);
 
     check_equal(salts_plugin_registry_poll_quiescent(
-                    &registry, ref, &quiescent),
+                    &registry, provider_ref, &quiescent),
                 SALTS_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, ref),
+    check_equal(salts_plugin_registry_unload(&registry, provider_ref),
+                SALTS_PLUGIN_OK);
+
+    check_equal(salts_plugin_registry_request_stop(&registry, resource_ref),
+                SALTS_PLUGIN_OK);
+    check_equal(salts_plugin_registry_poll_quiescent(
+                    &registry, resource_ref, &quiescent),
+                SALTS_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
+                SALTS_PLUGIN_BUSY);
+    check_equal(turbo_flow_resource_binding_release(&resource_binding), SALTS_OK);
+    check_null(resource_binding);
+    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
                 SALTS_PLUGIN_OK);
     check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
   }
