@@ -96,7 +96,7 @@ int turbo_flow_product_bind_databind_flowmq_source(
 static int flow_product_databind_service_bind(
     turbo_flow_t *flow, const char *stage_name,
     const char *service_name, const char *operation_name,
-    flow_databind_service_transport_kind_t transport,
+    DataBindTransportKind transport,
     flow_databind_codec_factory_fn codec_factory,
     flow_databind_service_native_resolver_fn native_resolver,
     const void *projection) {
@@ -127,7 +127,7 @@ static int flow_product_databind_service_bind(
   binding.native = native;
   binding.native.request = &binding.request;
   binding.native.response = &binding.response;
-  if (transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP)
+  if (transport == DATA_BIND_TRANSPORT_HTTP)
     binding.projection.http =
         (const DataBindHttpProjectionConfig *)projection;
   else
@@ -152,7 +152,7 @@ int turbo_flow_product_bind_databind_http_service(
   if (!projection) return SALTS_ENOENT;
   return flow_product_databind_service_bind(
       flow, stage_name, service_name, operation_name,
-      FLOW_DATABIND_SERVICE_TRANSPORT_HTTP, codec_factory,
+      DATA_BIND_TRANSPORT_HTTP, codec_factory,
       native_resolver, projection);
 }
 
@@ -172,7 +172,7 @@ int turbo_flow_product_bind_databind_rpc_service(
   if (!projection) return SALTS_ENOENT;
   return flow_product_databind_service_bind(
       flow, stage_name, service_name, operation_name,
-      FLOW_DATABIND_SERVICE_TRANSPORT_RPC, codec_factory,
+      DATA_BIND_TRANSPORT_RPC, codec_factory,
       native_resolver, projection);
 }
 
@@ -213,10 +213,7 @@ int turbo_flow_execution_plan_databind_service_at(
   *out = (turbo_flow_databind_service_plan_view_t)
       TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT;
   out->stage_index = service->stage_index;
-  out->transport =
-      service->transport == FLOW_DATABIND_SERVICE_TRANSPORT_HTTP
-          ? TURBO_FLOW_DATABIND_SERVICE_HTTP
-          : TURBO_FLOW_DATABIND_SERVICE_RPC;
+  out->transport = service->transport;
   out->service_name = service->service_name;
   out->operation_name = service->operation_name;
   out->function_name = function->name;
