@@ -127,7 +127,7 @@ if ($WithTurboDB) {
   $turboDbRoot = $turboDb.Root
   $required += (Join-Path $turboDbRoot "lib/cmake/TurboDB/TurboDBConfig.cmake")
   $required += (Join-Path $turboDbRoot "lib/cmake/TurboDB/OrmTargets.cmake")
-  $required += (Join-Path $turboDbRoot "include/orm/orm.h")
+  $required += (Join-Path $turboDbRoot "include/shared/orm/orm.h")
 }
 
 foreach ($path in $required) {
