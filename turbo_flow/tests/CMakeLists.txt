@@ -151,7 +151,7 @@ cmake_add_test(
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_interface.c
     ${CMAKE_CURRENT_SOURCE_DIR}/provider_interface_header_cpp.cpp
-  LIBS TurboFlow::Graph Salts::DataBind Salts::Plugin Salts::TinyTest
+  LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
   FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_provider_interface
   PROPERTIES LABELS "graph;provider;plugin;interface" TIMEOUT 30)
