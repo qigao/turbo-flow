@@ -105,7 +105,7 @@ jobs:
           test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
           test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
           test -f "$TURBODB_ROOT/lib/cmake/TurboDB/OrmTargets.cmake"
-          test -f "$TURBODB_ROOT/include/orm/orm.h"
+          test -f "$TURBODB_ROOT/include/shared/orm/orm.h"
           test ! -e "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
           test -z "${DATABIND_ROOT:-}"
           test -z "${DATABIND_HOST_ROOT:-}"
