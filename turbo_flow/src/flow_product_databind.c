@@ -26,12 +26,15 @@ static int flow_product_databind_status(DataBindStatus status) {
   return SALTS_EPROTO;
 }
 
+typedef DataBindStatus (*flow_product_databind_resolver_fn)(
+    DataBindNativeTypeBinding *out, DataBindError *error);
+
 static int flow_product_databind_bind(
     turbo_flow_t *flow, const char *stage_name,
     flow_databind_transport_kind_t transport,
     DataBindFormat format, const void *transport_plan,
     const char *channel_name, const char *message_type,
-    DataBindSocketNativeBindingResolverFn resolver) {
+    flow_product_databind_resolver_fn resolver) {
   DataBindNativeTypeBinding native = {0};
   DataBindError error = DATA_BIND_ERROR_INIT;
   flow_databind_source_binding_t binding = {0};
@@ -86,5 +89,5 @@ int turbo_flow_product_bind_databind_flowmq_source(
   return flow_product_databind_bind(
       flow, stage_name, FLOW_DATABIND_TRANSPORT_FLOWMQ,
       plan->format, plan, plan->channel_name, plan->message_type,
-      (DataBindSocketNativeBindingResolverFn)plan->native_binding);
+      plan->native_binding);
 }
