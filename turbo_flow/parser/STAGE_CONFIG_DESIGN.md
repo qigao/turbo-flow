@@ -63,7 +63,12 @@ Existing one-line declarations remain valid:
 stage normalize operation Vehicle.normalize
 ```
 
-A block keeps policy beside the node:
+A block keeps policy beside the node and reuses the same option validation.
+For an atomic `stage`, at least one option must precede `{` so the existing
+bare `stage name { ... }` syntax remains unambiguously reserved for reusable
+composite stages. `source` and `step` blocks do not have that ambiguity.
+
+
 
 ```flow
 source telemetry adapter cnet.stream {
