@@ -147,6 +147,16 @@ set_tests_properties(test_flow_plugin_materializer_generation
 
 add_library(test_flow_plugin_projection_fixture SHARED plugin_projection_fixture.c)
 cmake_add_test(
+  test_flow_provider_interface
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_interface.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/provider_interface_header_cpp.cpp
+  LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_provider_interface
+  PROPERTIES LABELS "graph;provider;plugin;interface" TIMEOUT 30)
+
+cmake_add_test(
   test_turbo_flow_diagnostic
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow_diagnostic.c
