@@ -399,13 +399,18 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
     turbo_flow_t *flow = plan_diag_build_native();
     flow_stage_plan_impl_t *stage;
     const flow_executor_plan_t *executor;
+    const turbo_flow_operation_descriptor_t *operation;
+    turbo_flow_operation_descriptor_t frozen_operation;
     turbo_flow_msg_t message;
 
     check_not_null(flow);
     stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, 1u);
     executor = flow_executor_plan_for_stage(flow, 1u);
+    operation = turbo_flow_stage_operation_at(flow, 1u);
     check_not_null(stage);
     check_not_null(executor);
+    check_not_null(operation);
+    frozen_operation = *operation;
     check_equal(executor->runtime.deadline_ms, (uint64_t)0u);
     check_equal(executor->runtime.settlement, (uint32_t)0u);
 
@@ -413,8 +418,19 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
      * Deliberately poison the mutable compile-time stage copy after the plan is
      * sealed. Runtime dispatch/settlement must use executor->runtime instead.
      */
+    stage->resolved_operation.version = frozen_operation.version + 9u;
+    stage->resolved_operation.flags = 0u;
+    stage->resolved_operation.execution_mask = 0u;
     stage->resolved_operation.runtime.deadline_ms = 1u;
     stage->resolved_operation.runtime.settlement = TURBO_FLOW_SETTLEMENT_COMPLETE;
+
+    operation = turbo_flow_stage_operation_at(flow, 1u);
+    check_not_null(operation);
+    check_equal(operation->version, frozen_operation.version);
+    check_equal(operation->flags, frozen_operation.flags);
+    check_equal(operation->execution_mask, frozen_operation.execution_mask);
+    check_equal(operation->runtime.deadline_ms, frozen_operation.runtime.deadline_ms);
+    check_equal(operation->runtime.settlement, frozen_operation.runtime.settlement);
 
     turbo_flow_msg_init(&message);
     check_equal(turbo_flow_start(flow), SALTS_OK);
@@ -423,6 +439,11 @@ suite("TurboFlow deterministic ExecutionPlan diagnostics") {
 
     check_equal(executor->runtime.deadline_ms, (uint64_t)0u);
     check_equal(executor->runtime.settlement, (uint32_t)0u);
+    operation = turbo_flow_stage_operation_at(flow, 1u);
+    check_not_null(operation);
+    check_equal(operation->version, frozen_operation.version);
+    check_equal(operation->flags, frozen_operation.flags);
+    check_equal(operation->execution_mask, frozen_operation.execution_mask);
     turbo_flow_destroy(flow);
   }
 

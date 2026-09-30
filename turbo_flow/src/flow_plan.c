@@ -535,6 +535,14 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
 
     node->stage_index = (uint32_t)stage_index;
     flow_make_stage_view(stage, &node->stage_view);
+    {
+      const turbo_flow_operation_descriptor_t *operation =
+          flow_stage_operation_descriptor(stage);
+      if (operation) {
+        node->operation = *operation;
+        node->operation_resolved = 1;
+      }
+    }
     node->stage_name = stage->name;
     node->adapter_name = stage->adapter_name;
     node->operation_name = stage->operation_name;
@@ -892,6 +900,15 @@ const turbo_flow_stage_plan_t *flow_compiled_stage_view(const turbo_flow_t *flow
   node = (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes,
                                                         stage_index);
   return node ? &node->stage_view : NULL;
+}
+
+const turbo_flow_operation_descriptor_t *
+flow_compiled_stage_operation(const turbo_flow_t *flow, uint32_t stage_index) {
+  const flow_runtime_node_plan_t *node;
+  if (!flow || !flow->compiled_plan.sealed) return NULL;
+  node = (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes,
+                                                        stage_index);
+  return node && node->operation_resolved ? &node->operation : NULL;
 }
 
 const flow_executor_plan_t *flow_executor_plan_for_stage(const turbo_flow_t *flow,
