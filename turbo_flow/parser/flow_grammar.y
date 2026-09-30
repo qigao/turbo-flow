@@ -25,6 +25,7 @@
 %type adapter_name {flow_token_t}
 %type dotted_name {flow_token_t}
 %type binding_segment {flow_token_t}
+%type provider_config_value {flow_provider_config_value_spec_t}
 
 %start_symbol start
 
@@ -63,6 +64,9 @@ source_config_line ::= OPERATION adapter_name(N) NEWLINE. {
 }
 source_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
   flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
+}
+source_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
+  flow_parse_add_provider_config_literal(ctx, N, V);
 }
 source_config_line ::= NEWLINE.
 
@@ -219,7 +223,23 @@ stage_config_line ::= EXEC(E) IDENT(BAD) NEWLINE. {
   (void)E;
   flow_parse_unknown_executor(ctx, BAD);
 }
+stage_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
+  flow_parse_add_provider_config_literal(ctx, N, V);
+}
 stage_config_line ::= NEWLINE.
+
+provider_config_value(A) ::= STRING(V). {
+  A.kind = FLOW_PROVIDER_CONFIG_VALUE_TEXT;
+  A.token = V;
+}
+provider_config_value(A) ::= NUMBER(V). {
+  A.kind = FLOW_PROVIDER_CONFIG_VALUE_UINT;
+  A.token = V;
+}
+provider_config_value(A) ::= IDENT(V). {
+  A.kind = FLOW_PROVIDER_CONFIG_VALUE_IDENT;
+  A.token = V;
+}
 
 exec_spec(A) ::= INLINE exec_options(O). {
   A = flow_exec_spec_make(TURBO_FLOW_EXEC_INLINE, O);
