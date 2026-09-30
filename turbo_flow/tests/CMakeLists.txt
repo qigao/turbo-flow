@@ -184,6 +184,16 @@ set_tests_properties(test_flow_provider_interface
   PROPERTIES LABELS "graph;provider;plugin;interface" TIMEOUT 30)
 
 cmake_add_test(
+  test_flow_provider_resolver
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_resolver.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/provider_resolver_header_cpp.cpp
+  LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+set_tests_properties(test_flow_provider_resolver
+  PROPERTIES LABELS "graph;provider;plugin;resource;resolver" TIMEOUT 30)
+
+cmake_add_test(
   test_turbo_flow_diagnostic
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_flow_diagnostic.c
