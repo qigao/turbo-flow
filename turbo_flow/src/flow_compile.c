@@ -1141,6 +1141,22 @@ static int compile_validate_operation_edges(turbo_flow_t *flow) {
                             "operation without input cannot have an upstream edge");
     }
 
+    /*
+     * A generated DataBind Service is an explicit provider boundary. Its
+     * reflected native function includes transport/business outcome carriers
+     * (for example the native status return) that are not graph payload edges.
+     * The compile-local resolved operation has already projected this boundary
+     * onto the TurboFlow Message envelope, so do not feed Service endpoints
+     * into ordinary reflected CFlow edge-type chaining.
+     */
+    if ((from->databind_service || to->databind_service) &&
+        from_operation->output_domain == TURBO_FLOW_DOMAIN_DATA &&
+        to_operation->input_domain == TURBO_FLOW_DOMAIN_DATA &&
+        strcmp(from_operation->output_type, FLOW_CORE_MESSAGE_TYPE) == 0 &&
+        strcmp(to_operation->input_type, FLOW_CORE_MESSAGE_TYPE) == 0) {
+      continue;
+    }
+
     if (from_reflected && to_reflected &&
         cflow_function_projection_valid(&from_reflected->projection) &&
         cflow_function_projection_valid(&to_reflected->projection)) {
