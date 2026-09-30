@@ -1,4 +1,5 @@
 #include "flow_parser_internal.h"
+#include "flow_provider_config_internal.h"
 
 #include "turbo_flow_grammar_gen.h"
 
@@ -48,6 +49,15 @@ int flow_parse_ctx_init(flow_parse_ctx_t *ctx, turbo_flow_t *flow) {
     vec_destroy(&ctx->node_refs);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
+  if (turbo_flow_stl_error(vec_init_bytes(
+          &ctx->node_config_literals,
+          sizeof(flow_provider_config_literal_spec_t),
+          _Alignof(turbo_flow_max_align_t),
+          FLOW_PROVIDER_CONFIG_MAX_FIELDS)) != SALTS_OK) {
+    vec_destroy(&ctx->stage_templates);
+    vec_destroy(&ctx->node_refs);
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
   return SALTS_OK;
 }
 
@@ -64,6 +74,7 @@ void flow_parse_ctx_destroy(flow_parse_ctx_t *ctx) {
     tstr_freep(&stage_template->first_output);
   }
   tstr_freep(&ctx->root_stage_name);
+  vec_destroy(&ctx->node_config_literals);
   vec_destroy(&ctx->stage_templates);
   vec_destroy(&ctx->node_refs);
 }
@@ -456,7 +467,9 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
   stage.reorder = source->reorder;
   if (clone_tstr(&stage.adapter_name, source->adapter_name) != SALTS_OK ||
       clone_tstr(&stage.operation_name, source->operation_name) != SALTS_OK ||
-      clone_tstr(&stage.resource_name, source->resource_name) != SALTS_OK) {
+      clone_tstr(&stage.resource_name, source->resource_name) != SALTS_OK ||
+      flow_provider_config_literals_copy(&stage.provider_config_literals,
+                                         &source->provider_config_literals) != SALTS_OK) {
     flow_stage_impl_destroy(&stage);
     return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   }
@@ -499,6 +512,51 @@ static int copy_edge_with_prefix(flow_parse_ctx_t *ctx, const flow_edge_plan_imp
   return SALTS_OK;
 }
 
+static int flow_parse_copy_provider_literals(
+    flow_parse_ctx_t *ctx, vec_t *destination) {
+  size_t i;
+  int rc = flow_provider_config_literals_init(destination);
+  if (rc != SALTS_OK) return rc;
+
+  for (i = 0; i < vec_size(&ctx->node_config_literals); ++i) {
+    const flow_provider_config_literal_spec_t *source =
+        (const flow_provider_config_literal_spec_t *)vec_at_const(
+            &ctx->node_config_literals, i);
+    flow_provider_config_literal_t literal;
+    if (!source || !source->name.data || source->name.len == 0u) {
+      flow_provider_config_literals_destroy(destination);
+      return SALTS_EPROTO;
+    }
+
+    memset(&literal, 0, sizeof(literal));
+    literal.kind = source->kind;
+    literal.uint_value = source->uint_value;
+    literal.bool_value = source->bool_value;
+    literal.line = source->line;
+    literal.column = source->column;
+    literal.name = tstr_from_v(source->name);
+    if (!literal.name) {
+      flow_provider_config_literals_destroy(destination);
+      return SALTS_ENOMEM;
+    }
+    if (source->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT) {
+      literal.text = tstr_from_v(source->text);
+      if (!literal.text) {
+        tstr_freep(&literal.name);
+        flow_provider_config_literals_destroy(destination);
+        return SALTS_ENOMEM;
+      }
+    }
+    if (turbo_flow_stl_error(vec_push(destination, &literal)) != SALTS_OK) {
+      tstr_freep(&literal.name);
+      tstr_freep(&literal.text);
+      flow_provider_config_literals_destroy(destination);
+      return SALTS_ENOMEM;
+    }
+  }
+  return SALTS_OK;
+}
+
 static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int is_port,
                           int is_port_output, flow_stage_spec_t spec, uint32_t line,
                           uint32_t column) {
@@ -510,8 +568,13 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
   }
 
   memset(&stage, 0, sizeof(stage));
+  if (flow_parse_copy_provider_literals(ctx, &stage.provider_config_literals) != SALTS_OK)
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   stage.name = tstr_from_v(name);
-  if (!stage.name) return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
+  if (!stage.name) {
+    flow_stage_impl_destroy(&stage);
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
+  }
   stage.line = line;
   stage.column = column;
   stage.is_source = is_source;
@@ -565,9 +628,67 @@ int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
     return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "node configuration block state is invalid");
   }
+  turbo_flow_stl_error(vec_clear(&ctx->node_config_literals));
   ctx->node_config_name = name;
   ctx->node_config_spec = spec;
   ctx->node_config_kind = kind;
+  return SALTS_OK;
+}
+
+int flow_parse_add_provider_config_literal(
+    flow_parse_ctx_t *ctx, flow_token_t name,
+    flow_provider_config_value_spec_t value) {
+  flow_provider_config_literal_spec_t literal;
+  vstr key;
+  size_t i;
+
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
+      !name.value || name.length == 0u ||
+      !value.token.value || value.token.length == 0u)
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "provider config literal is invalid");
+
+  key = token_view(name);
+  for (i = 0; i < vec_size(&ctx->node_config_literals); ++i) {
+    const flow_provider_config_literal_spec_t *existing =
+        (const flow_provider_config_literal_spec_t *)vec_at_const(
+            &ctx->node_config_literals, i);
+    if (existing && existing->name.len == key.len &&
+        memcmp(existing->name.data, key.data, key.len) == 0)
+      return parse_fail(ctx, SALTS_EALREADY, name.line, name.column,
+                        "duplicate provider config field");
+  }
+
+  memset(&literal, 0, sizeof(literal));
+  literal.name = key;
+  literal.line = name.line;
+  literal.column = name.column;
+
+  if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_UINT) {
+    uint64_t parsed = 0u;
+    size_t offset;
+    for (offset = 0u; offset < value.token.length; ++offset) {
+      const uint64_t digit = (uint64_t)(value.token.value[offset] - '0');
+      if (parsed > (UINT64_MAX - digit) / UINT64_C(10))
+        return parse_fail(ctx, SALTS_ERANGE, value.token.line, value.token.column,
+                          "provider config integer is out of range");
+      parsed = parsed * UINT64_C(10) + digit;
+    }
+    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_UINT;
+    literal.uint_value = parsed;
+  } else if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_IDENT &&
+             (token_eq_cstr(value.token, "true") ||
+              token_eq_cstr(value.token, "false"))) {
+    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_BOOL;
+    literal.bool_value = token_eq_cstr(value.token, "true");
+  } else {
+    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_TEXT;
+    literal.text = token_view(value.token);
+  }
+
+  if (turbo_flow_stl_error(vec_push(&ctx->node_config_literals, &literal)) != SALTS_OK)
+    return parse_fail(ctx, SALTS_ENOSPC, name.line, name.column,
+                      "provider config field capacity exceeded");
   return SALTS_OK;
 }
 
@@ -597,6 +718,7 @@ int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
     rc = parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                     "unknown node configuration block kind");
   }
+  turbo_flow_stl_error(vec_clear(&ctx->node_config_literals));
   return rc;
 }
 
