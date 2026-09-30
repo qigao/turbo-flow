@@ -46,9 +46,7 @@ int flow_compiled_plan_init(flow_compiled_plan_t *plan) {
       turbo_flow_stl_error(
           vec_init_bytes(&plan->cflow_region_by_stage, sizeof(uint32_t),
                          _Alignof(uint32_t), SIZE_MAX)) != SALTS_OK ||
-      turbo_flow_stl_error(
-          vec_init_bytes(&plan->databind_channels, sizeof(flow_databind_channel_plan_t),
-                         _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK ||
+      flow_databind_channels_init(&plan->databind_channels) != SALTS_OK ||
       turbo_flow_stl_error(
           vec_init_bytes(&plan->owned_resources, sizeof(flow_plan_owned_resource_t),
                          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
@@ -94,7 +92,7 @@ void flow_compiled_plan_destroy(flow_compiled_plan_t *plan) {
   vec_destroy(&plan->stage_semantics);
   vec_destroy(&plan->cflow_regions);
   vec_destroy(&plan->cflow_region_by_stage);
-  vec_destroy(&plan->databind_channels);
+  flow_databind_channels_destroy(&plan->databind_channels);
 
   /*
    * Borrowed FunctionDesc/DataDesc/callable code and type traits may belong to
@@ -349,19 +347,8 @@ static int flow_verify_compiled_plan(const flow_compiled_plan_t *plan, size_t st
       }
     }
   }
-  for (size_t channel_index = 0u;
-       channel_index < vec_size(&plan->databind_channels); ++channel_index) {
-    const flow_databind_channel_plan_t *channel =
-        (const flow_databind_channel_plan_t *)vec_at_const(
-            &plan->databind_channels, channel_index);
-    if (!channel || !channel->channel_name || !channel->message_type ||
-        !channel->data_stable_id || !channel->native.idl_type_name ||
-        !channel->native.data ||
-        strcmp(channel->message_type, channel->native.idl_type_name) != 0 ||
-        !cmeta_data_desc_valid(channel->native.data)) {
-      return SALTS_EPROTO;
-    }
-  }
+  if (flow_databind_channels_verify(&plan->databind_channels) != SALTS_OK)
+    return SALTS_EPROTO;
 
   for (size_t region_index = 0u; region_index < vec_size(&plan->cflow_regions);
        ++region_index) {
