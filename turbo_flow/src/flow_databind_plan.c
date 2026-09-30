@@ -103,10 +103,17 @@ int flow_databind_source_bind(
   tstr message_type = NULL;
   int stage_index;
 
-  if (!flow || !stage_name || !stage_name[0] ||
-      !flow_databind_source_binding_valid(binding) ||
+  if (!flow || !stage_name || !stage_name[0] || !binding ||
+      !binding->bound ||
+      (binding->transport != FLOW_DATABIND_TRANSPORT_SOCKET &&
+       binding->transport != FLOW_DATABIND_TRANSPORT_FLOWMQ) ||
+      !binding->transport_plan ||
+      !binding->channel_name || !binding->channel_name[0] ||
+      !binding->message_type || !binding->message_type[0] ||
       turbo_flow_state(flow) != TURBO_FLOW_STATE_PARSED)
     return SALTS_EINVAL;
+  if (!flow_databind_source_binding_valid(binding))
+    return SALTS_EPROTO;
 
   stage_index = turbo_flow_find_stage(flow, stage_name);
   if (stage_index < 0) return SALTS_ENOENT;
