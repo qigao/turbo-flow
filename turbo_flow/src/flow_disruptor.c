@@ -152,10 +152,10 @@ static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
 }
 
 static int flow_stage_has_worker_pool(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
-    const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) return 1;
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, i);
+    if (node && node->stage_view.data_strategy == TURBO_FLOW_DATA_WORKER_POOL) return 1;
   }
   return 0;
 }
@@ -163,10 +163,10 @@ static int flow_stage_has_worker_pool(const turbo_flow_t *flow) {
 static size_t flow_source_count(const turbo_flow_t *flow) {
   size_t count = 0;
 
-  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
-    const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (stage->is_source) ++count;
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, i);
+    if (node && node->stage_view.is_source) ++count;
   }
   return count;
 }
@@ -174,10 +174,10 @@ static size_t flow_source_count(const turbo_flow_t *flow) {
 static size_t flow_broadcast_consumer_count(const turbo_flow_t *flow) {
   size_t count = 0;
 
-  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
-    const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!stage->is_source) ++count;
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, i);
+    if (node && !node->stage_view.is_source) ++count;
   }
   return count;
 }
@@ -202,10 +202,10 @@ static int flow_has_dynamic_edges(const turbo_flow_t *flow) {
 }
 
 static int flow_has_reorder_stage(const turbo_flow_t *flow) {
-  for (size_t i = 0; i < vec_size(&flow->stages); ++i) {
-    const flow_stage_plan_impl_t *stage =
-        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (stage && stage->reorder.capacity > 0u) return 1;
+  for (size_t i = 0; i < vec_size(&flow->compiled_plan.nodes); ++i) {
+    const flow_runtime_node_plan_t *node =
+        (const flow_runtime_node_plan_t *)vec_at_const(&flow->compiled_plan.nodes, i);
+    if (node && node->stage_view.reorder.capacity > 0u) return 1;
   }
   return 0;
 }
@@ -237,7 +237,13 @@ static int flow_requires_executor_data_path(const turbo_flow_t *flow) {
     }
     stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, executor->stage_index);
-    if (stage && (stage->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u) return 1;
+    {
+      const turbo_flow_stage_plan_t *stage_view =
+          flow_compiled_stage_view(flow, executor->stage_index);
+      if (stage_view &&
+          (stage_view->effects & TURBO_FLOW_STAGE_EFFECT_DYNAMIC_DECISION) != 0u)
+        return 1;
+    }
     if (stage && flow_adapter_for_compiled_stage(flow, executor->stage_index)) return 1;
   }
   return 0;
@@ -296,12 +302,14 @@ int flow_start_data_planes(turbo_flow_t *flow) {
   for (size_t stage_index = 0; stage_index < vec_size(&flow->stages); ++stage_index) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
+    const turbo_flow_stage_plan_t *stage_view =
+        flow_compiled_stage_view(flow, (uint32_t)stage_index);
     const flow_runtime_stage_config_t *runtime_config =
         flow_runtime_stage_config_for_stage(flow, (uint32_t)stage_index);
     const flow_data_segment_plan_t *segment;
     flow_worker_pool_adapter_t adapter;
 
-    if (stage->data_strategy != TURBO_FLOW_DATA_WORKER_POOL) continue;
+    if (!stage_view || stage_view->data_strategy != TURBO_FLOW_DATA_WORKER_POOL) continue;
     if (!runtime_config || runtime_config->data_workers == 0u) {
       return flow_set_error_keep_state(flow, SALTS_EINVAL, stage->line, stage->column,
                                        "worker-pool width must be greater than zero");

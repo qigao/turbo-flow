@@ -162,8 +162,8 @@ turbo_flow_async_terminal_claim_message(const turbo_flow_async_terminal_claim_t 
 }
 
 static void flow_async_terminal_observe(flow_async_terminal_claim_impl_t *impl, int status) {
-  const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)vec_at_const(&impl->flow->stages, impl->stage_index);
+  const turbo_flow_stage_plan_t *stage =
+      flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
                           ? salts_hrtime() - impl->completion.async_started_at
@@ -250,8 +250,8 @@ turbo_flow_async_emit_claim_message(const turbo_flow_async_emit_claim_t *claim) 
 }
 
 static void flow_async_emit_observe(flow_async_emit_claim_impl_t *impl, int status) {
-  const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)vec_at_const(&impl->flow->stages, impl->stage_index);
+  const turbo_flow_stage_plan_t *stage =
+      flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
                           ? salts_hrtime() - impl->completion.async_started_at
@@ -328,7 +328,7 @@ int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_i
                                      turbo_flow_msg_t *msg, flow_stage_completion_t *completion) {
   flow_async_terminal_claim_impl_t *impl;
   turbo_flow_async_terminal_claim_t claim = TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
-  turbo_flow_stage_plan_t view;
+  const turbo_flow_stage_plan_t *view;
   int rc;
   if (!flow_current_async_publication) {
     return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
@@ -351,8 +351,13 @@ int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_i
   ++impl->publication->pending;
   salts_mutex_unlock(&impl->publication->mutex);
   claim._impl = impl;
-  flow_make_stage_view(stage, &view);
-  rc = adapter->async_terminal_ops.submit(adapter->ctx, flow, &view, msg, &claim);
+  view = flow_compiled_stage_view(flow, completion->entry.stage_index);
+  if (!view) {
+    flow_async_terminal_abandon(impl);
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "sealed stage contract is unavailable");
+  }
+  rc = adapter->async_terminal_ops.submit(adapter->ctx, flow, view, msg, &claim);
   if (rc == SALTS_OK && claim._impl) {
     flow_async_terminal_abandon(impl);
     return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
@@ -382,7 +387,7 @@ int flow_async_emit_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_
                                  flow_stage_completion_t *completion) {
   flow_async_emit_claim_impl_t *impl;
   turbo_flow_async_emit_claim_t claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
-  turbo_flow_stage_plan_t view;
+  const turbo_flow_stage_plan_t *view;
   int rc;
   if (!flow_current_async_publication) {
     return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
@@ -405,8 +410,13 @@ int flow_async_emit_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_
   ++impl->publication->pending;
   salts_mutex_unlock(&impl->publication->mutex);
   claim._impl = impl;
-  flow_make_stage_view(stage, &view);
-  rc = adapter->async_emit_ops.submit(adapter->ctx, flow, &view, msg, &claim);
+  view = flow_compiled_stage_view(flow, completion->entry.stage_index);
+  if (!view) {
+    flow_async_emit_abandon(impl);
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "sealed stage contract is unavailable");
+  }
+  rc = adapter->async_emit_ops.submit(adapter->ctx, flow, view, msg, &claim);
   if (rc == SALTS_OK && claim._impl) {
     flow_async_emit_abandon(impl);
     return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,

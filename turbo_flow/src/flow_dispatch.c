@@ -41,7 +41,10 @@ int flow_entry_header_validate(const turbo_flow_t *flow, const flow_entry_header
 static int flow_dispatch_prepare_completion(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
                                             uint32_t stage_index, uint64_t sequence,
                                             uint64_t msg_id, flow_stage_completion_t *completion) {
+  const turbo_flow_stage_plan_t *stage_view;
   if (!completion) return SALTS_EINVAL;
+  stage_view = flow_compiled_stage_view(flow, stage_index);
+  if (!stage_view) return SALTS_EPROTO;
 
   *completion = (flow_stage_completion_t){0};
   completion->status = SALTS_OK;
@@ -50,7 +53,7 @@ static int flow_dispatch_prepare_completion(turbo_flow_t *flow, flow_stage_plan_
   completion->settlement_duplicate = 0;
   completion->settlement = (turbo_flow_settlement_result_t)TURBO_FLOW_SETTLEMENT_RESULT_INIT;
 
-  if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
+  if (stage_view->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
     const flow_data_segment_plan_t *segment = flow_worker_pool_segment_for_stage(flow, stage_index);
     if (!segment || segment->width == 0u) {
       completion->status = SALTS_EINVAL;
@@ -121,7 +124,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
     } else if (adapter->async_emit_ops.submit) {
       status = flow_async_emit_submit_stage(flow, stage, adapter, msg, completion);
     } else {
-      status = flow_adapter_consume_stage(flow, stage, adapter, msg);
+      status = flow_adapter_consume_stage(flow, stage, executor->stage_index, adapter, msg);
     }
   } else {
     status = flow_dispatch_inline_stage(executor, msg);
@@ -213,6 +216,7 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
                         turbo_flow_emitter_t *emitter) {
   turbo_flow_observe_event_t event;
   flow_stage_plan_impl_t *stage;
+  const turbo_flow_stage_plan_t *stage_view;
   const flow_executor_plan_t *executor;
   int rc;
   int status;
@@ -224,15 +228,17 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   }
 
   stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
+  stage_view = flow_compiled_stage_view(flow, stage_index);
+  if (!stage || !stage_view) return SALTS_EPROTO;
   if (flow->observer_ops.stage_complete ||
       flow_observer_event_enabled(flow, TURBO_FLOW_OBSERVE_STAGE_END)) {
     observe_start = salts_hrtime();
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_STAGE_BEGIN;
-  event.stage_name = stage->name;
-  event.adapter_name = stage->adapter_name;
-  event.operation_name = stage->operation_name;
+  event.stage_name = stage_view->name;
+  event.adapter_name = stage_view->adapter_name;
+  event.operation_name = stage_view->operation_name;
   event.msg = msg;
   event.status = SALTS_OK;
   event.selected = -1;
@@ -290,7 +296,7 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
     msg->execution_attempt = 1u;
     status = flow_keyed_state_execute(executor->keyed_store, executor->key_selector,
                                       executor->key_ctx, executor->keyed_fn, executor->ctx, msg);
-  } else if (stage->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
+  } else if (stage_view->data_strategy == TURBO_FLOW_DATA_WORKER_POOL) {
     msg->execution_attempt = 1u;
     status = flow_dispatch_worker_pool_stage(flow, stage, executor, stage_index, msg, completion);
   } else {
@@ -315,14 +321,15 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
 observe:
   if (completion->async_pending) return result;
   if (flow->observer_ops.stage_complete) {
-    flow->observer_ops.stage_complete(flow->observer_ctx, stage->name, stage->adapter_name, msg,
+    flow->observer_ops.stage_complete(flow->observer_ctx, stage_view->name,
+                                      stage_view->adapter_name, msg,
                                       salts_hrtime() - observe_start, result);
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_STAGE_END;
-  event.stage_name = stage->name;
-  event.adapter_name = stage->adapter_name;
-  event.operation_name = stage->operation_name;
+  event.stage_name = stage_view->name;
+  event.adapter_name = stage_view->adapter_name;
+  event.operation_name = stage_view->operation_name;
   event.msg = msg;
   event.status = result;
   event.selected = -1;

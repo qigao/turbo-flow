@@ -685,12 +685,14 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port ||
-        stage->is_buffer) {
+    const turbo_flow_stage_plan_t *stage_view =
+        flow_compiled_stage_view(flow, (uint32_t)i);
+    if (!reachable[i] || i == origin_stage || !stage || !stage_view || stage_view->is_source ||
+        stage->is_port || stage_view->is_buffer) {
       continue;
     }
     stage_sequences[i] = sequence;
-    if (stage->reorder.capacity > 0u) {
+    if (stage_view->reorder.capacity > 0u) {
       rc = flow_reorder_reserve(flow, (uint32_t)i, &stage_sequences[i]);
       if (rc != SALTS_OK) {
         rc = flow_set_error_keep_state(flow, rc, stage->line, stage->column,
@@ -1249,15 +1251,19 @@ cleanup:
 }
 
 static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
-    turbo_flow_t *flow, uint32_t source_index, const flow_stage_plan_impl_t **out_stage) {
+    turbo_flow_t *flow, uint32_t source_index, const flow_stage_plan_impl_t **out_stage,
+    uint32_t *out_stage_index) {
   const flow_runtime_edge_plan_t *source_edge = NULL;
   const flow_stage_plan_impl_t *stage;
   const flow_executor_plan_t *executor;
   const flow_adapter_registration_t *adapter;
   const turbo_flow_operation_runtime_contract_t *runtime;
+  const turbo_flow_stage_plan_t *stage_view;
 
   if (out_stage) *out_stage = NULL;
-  if (!flow || !out_stage || flow->broadcast_ring || flow_observer_has_handlers(flow)) {
+  if (out_stage_index) *out_stage_index = FLOW_PLAN_INDEX_NONE;
+  if (!flow || !out_stage || !out_stage_index || flow->broadcast_ring ||
+      flow_observer_has_handlers(flow)) {
     return NULL;
   }
   for (size_t i = 0u; i < vec_size(&flow->compiled_plan.edges); ++i) {
@@ -1276,9 +1282,10 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
   stage = (const flow_stage_plan_impl_t *)vec_at_const(
       &flow->stages, (size_t)source_edge->to_stage);
   executor = flow_executor_plan_for_stage(flow, source_edge->to_stage);
-  if (!stage || !executor || stage->is_source || stage->is_port ||
-      stage->effects != TURBO_FLOW_STAGE_EFFECT_NONE ||
-      stage->retry.max_attempts > 1u || stage->reorder.capacity != 0u ||
+  stage_view = flow_compiled_stage_view(flow, source_edge->to_stage);
+  if (!stage || !stage_view || !executor || stage_view->is_source || stage->is_port ||
+      stage_view->effects != TURBO_FLOW_STAGE_EFFECT_NONE ||
+      stage_view->retry.max_attempts > 1u || stage_view->reorder.capacity != 0u ||
       executor->exec.kind != TURBO_FLOW_EXEC_INLINE || executor->fn || executor->emit_fn ||
       executor->keyed_fn || executor->keyed_emit_fn || executor->window_fn) {
     return NULL;
@@ -1292,6 +1299,7 @@ static const flow_adapter_registration_t *flow_publish_batch_direct_adapter(
   adapter = flow_adapter_for_compiled_stage(flow, source_edge->to_stage);
   if (!adapter || !adapter->ops.consume || !adapter->consume_batch) return NULL;
   *out_stage = stage;
+  *out_stage_index = source_edge->to_stage;
   return adapter;
 }
 
@@ -1339,19 +1347,26 @@ int turbo_flow_publish_batch(turbo_flow_t *flow, const char *source_name,
 
   {
     const flow_stage_plan_impl_t *batch_stage = NULL;
+    uint32_t batch_stage_index = FLOW_PLAN_INDEX_NONE;
     const flow_adapter_registration_t *batch_adapter =
-        flow_publish_batch_direct_adapter(flow, source_index, &batch_stage);
+        flow_publish_batch_direct_adapter(flow, source_index, &batch_stage, &batch_stage_index);
     if (batch_adapter) {
       flow_publish_batch_next_context_t next_context = {
           flow, prepare, prepare_ctx, message_count, 0u, 0, 0};
       turbo_flow_adapter_batch_t adapter_batch = TURBO_FLOW_ADAPTER_BATCH_INIT;
-      turbo_flow_stage_plan_t stage_view;
+      const turbo_flow_stage_plan_t *stage_view =
+          flow_compiled_stage_view(flow, batch_stage_index);
       size_t consumed = 0u;
       adapter_batch.message_count = message_count;
       adapter_batch.next = flow_publish_batch_next;
       adapter_batch.ctx = &next_context;
-      flow_make_stage_view(batch_stage, &stage_view);
-      rc = batch_adapter->consume_batch(batch_adapter->ctx, flow, &stage_view, &adapter_batch,
+      if (!stage_view) {
+        rc = flow_set_error_keep_state(flow, SALTS_EPROTO, batch_stage->line,
+                                       batch_stage->column,
+                                       "sealed stage contract is unavailable");
+        goto cleanup;
+      }
+      rc = batch_adapter->consume_batch(batch_adapter->ctx, flow, stage_view, &adapter_batch,
                                         &consumed);
       if (next_context.protocol_error || consumed > message_count ||
           consumed > next_context.next_index ||

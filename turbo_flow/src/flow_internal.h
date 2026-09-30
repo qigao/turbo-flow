@@ -221,6 +221,8 @@ typedef struct flow_runtime_node_plan_s {
   uint32_t outgoing_begin;
   uint32_t outgoing_count;
   uint32_t flags;
+  /** Frozen public stage contract consumed by runtime/provider callbacks. */
+  turbo_flow_stage_plan_t stage_view;
   /** Borrowed immutable compile-time names; valid for the sealed plan lifetime. */
   const char *stage_name;
   const char *adapter_name;
@@ -983,6 +985,7 @@ const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *fl
 TURBO_FLOW_C_API const flow_adapter_registration_t *
 flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                               uint32_t stage_index,
                                const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg);
 int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
                                      const flow_adapter_registration_t *adapter,
@@ -1002,6 +1005,8 @@ int flow_adapter_apply_settlement(turbo_flow_t *flow, const flow_stage_plan_impl
                                   flow_stage_completion_t *completion, int callback_status);
 flow_stage_completion_t *flow_settlement_scope_enter(flow_stage_completion_t *completion);
 void flow_settlement_scope_leave(flow_stage_completion_t *previous);
+TURBO_FLOW_C_API const turbo_flow_stage_plan_t *
+flow_compiled_stage_view(const turbo_flow_t *flow, uint32_t stage_index);
 TURBO_FLOW_C_API const flow_executor_plan_t *flow_executor_plan_for_stage(const turbo_flow_t *flow,
                                                                           uint32_t stage_index);
 TURBO_FLOW_C_API const flow_data_segment_plan_t *

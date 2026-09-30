@@ -54,8 +54,9 @@ const flow_adapter_registration_t *flow_adapter_for_compiled_stage(const turbo_f
 }
 
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+                               uint32_t stage_index,
                                const flow_adapter_registration_t *adapter, turbo_flow_msg_t *msg) {
-  turbo_flow_stage_plan_t view;
+  const turbo_flow_stage_plan_t *view;
 
   if (!flow || !stage || !msg) return SALTS_EINVAL;
   if (!adapter || !adapter->ops.consume) {
@@ -63,15 +64,19 @@ int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t 
                                      "adapter consume callback is not configured");
   }
 
-  flow_make_stage_view(stage, &view);
-  if (stage->retry.max_attempts > 1u) {
+  view = flow_compiled_stage_view(flow, stage_index);
+  if (!view) {
+    return flow_set_error_keep_state(flow, SALTS_EPROTO, stage->line, stage->column,
+                                     "sealed stage contract is unavailable");
+  }
+  if (view->retry.max_attempts > 1u) {
     if (!adapter->ops.consume_retry) {
       return flow_set_error_keep_state(flow, SALTS_ENOTSUP, stage->line, stage->column,
                                        "adapter retry callback is not configured");
     }
-    return adapter->ops.consume_retry(adapter->ctx, flow, &view, msg, &stage->retry);
+    return adapter->ops.consume_retry(adapter->ctx, flow, view, msg, &view->retry);
   }
-  return adapter->ops.consume(adapter->ctx, flow, &view, msg);
+  return adapter->ops.consume(adapter->ctx, flow, view, msg);
 }
 
 static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
@@ -85,7 +90,7 @@ static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
     flow_active_adapter_t *active;
     flow_adapter_registration_t *adapter;
     const flow_stage_plan_impl_t *stage;
-    turbo_flow_stage_plan_t view;
+    const turbo_flow_stage_plan_t *view;
     int status;
 
     --count;
@@ -94,17 +99,17 @@ static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
 
     adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, active->adapter_index);
     stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, active->stage_index);
-    if (!adapter || !stage || !!stage->is_source != !!source_phase) continue;
+    view = flow_compiled_stage_view(flow, active->stage_index);
+    if (!adapter || !stage || !view || !!view->is_source != !!source_phase) continue;
 
     if (adapter->ops.stop) {
       turbo_flow_t *previous_stop_owner = flow_active_adapter_stop_owner;
-      flow_make_stage_view(stage, &view);
       salts_mutex_lock(&flow->runtime_mutex);
       flow->adapter_stop_callback_active = 1;
       flow->adapter_stop_callback_status = SALTS_OK;
       salts_mutex_unlock(&flow->runtime_mutex);
       flow_active_adapter_stop_owner = flow;
-      adapter->ops.stop(adapter->ctx, flow, &view);
+      adapter->ops.stop(adapter->ctx, flow, view);
       flow_active_adapter_stop_owner = previous_stop_owner;
       salts_mutex_lock(&flow->runtime_mutex);
       status = flow->adapter_stop_callback_status;
@@ -116,16 +121,16 @@ static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
     if (status == SALTS_OK) active->stopped = 1;
     else if (first_status == SALTS_OK) first_status = status;
     if (flow->observer_ops.adapter_event) {
-      flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
+      flow->observer_ops.adapter_event(flow->observer_ctx, view->name, adapter->name,
                                        TURBO_FLOW_ADAPTER_EVENT_STOP, status);
     }
     {
       turbo_flow_observe_event_t event;
       memset(&event, 0, sizeof(event));
       event.kind = TURBO_FLOW_OBSERVE_ADAPTER_STOP;
-      event.stage_name = stage->name;
+      event.stage_name = view->name;
       event.adapter_name = adapter->name;
-      event.operation_name = stage->operation_name;
+      event.operation_name = view->operation_name;
       event.status = status;
       event.selected = -1;
       event.edge_kind = -1;
@@ -206,10 +211,11 @@ int flow_start_adapters(turbo_flow_t *flow) {
     int adapter_index;
     flow_adapter_registration_t *adapter;
     flow_active_adapter_t active;
-    turbo_flow_stage_plan_t view;
+    const turbo_flow_stage_plan_t *view =
+        flow_compiled_stage_view(flow, (uint32_t)stage_index);
     int active_registered = 0;
 
-    if (!stage || !stage->adapter_name) continue;
+    if (!stage || !view || !view->adapter_name) continue;
 
     {
       const uint32_t *compiled_index = (const uint32_t *)vec_at_const(
@@ -246,28 +252,27 @@ int flow_start_adapters(turbo_flow_t *flow) {
     if (adapter->ops.start) {
       flow_managed_source_start_scope_t scope;
       flow_managed_source_start_scope_t *previous_scope = flow_managed_source_start_scope;
-      flow_make_stage_view(stage, &view);
       if (adapter->managed_source) {
         scope.flow = flow;
-        scope.stage_view = &view;
+        scope.stage_view = view;
         scope.stage_index = (uint32_t)stage_index;
         scope.adapter_index = (size_t)adapter_index;
         scope.active_index = vec_size(&flow->active_adapters) - 1u;
         flow_managed_source_start_scope = &scope;
       }
-      rc = adapter->ops.start(adapter->ctx, flow, &view);
+      rc = adapter->ops.start(adapter->ctx, flow, view);
       flow_managed_source_start_scope = previous_scope;
       if (flow->observer_ops.adapter_event) {
-        flow->observer_ops.adapter_event(flow->observer_ctx, stage->name, adapter->name,
+        flow->observer_ops.adapter_event(flow->observer_ctx, view->name, adapter->name,
                                          TURBO_FLOW_ADAPTER_EVENT_START, rc);
       }
       {
         turbo_flow_observe_event_t event;
         memset(&event, 0, sizeof(event));
         event.kind = TURBO_FLOW_OBSERVE_ADAPTER_START;
-        event.stage_name = stage->name;
+        event.stage_name = view->name;
         event.adapter_name = adapter->name;
-        event.operation_name = stage->operation_name;
+        event.operation_name = view->operation_name;
         event.status = rc;
         event.selected = -1;
         event.edge_kind = -1;
