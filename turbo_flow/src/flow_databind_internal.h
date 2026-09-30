@@ -23,12 +23,6 @@ typedef struct flow_databind_channel_plan_s {
   DataBindNativeTypeBinding native;
 } flow_databind_channel_plan_t;
 
-typedef enum flow_databind_service_transport_kind_e {
-  FLOW_DATABIND_SERVICE_TRANSPORT_NONE = 0,
-  FLOW_DATABIND_SERVICE_TRANSPORT_HTTP,
-  FLOW_DATABIND_SERVICE_TRANSPORT_RPC
-} flow_databind_service_transport_kind_t;
-
 typedef DataBindStatus (*flow_databind_codec_factory_fn)(
     DataBind **out, DataBindError *error);
 typedef DataBindStatus (*flow_databind_service_native_resolver_fn)(
@@ -39,7 +33,7 @@ typedef DataBindStatus (*flow_databind_service_native_resolver_fn)(
 
 struct flow_databind_service_binding_s {
   int bound;
-  flow_databind_service_transport_kind_t transport;
+  DataBindTransportKind transport;
   tstr service_name;
   tstr operation_name;
   flow_databind_codec_factory_fn codec_factory;
@@ -54,7 +48,7 @@ struct flow_databind_service_binding_s {
 
 typedef struct flow_databind_service_plan_s {
   uint32_t stage_index;
-  flow_databind_service_transport_kind_t transport;
+  DataBindTransportKind transport;
   const char *service_name;
   const char *operation_name;
   const cmeta_function_desc *function;
