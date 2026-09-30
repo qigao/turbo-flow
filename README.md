@@ -91,11 +91,19 @@ Protocol decoders validate framing and normalize accepted data into the canonica
 
 Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet/CHTTP-facing adapters. MQTT receive is a Source and MQTT send is a Sink; MQTT is not TurboFlow's internal message format.
 
+## Authoring boundary
+
+TurboFlow product/dataflow authoring uses `.flow` exclusively. DataBind owns
+contract/schema semantics; Praktor owns YAML workflow/orchestration; TurboSCXML
+owns explicit SCXML statechart applications. Deployment-specific endpoints,
+secrets and provider instances are referenced from `.flow` through named
+resources and resolved before ExecutionPlan publication.
+
 ## Public package targets
 
 | CMake target | Responsibility |
 | --- | --- |
-| `TurboFlow::Config` | Parse/validate product configuration and produce resolved configuration |
+| `TurboFlow::Config` | Legacy YAML/resolved-config component; removal tracked by #241. Do not use for new product authoring. |
 | `TurboFlow::Graph` | Graph DSL, compile/execute, generic operation and adapter contracts |
 | `TurboFlow::Product` | Assemble Graph plus repository-owned adapters |
 | `TurboFlow::PluginHost` | Load/register versioned plugin capabilities and protect module lifetime |

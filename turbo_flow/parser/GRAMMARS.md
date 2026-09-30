@@ -5,11 +5,11 @@ This directory owns the `.flow` DSL lexer and parser inputs:
 - `flow_lexer.re`: re2c lexer specification.
 - `flow_grammar.y`: Lemon grammar specification.
 
-The current parser supports non-parameterized reusable stage composition. The
-external YAML v1 resolver and its immutable resolved-JSON diagnostic view are
-also implemented public APIs, but they remain a separate configuration layer
-and are not parsed by this grammar. Parameterized stages, `with`, and `$name`
-substitution remain proposals in `STAGE_CONFIG_DESIGN.md`.
+The current parser supports non-parameterized reusable stage composition.
+`.flow` is the sole TurboFlow product/dataflow authoring language. Node
+configuration blocks are tracked by #237; provider-specific typed config and
+deployment-resource separation are tracked by #238/#239. The legacy YAML
+resolver is being removed by #241.
 
 The generated C files are build artifacts created by `cmake_add_grammar()` and
 must stay out of source control.
@@ -388,8 +388,8 @@ stage main {
 ```
 
 The expanded plan contains finite names such as `p.raw`, `p.c.trim`, and
-`p.done`. Parameterized `use ... with profile`, YAML profiles, and resolved JSON
-are design-level items and are not part of the current parser grammar.
+`p.done`. Parameterized reusable-stage configuration must remain part of
+`.flow` if introduced; there is no external YAML profile layer.
 
 Example:
 
