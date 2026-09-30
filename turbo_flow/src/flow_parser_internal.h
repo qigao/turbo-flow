@@ -46,6 +46,12 @@ typedef struct flow_exec_options_s {
   uint32_t seen;
 } flow_exec_options_t;
 
+typedef enum flow_node_config_kind_e {
+  FLOW_NODE_CONFIG_NONE = 0,
+  FLOW_NODE_CONFIG_SOURCE,
+  FLOW_NODE_CONFIG_STAGE
+} flow_node_config_kind_t;
+
 typedef struct flow_stage_spec_s {
   turbo_flow_data_strategy_t data_strategy;
   uint32_t data_worker_count;
@@ -79,6 +85,9 @@ typedef struct flow_parse_ctx_s {
   tstr root_stage_name;
   vstr current_stage_template;
   size_t current_stage_template_index;
+  flow_token_t node_config_name;
+  flow_stage_spec_t node_config_spec;
+  flow_node_config_kind_t node_config_kind;
   int has_root_stage;
   int in_root_stage;
   int in_stage_template;
@@ -114,6 +123,9 @@ int flow_parse_set_exec(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_exe
 int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *options,
                               flow_token_t token, int field);
 
+int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
+                                 flow_stage_spec_t spec, flow_node_config_kind_t kind);
+int flow_parse_finish_node_config(flow_parse_ctx_t *ctx);
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource);
 int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
