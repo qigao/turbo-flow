@@ -64,18 +64,24 @@ spec("Salts Plugin provider binding") {
 
     check_equal(salts_plugin_registry_request_stop(&registry, ref),
                 SALTS_PLUGIN_OK);
+
+    /* Stop closes new admission, but the live generation/provider lease still
+       pins the module and prevents registry quiescence/unload. */
     check_equal(salts_plugin_registry_poll_quiescent(
                     &registry, ref, &quiescent),
                 SALTS_PLUGIN_OK);
-    check_true(quiescent);
-
-    /* Module/code/Interface pointers remain pinned by the live lease. */
+    check_false(quiescent);
     check_equal(salts_plugin_registry_unload(&registry, ref),
                 SALTS_PLUGIN_BUSY);
 
     check_equal(salts_plugin_registry_release(&registry, &lease),
                 SALTS_PLUGIN_OK);
     check_false(salts_plugin_lease_valid(lease));
+
+    check_equal(salts_plugin_registry_poll_quiescent(
+                    &registry, ref, &quiescent),
+                SALTS_PLUGIN_OK);
+    check_true(quiescent);
     check_equal(salts_plugin_registry_unload(&registry, ref),
                 SALTS_PLUGIN_OK);
     check_equal(salts_plugin_registry_count(&registry), (size_t)0u);
