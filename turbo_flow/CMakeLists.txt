@@ -49,6 +49,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_po
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_discovery.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_config_limits.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_diagnostic.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_deployment_resource.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_plugin_abi.h)
