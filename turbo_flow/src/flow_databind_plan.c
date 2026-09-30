@@ -4,14 +4,23 @@
 #include <string.h>
 
 void flow_databind_stage_binding_clear(flow_stage_plan_impl_t *stage) {
-  flow_databind_source_binding_t *binding;
-  if (!stage || !stage->databind_source) return;
-  binding = stage->databind_source;
-  tstr_freep(&binding->channel_name);
-  tstr_freep(&binding->message_type);
-  memset(binding, 0, sizeof(*binding));
-  free(binding);
-  stage->databind_source = NULL;
+  if (!stage) return;
+  if (stage->databind_source) {
+    flow_databind_source_binding_t *binding = stage->databind_source;
+    tstr_freep(&binding->channel_name);
+    tstr_freep(&binding->message_type);
+    memset(binding, 0, sizeof(*binding));
+    free(binding);
+    stage->databind_source = NULL;
+  }
+  if (stage->databind_service) {
+    flow_databind_service_binding_t *binding = stage->databind_service;
+    tstr_freep(&binding->service_name);
+    tstr_freep(&binding->operation_name);
+    memset(binding, 0, sizeof(*binding));
+    free(binding);
+    stage->databind_service = NULL;
+  }
 }
 
 int flow_databind_channels_init(vec_t *channels) {
@@ -281,5 +290,229 @@ int flow_plan_build_databind_channels(
     node->databind_transport_plan = binding->transport_plan;
   }
 
+  return SALTS_OK;
+}
+
+
+static int flow_databind_service_native_valid(
+    const flow_databind_service_binding_t *binding) {
+  const DataBindServiceNativeBinding *native;
+  if (!binding) return 0;
+  native = &binding->native;
+  return binding->bound &&
+         (binding->transport == DATA_BIND_TRANSPORT_HTTP ||
+          binding->transport == DATA_BIND_TRANSPORT_RPC) &&
+         binding->service_name && binding->service_name[0] &&
+         binding->operation_name && binding->operation_name[0] &&
+         binding->codec_factory &&
+         flow_databind_native_valid(&binding->request) &&
+         flow_databind_native_valid(&binding->response) &&
+         native->size == sizeof(*native) &&
+         native->abi_version == DATA_BIND_BINDING_PLAN_ABI_VERSION &&
+         native->function && cmeta_function_desc_valid(native->function) &&
+         native->request && native->response &&
+         flow_databind_native_equal(native->request, &binding->request) &&
+         flow_databind_native_equal(native->response, &binding->response) &&
+         ((binding->transport == DATA_BIND_TRANSPORT_HTTP &&
+           binding->projection.http) ||
+          (binding->transport == DATA_BIND_TRANSPORT_RPC &&
+           binding->projection.rpc));
+}
+
+int flow_databind_service_bind(
+    turbo_flow_t *flow, const char *stage_name,
+    const flow_databind_service_binding_t *binding) {
+  flow_stage_plan_impl_t *stage;
+  flow_databind_service_binding_t *owned;
+  int stage_index;
+
+  if (!flow || !stage_name || !stage_name[0] || !binding ||
+      turbo_flow_state(flow) != TURBO_FLOW_STATE_PARSED)
+    return SALTS_EINVAL;
+  if (!flow_databind_service_native_valid(binding)) return SALTS_EPROTO;
+
+  stage_index = turbo_flow_find_stage(flow, stage_name);
+  if (stage_index < 0) return SALTS_ENOENT;
+  stage = (flow_stage_plan_impl_t *)vec_at(&flow->stages, (size_t)stage_index);
+  if (!stage || stage->is_source || stage->is_port || stage->is_buffer ||
+      !stage->operation_name || !stage->operation_name[0])
+    return SALTS_ENOTSUP;
+  if (!flow_find_operation_registration(flow, stage->operation_name))
+    return SALTS_ENOENT;
+  if (stage->databind_service) return SALTS_EALREADY;
+
+  owned = (flow_databind_service_binding_t *)calloc(1, sizeof(*owned));
+  if (!owned) return SALTS_ENOMEM;
+  *owned = *binding;
+  owned->service_name = tstr_dup(binding->service_name);
+  owned->operation_name = tstr_dup(binding->operation_name);
+  if (!owned->service_name || !owned->operation_name) {
+    tstr_freep(&owned->service_name);
+    tstr_freep(&owned->operation_name);
+    free(owned);
+    return SALTS_ENOMEM;
+  }
+
+  /*
+   * Generated resolver output points at the caller-owned request/response
+   * structs. Rebase those two pointers after copying the immutable overlay into
+   * the parsed stage.
+   */
+  owned->native.request = &owned->request;
+  owned->native.response = &owned->response;
+  stage->databind_service = owned;
+  return SALTS_OK;
+}
+
+int flow_databind_services_init(vec_t *services) {
+  if (!services) return SALTS_EINVAL;
+  return turbo_flow_stl_error(
+      vec_init_bytes(services, sizeof(flow_databind_service_plan_t),
+                     _Alignof(turbo_flow_max_align_t), SIZE_MAX));
+}
+
+void flow_databind_services_destroy(vec_t *services) {
+  if (!services) return;
+  for (size_t i = 0u; i < vec_size(services); ++i) {
+    flow_databind_service_plan_t *service =
+        (flow_databind_service_plan_t *)vec_at(services, i);
+    if (!service) continue;
+    if (service->transport == DATA_BIND_TRANSPORT_HTTP) {
+      data_bind_http_method_plan_free(service->method.http);
+    } else if (service->transport == DATA_BIND_TRANSPORT_RPC) {
+      data_bind_rpc_method_plan_free(service->method.rpc);
+    }
+    memset(service, 0, sizeof(*service));
+  }
+  vec_destroy(services);
+}
+
+int flow_databind_services_verify(
+    const vec_t *services, size_t stage_count) {
+  if (!services) return SALTS_EINVAL;
+  for (size_t i = 0u; i < vec_size(services); ++i) {
+    const flow_databind_service_plan_t *service =
+        (const flow_databind_service_plan_t *)vec_at_const(services, i);
+    const DataBindBindingPlan *binding = NULL;
+    const DataBindTransportPlan *transport_plan = NULL;
+    DataBindTransportPlanInfo info = DATA_BIND_TRANSPORT_PLAN_INFO_INIT;
+    if (!service || service->stage_index >= stage_count ||
+        !service->service_name || !service->operation_name ||
+        !service->function || !cmeta_function_desc_valid(service->function))
+      return SALTS_EPROTO;
+
+    if (service->transport == DATA_BIND_TRANSPORT_HTTP &&
+        service->method.http) {
+      binding = data_bind_http_method_plan_binding(service->method.http);
+      transport_plan = data_bind_http_method_plan_transport(service->method.http);
+    } else if (service->transport == DATA_BIND_TRANSPORT_RPC &&
+               service->method.rpc) {
+      binding = data_bind_rpc_method_plan_binding(service->method.rpc);
+      transport_plan = data_bind_rpc_method_plan_transport(service->method.rpc);
+    } else {
+      return SALTS_EPROTO;
+    }
+
+    if (!binding || binding != service->binding_plan ||
+        data_bind_binding_plan_function(binding) != service->function ||
+        !transport_plan ||
+        !data_bind_transport_plan_info(transport_plan, &info) ||
+        !flow_databind_text_equal(info.service_name, service->service_name) ||
+        !flow_databind_text_equal(info.operation_name, service->operation_name))
+      return SALTS_EPROTO;
+    if ((service->transport == DATA_BIND_TRANSPORT_HTTP &&
+         info.kind != DATA_BIND_TRANSPORT_HTTP) ||
+        (service->transport == DATA_BIND_TRANSPORT_RPC &&
+         info.kind != DATA_BIND_TRANSPORT_RPC))
+      return SALTS_EPROTO;
+  }
+  return SALTS_OK;
+}
+
+int flow_plan_build_databind_services(
+    const turbo_flow_t *flow, flow_compiled_plan_t *plan) {
+  const size_t stage_count = flow ? vec_size(&flow->stages) : 0u;
+
+  if (!flow || !plan || plan->sealed ||
+      vec_size(&plan->nodes) != stage_count ||
+      !vec_empty(&plan->databind_services))
+    return SALTS_EINVAL;
+
+  for (size_t stage_index = 0u; stage_index < stage_count; ++stage_index) {
+    const flow_stage_plan_impl_t *stage =
+        (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, stage_index);
+    flow_runtime_node_plan_t *node =
+        (flow_runtime_node_plan_t *)vec_at(&plan->nodes, stage_index);
+    const flow_databind_service_binding_t *source;
+    flow_databind_service_plan_t compiled = {0};
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    DataBind *codec = NULL;
+    DataBindStatus status;
+
+    if (!stage || !node) return SALTS_EPROTO;
+    source = stage->databind_service;
+    if (!source) continue;
+    if (!flow_databind_service_native_valid(source) ||
+        stage->is_source || stage->is_port || stage->is_buffer ||
+        !stage->operation_resolved)
+      return SALTS_EPROTO;
+    if (stage_index > UINT32_MAX) return SALTS_ERANGE;
+
+    status = source->codec_factory(&codec, &error);
+    if (status != DATA_BIND_OK || !codec)
+      return status == DATA_BIND_ERR_OOM ? SALTS_ENOMEM : SALTS_EPROTO;
+
+    compiled.stage_index = (uint32_t)stage_index;
+    compiled.transport = source->transport;
+    compiled.service_name = source->service_name;
+    compiled.operation_name = source->operation_name;
+    compiled.function = source->native.function;
+
+    if (source->transport == DATA_BIND_TRANSPORT_HTTP) {
+      status = data_bind_http_method_plan_compile_service(
+          codec, source->service_name, source->operation_name,
+          source->projection.http, &source->native,
+          &compiled.method.http, &diagnostic);
+      if (status == DATA_BIND_OK && compiled.method.http)
+        compiled.binding_plan =
+            data_bind_http_method_plan_binding(compiled.method.http);
+    } else {
+      status = data_bind_rpc_method_plan_compile_service(
+          codec, source->service_name, source->operation_name,
+          source->projection.rpc, &source->native,
+          &compiled.method.rpc, &diagnostic);
+      if (status == DATA_BIND_OK && compiled.method.rpc)
+        compiled.binding_plan =
+            data_bind_rpc_method_plan_binding(compiled.method.rpc);
+    }
+
+    data_bind_free(codec);
+    codec = NULL;
+    if (status != DATA_BIND_OK || !compiled.binding_plan ||
+        data_bind_binding_plan_function(compiled.binding_plan) !=
+            source->native.function) {
+      if (compiled.transport == DATA_BIND_TRANSPORT_HTTP)
+        data_bind_http_method_plan_free(compiled.method.http);
+      else
+        data_bind_rpc_method_plan_free(compiled.method.rpc);
+      return status == DATA_BIND_ERR_OOM ? SALTS_ENOMEM : SALTS_EPROTO;
+    }
+
+    {
+      int rc = turbo_flow_stl_error(
+          vec_push(&plan->databind_services, &compiled));
+      if (rc != SALTS_OK) {
+        if (compiled.transport == DATA_BIND_TRANSPORT_HTTP)
+          data_bind_http_method_plan_free(compiled.method.http);
+        else
+          data_bind_rpc_method_plan_free(compiled.method.rpc);
+        return rc;
+      }
+    }
+    node->databind_service_index =
+        (uint32_t)(vec_size(&plan->databind_services) - 1u);
+  }
   return SALTS_OK;
 }

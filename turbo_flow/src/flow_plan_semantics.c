@@ -180,6 +180,10 @@ static uint32_t flow_stage_barriers(const flow_stage_plan_impl_t *stage,
     barriers |= FLOW_LOWERING_BARRIER_EXTERNAL_IO;
     if (!function) effects |= CMETA_EFFECT_IO;
   }
+  if (stage->databind_service) {
+    barriers |= FLOW_LOWERING_BARRIER_DATABIND_SERVICE;
+    effects |= CMETA_EFFECT_IO;
+  }
   if (stage->reorder.capacity != 0u ||
       (runtime && runtime->ordering != TURBO_FLOW_ORDERING_UNORDERED)) {
     barriers |= FLOW_LOWERING_BARRIER_ORDERING;

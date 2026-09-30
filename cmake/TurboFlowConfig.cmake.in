@@ -165,11 +165,28 @@ if(_TurboFlow_needs_rules_forge)
   _TurboFlow_verify_dependency_root(RulesForge RULES_FORGE_ROOT)
 endif()
 if(_TurboFlow_needs_turbodb)
-  _TurboFlow_require_dependency_root(Orm TURBODB_ROOT Orm::C)
+  if(NOT DEFINED ENV{TURBODB_ROOT} OR "$ENV{TURBODB_ROOT}" STREQUAL "")
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "TURBODB_ROOT is required for TurboFlow dependency TurboDB")
+    return()
+  endif()
+  if(NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "TURBODB_ROOT is not a directory: $ENV{TURBODB_ROOT}")
+    return()
+  endif()
   file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" _TurboFlow_TurboDb_root)
-  find_dependency(Orm CONFIG REQUIRED
+  find_dependency(TurboDB CONFIG REQUIRED
                   PATHS "${_TurboFlow_TurboDb_root}" NO_DEFAULT_PATH)
-  _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
+  _TurboFlow_verify_dependency_root(TurboDB TURBODB_ROOT)
+  if(NOT TARGET Orm::C)
+    set(TurboFlow_FOUND FALSE)
+    set(TurboFlow_NOT_FOUND_MESSAGE
+        "resolved TurboDB package is missing Orm::C")
+    return()
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboFlowRequireCHTTP.cmake")

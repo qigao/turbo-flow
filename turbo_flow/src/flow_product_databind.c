@@ -91,3 +91,137 @@ int turbo_flow_product_bind_databind_flowmq_source(
       plan->format, plan, plan->channel_name, plan->message_type,
       plan->native_binding);
 }
+
+
+static int flow_product_databind_service_bind(
+    turbo_flow_t *flow, const char *stage_name,
+    const char *service_name, const char *operation_name,
+    DataBindTransportKind transport,
+    flow_databind_codec_factory_fn codec_factory,
+    flow_databind_service_native_resolver_fn native_resolver,
+    const void *projection) {
+  DataBindNativeTypeBinding request = {0};
+  DataBindNativeTypeBinding response = {0};
+  DataBindServiceNativeBinding native = {0};
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  flow_databind_service_binding_t binding = {0};
+  DataBindStatus status;
+
+  if (!flow || !stage_name || !stage_name[0] ||
+      !service_name || !service_name[0] ||
+      !operation_name || !operation_name[0] ||
+      !codec_factory || !native_resolver || !projection)
+    return SALTS_EINVAL;
+
+  status = native_resolver(&request, &response, &native, &error);
+  if (status != DATA_BIND_OK)
+    return flow_product_databind_status(status);
+
+  binding.bound = 1;
+  binding.transport = transport;
+  binding.service_name = (tstr)service_name;
+  binding.operation_name = (tstr)operation_name;
+  binding.codec_factory = codec_factory;
+  binding.request = request;
+  binding.response = response;
+  binding.native = native;
+  binding.native.request = &binding.request;
+  binding.native.response = &binding.response;
+  if (transport == DATA_BIND_TRANSPORT_HTTP)
+    binding.projection.http =
+        (const DataBindHttpProjectionConfig *)projection;
+  else
+    binding.projection.rpc =
+        (const DataBindRpcProjectionConfig *)projection;
+  return flow_databind_service_bind(flow, stage_name, &binding);
+}
+
+int turbo_flow_product_bind_databind_http_service(
+    turbo_flow_t *flow, const char *stage_name,
+    const char *service_name, const char *operation_name,
+    turbo_flow_databind_codec_factory_fn codec_factory,
+    turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const DataBindHttpProjectionArtifact *projection_artifact) {
+  const DataBindHttpProjectionConfig *projection;
+  if (!projection_artifact ||
+      projection_artifact->size != sizeof(*projection_artifact) ||
+      projection_artifact->abi_version != DATA_BIND_METHOD_PLAN_ABI_VERSION)
+    return SALTS_EINVAL;
+  projection = data_bind_http_projection_artifact_find(
+      projection_artifact, service_name, operation_name);
+  if (!projection) return SALTS_ENOENT;
+  return flow_product_databind_service_bind(
+      flow, stage_name, service_name, operation_name,
+      DATA_BIND_TRANSPORT_HTTP, codec_factory,
+      native_resolver, projection);
+}
+
+int turbo_flow_product_bind_databind_rpc_service(
+    turbo_flow_t *flow, const char *stage_name,
+    const char *service_name, const char *operation_name,
+    turbo_flow_databind_codec_factory_fn codec_factory,
+    turbo_flow_databind_service_native_resolver_fn native_resolver,
+    const DataBindRpcProjectionArtifact *projection_artifact) {
+  const DataBindRpcProjectionConfig *projection;
+  if (!projection_artifact ||
+      projection_artifact->size != sizeof(*projection_artifact) ||
+      projection_artifact->abi_version != DATA_BIND_METHOD_PLAN_ABI_VERSION)
+    return SALTS_EINVAL;
+  projection = data_bind_rpc_projection_artifact_find(
+      projection_artifact, service_name, operation_name);
+  if (!projection) return SALTS_ENOENT;
+  return flow_product_databind_service_bind(
+      flow, stage_name, service_name, operation_name,
+      DATA_BIND_TRANSPORT_RPC, codec_factory,
+      native_resolver, projection);
+}
+
+
+static int flow_product_databind_execution_plan_available(
+    const turbo_flow_t *flow) {
+  return flow && flow->compiled_plan.sealed &&
+         (flow->state == TURBO_FLOW_STATE_COMPILED ||
+          flow->state == TURBO_FLOW_STATE_STARTED ||
+          flow->state == TURBO_FLOW_STATE_STOPPED);
+}
+
+size_t turbo_flow_execution_plan_databind_service_count(
+    const turbo_flow_t *flow) {
+  return flow_product_databind_execution_plan_available(flow)
+             ? vec_size(&flow->compiled_plan.databind_services)
+             : 0u;
+}
+
+int turbo_flow_execution_plan_databind_service_at(
+    const turbo_flow_t *flow, size_t index,
+    turbo_flow_databind_service_plan_view_t *out) {
+  const flow_databind_service_plan_t *service;
+  const cmeta_function_desc *function;
+
+  if (!flow_product_databind_execution_plan_available(flow) || !out ||
+      out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_DATABIND_SERVICE_PLAN_API_VERSION)
+    return SALTS_EINVAL;
+
+  service = (const flow_databind_service_plan_t *)vec_at_const(
+      &flow->compiled_plan.databind_services, index);
+  if (!service || !service->binding_plan) return SALTS_ENOENT;
+
+  function = data_bind_binding_plan_function(service->binding_plan);
+  if (!function || function != service->function) return SALTS_EPROTO;
+
+  *out = (turbo_flow_databind_service_plan_view_t)
+      TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT;
+  out->stage_index = service->stage_index;
+  out->transport = service->transport;
+  out->service_name = service->service_name;
+  out->operation_name = service->operation_name;
+  out->function_name = function->name;
+  out->ingress_count =
+      data_bind_binding_plan_ingress_count(service->binding_plan);
+  out->egress_count =
+      data_bind_binding_plan_egress_count(service->binding_plan);
+  out->error_count =
+      data_bind_binding_plan_error_count(service->binding_plan);
+  return SALTS_OK;
+}

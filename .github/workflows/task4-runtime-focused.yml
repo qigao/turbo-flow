@@ -103,7 +103,7 @@ jobs:
           test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
-          test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+          test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
           test -z "${DATABIND_ROOT:-}"
           test -z "${DATABIND_HOST_ROOT:-}"
 

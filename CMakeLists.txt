@@ -97,16 +97,20 @@ find_package(xxHash CONFIG REQUIRED)
 
 if(TURBO_FLOW_BUILD_TURBODB_ADAPTER)
   file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" TURBO_FLOW_TURBODB_ROOT)
-  find_package(Orm CONFIG REQUIRED
+  find_package(TurboDB CONFIG REQUIRED
                PATHS "${TURBO_FLOW_TURBODB_ROOT}" NO_DEFAULT_PATH)
   file(REAL_PATH "${TURBO_FLOW_TURBODB_ROOT}" TURBO_FLOW_TURBODB_REAL_ROOT)
-  file(REAL_PATH "${Orm_DIR}" TURBO_FLOW_ORM_REAL_DIR)
+  file(REAL_PATH "${TurboDB_DIR}" TURBO_FLOW_TURBODB_REAL_DIR)
   cmake_path(IS_PREFIX TURBO_FLOW_TURBODB_REAL_ROOT
-             "${TURBO_FLOW_ORM_REAL_DIR}" NORMALIZE
-             TURBO_FLOW_ORM_IS_WITHIN_TURBODB_ROOT)
-  if(NOT TURBO_FLOW_ORM_IS_WITHIN_TURBODB_ROOT)
+             "${TURBO_FLOW_TURBODB_REAL_DIR}" NORMALIZE
+             TURBO_FLOW_TURBODB_IS_WITHIN_ROOT)
+  if(NOT TURBO_FLOW_TURBODB_IS_WITHIN_ROOT)
     message(FATAL_ERROR
-            "Orm resolved outside TURBODB_ROOT: ${Orm_DIR}")
+            "TurboDB resolved outside TURBODB_ROOT: ${TurboDB_DIR}")
+  endif()
+  if(NOT TARGET Orm::C)
+    message(FATAL_ERROR
+            "resolved TurboDB package is missing required target Orm::C")
   endif()
 endif()
 
