@@ -217,6 +217,25 @@ set_tests_properties(test_flow_salts_provider_binding PROPERTIES
   TIMEOUT 30)
 
 cmake_add_test(
+  test_flow_provider_binding
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_binding.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/provider_binding_header_cpp.cpp
+  LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+add_dependencies(test_flow_provider_binding
+  test_flow_salts_provider_fixture)
+target_compile_definitions(test_flow_provider_binding PRIVATE
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>")
+set_target_properties(test_flow_provider_binding PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+set_tests_properties(test_flow_provider_binding PROPERTIES
+  LABELS "graph;provider;plugin;interface;lease"
+  TIMEOUT 30)
+
+
+cmake_add_test(
   test_flow_resource_binding
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_resource_binding.c
