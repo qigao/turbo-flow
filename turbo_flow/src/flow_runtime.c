@@ -685,12 +685,14 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
         (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, i);
-    if (!reachable[i] || i == origin_stage || stage->is_source || stage->is_port ||
-        stage->is_buffer) {
+    const turbo_flow_stage_plan_t *stage_view =
+        flow_compiled_stage_view(flow, (uint32_t)i);
+    if (!reachable[i] || i == origin_stage || !stage || !stage_view || stage_view->is_source ||
+        stage->is_port || stage_view->is_buffer) {
       continue;
     }
     stage_sequences[i] = sequence;
-    if (stage->reorder.capacity > 0u) {
+    if (stage_view->reorder.capacity > 0u) {
       rc = flow_reorder_reserve(flow, (uint32_t)i, &stage_sequences[i]);
       if (rc != SALTS_OK) {
         rc = flow_set_error_keep_state(flow, rc, stage->line, stage->column,
