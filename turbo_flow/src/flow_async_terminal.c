@@ -162,8 +162,8 @@ turbo_flow_async_terminal_claim_message(const turbo_flow_async_terminal_claim_t 
 }
 
 static void flow_async_terminal_observe(flow_async_terminal_claim_impl_t *impl, int status) {
-  const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)vec_at_const(&impl->flow->stages, impl->stage_index);
+  const turbo_flow_stage_plan_t *stage =
+      flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
                           ? salts_hrtime() - impl->completion.async_started_at
@@ -250,8 +250,8 @@ turbo_flow_async_emit_claim_message(const turbo_flow_async_emit_claim_t *claim) 
 }
 
 static void flow_async_emit_observe(flow_async_emit_claim_impl_t *impl, int status) {
-  const flow_stage_plan_impl_t *stage =
-      (const flow_stage_plan_impl_t *)vec_at_const(&impl->flow->stages, impl->stage_index);
+  const turbo_flow_stage_plan_t *stage =
+      flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
                           ? salts_hrtime() - impl->completion.async_started_at
