@@ -176,8 +176,7 @@ static const char DATABIND_SERVICE_GRAPH[] =
     "stage http_service operation test.databind.service\n"
     "stage rpc_service operation test.databind.service\n"
     "stage main {\n"
-    "  input -> http_service\n"
-    "  http_service -> rpc_service\n"
+    "  input -> [http_service, rpc_service]\n"
     "}\n";
 
 static const char DATABIND_SINGLE_SERVICE_GRAPH[] =
