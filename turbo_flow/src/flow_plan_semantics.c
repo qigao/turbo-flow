@@ -378,6 +378,10 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
       semantics->typed =
           semantics->canonical_input_type != NULL &&
           semantics->canonical_output_type != NULL;
+      if (semantics->typed) {
+        semantics->input_semantic_id = registration->input_type;
+        semantics->output_semantic_id = registration->output_type;
+      }
     } else {
       if (operation && operation->input_type) {
         rc = flow_semantic_type_add(plan, operation->input_domain, operation->input_type,
@@ -391,6 +395,18 @@ int flow_plan_build_semantics(const turbo_flow_t *flow, flow_compiled_plan_t *pl
       }
       semantics->typed = semantics->input_type_index != FLOW_PLAN_INDEX_NONE &&
                          semantics->output_type_index != FLOW_PLAN_INDEX_NONE;
+      if (semantics->input_type_index != FLOW_PLAN_INDEX_NONE) {
+        const flow_semantic_type_plan_t *input_type =
+            (const flow_semantic_type_plan_t *)vec_at_const(
+                &plan->semantic_types, semantics->input_type_index);
+        semantics->input_semantic_id = input_type ? input_type->stable_id : NULL;
+      }
+      if (semantics->output_type_index != FLOW_PLAN_INDEX_NONE) {
+        const flow_semantic_type_plan_t *output_type =
+            (const flow_semantic_type_plan_t *)vec_at_const(
+                &plan->semantic_types, semantics->output_type_index);
+        semantics->output_semantic_id = output_type ? output_type->stable_id : NULL;
+      }
     }
 
     semantics->barriers =
