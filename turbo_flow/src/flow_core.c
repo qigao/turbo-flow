@@ -2183,6 +2183,10 @@ const turbo_flow_operation_descriptor_t *turbo_flow_stage_operation_at(const tur
                                                                        size_t index) {
   const flow_stage_plan_impl_t *stage;
   if (!flow) return NULL;
+  if (flow->compiled_plan.sealed) {
+    if (index > UINT32_MAX) return NULL;
+    return flow_compiled_stage_operation(flow, (uint32_t)index);
+  }
   stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, index);
   return flow_stage_operation_descriptor(stage);
 }
