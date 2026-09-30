@@ -138,6 +138,7 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product_databind.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
 cmake_config_target(
   turbo_flow_product
