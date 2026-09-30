@@ -59,3 +59,24 @@ add_dependencies(test_turbodb_durable_buffer_plugin tf_turbodb_plugin)
 set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
   LABELS "turbodb-adapter;graph;durable;plugin"
   ENVIRONMENT "TURBO_FLOW_TURBODB_PLUGIN_PATH=$<TARGET_FILE:tf_turbodb_plugin>")
+
+cmake_add_test(
+  test_turbodb_typed_config
+  SOURCES
+    test_turbodb_typed_config.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/turbo_flow_turbodb_durable_config.c
+  LIBS
+    TurboFlow::Product
+    TurboFlow::TurboDbAdapter
+    Salts::TinyTest
+    ${turbo_flow_turbodb_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${turbo_flow_turbodb_provider_config_GENERATED_DIR}
+  FOLDER "io/turbodb/tests")
+add_dependencies(
+  test_turbodb_typed_config
+  turbo_flow_turbodb_provider_config_idl_codegen)
+set_tests_properties(test_turbodb_typed_config PROPERTIES
+  LABELS "turbodb-adapter;graph;config;databind" TIMEOUT 30)
+
