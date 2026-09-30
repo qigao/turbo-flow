@@ -571,7 +571,10 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
   if (flow_parse_copy_provider_literals(ctx, &stage.provider_config_literals) != SALTS_OK)
     return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
   stage.name = tstr_from_v(name);
-  if (!stage.name) return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
+  if (!stage.name) {
+    flow_stage_impl_destroy(&stage);
+    return parse_fail(ctx, SALTS_ENOMEM, line, column, "out of memory");
+  }
   stage.line = line;
   stage.column = column;
   stage.is_source = is_source;
