@@ -208,7 +208,9 @@ int turbo_flow_execution_plan_databind_service_at(
   if (!service || !service->binding_plan) return SALTS_ENOENT;
 
   function = data_bind_binding_plan_function(service->binding_plan);
-  if (!function || function != service->function) return SALTS_EPROTO;
+  if (!function || !service->function ||
+      !cmeta_function_desc_equal(function, service->function))
+    return SALTS_EPROTO;
 
   *out = (turbo_flow_databind_service_plan_view_t)
       TURBO_FLOW_DATABIND_SERVICE_PLAN_VIEW_INIT;
