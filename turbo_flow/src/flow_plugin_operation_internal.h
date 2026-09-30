@@ -61,6 +61,9 @@ typedef struct flow_plugin_cflow_function_binding_s {
   salts_plugin_registry *registry;
   salts_plugin_ref plugin;
   const char *export_id;
+  const char *contract_id;
+  uint32_t contract_version;
+  uint64_t required_capabilities;
   const turbo_flow_operation_descriptor_t *operation;
   const cmeta_data_desc *input_data;
   const cmeta_data_desc *output_data;
@@ -70,6 +73,10 @@ typedef struct flow_plugin_cflow_function_binding_s {
  * Internal product-composition bridge. Salts Plugin remains the loader/lease
  * authority; TurboFlow consumes only canonical CMeta reflection and exact
  * invoke exported by that module.
+ *
+ * export_id selects the implementation row; contract_id/version/capabilities
+ * state the product's required semantic capability and are verified through
+ * salts_plugin_export_require_function() before any reflected registration.
  *
  * The caller-owned registry must outlive the TurboFlow registry/compiled plan
  * that receives this binding. A successful bind retains one Salts Plugin lease
