@@ -57,7 +57,7 @@ typedef struct turbo_flow_provider_resource_requirement_v1_s {
   {sizeof(turbo_flow_provider_resource_requirement_v1_t), NULL, 0u, 0u, NULL}
 
 /**
- * Immutable provider-factory metadata returned by describe().
+ * Immutable provider-factory metadata returned by contract().
  *
  * The config contract is mandatory in the current authoring model. Resource is
  * optional and uses the canonical Salts Plugin/CMeta Interface identity.
@@ -147,7 +147,7 @@ turbo_flow_runtime_owner_contract_valid(const turbo_flow_runtime_owner *owner) {
 }
 
 #define TURBO_FLOW_PROVIDER_FACTORY_METHODS(X, I) \
-  X(I, R1, int, describe, turbo_flow_provider_contract_v1_t *, contract_out) \
+  X(I, R1, int, contract, turbo_flow_provider_contract_v1_t *, contract_out) \
   X(I, R2, int, preflight, const turbo_flow_provider_instance_v1_t *, instance, \
     turbo_flow_config_error_t *, error) \
   X(I, R4, int, materialize, turbo_flow_t *, flow, \

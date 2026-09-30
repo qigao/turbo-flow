@@ -125,7 +125,7 @@ static int fixture_provider_materialize(
 
 CMETA_IMPLEMENTS(
     turbo_flow_provider_factory, fixture_provider, 0u,
-    .describe = fixture_provider_describe,
+    .contract = fixture_provider_describe,
     .preflight = fixture_provider_preflight,
     .materialize = fixture_provider_materialize);
 
@@ -172,10 +172,10 @@ spec("canonical TurboFlow provider Interface") {
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    check_equal(turbo_flow_provider_factory_describe(&factory, &contract), SALTS_OK);
+    check_equal(turbo_flow_provider_factory_contract(&factory, &contract), SALTS_OK);
     check_true(turbo_flow_provider_contract_valid(&contract));
-    check_equal(contract.config.message_artifact, &FIXTURE_ARTIFACT);
-    check_equal(contract.resource.contract_id, NULL);
+    check_true(contract.config.message_artifact == &FIXTURE_ARTIFACT);
+    check_null(contract.resource.contract_id);
 
     instance.instance_name = "stage_a";
     instance.config.type_name = "FixtureConfig";
