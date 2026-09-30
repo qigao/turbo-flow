@@ -255,12 +255,14 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
         turbo_flow_product_bind_databind_http_service(
             flow, "http_service", "Calc", "Add",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_http_projection),
         SALTS_OK);
     check_equal(
         turbo_flow_product_bind_databind_rpc_service(
             flow, "rpc_service", "Calc", "Add",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_rpc_projection),
         SALTS_OK);
     check_equal(service_resolver_calls, (size_t)2u);
@@ -402,6 +404,7 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
         turbo_flow_product_bind_databind_http_service(
             flow, "http_service", "Calc", "Add",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_http_projection),
         SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
@@ -429,6 +432,7 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
         turbo_flow_product_bind_databind_http_service(
             flow, "http_service", "Calc", "Add",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_http_projection),
         SALTS_ENOTSUP);
     check_equal(service_resolver_calls, (size_t)1u);
@@ -448,6 +452,7 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
         turbo_flow_product_bind_databind_http_service(
             flow, "http_service", "Calc", "Add",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_http_projection),
         SALTS_EPROTO);
     check_equal(service_resolver_calls, (size_t)1u);
@@ -470,6 +475,7 @@ spec("TurboFlow generated DataBind Service MethodPlan") {
         turbo_flow_product_bind_databind_http_service(
             flow, "http_service", "Calc", "Missing",
             counting_service_codec, counting_service_resolver,
+            databind_10_ServiceSdk_4_Calc_3_Add__databind_function_abi(),
             &databind_tf_service_http_projection),
         SALTS_ENOENT);
     check_equal(service_codec_calls, (size_t)0u);
