@@ -206,6 +206,11 @@ typedef struct flow_runtime_node_plan_s {
   uint32_t outgoing_begin;
   uint32_t outgoing_count;
   uint32_t flags;
+  /** Borrowed immutable compile-time names; valid for the sealed plan lifetime. */
+  const char *stage_name;
+  const char *adapter_name;
+  const char *operation_name;
+  const char *resource_name;
 } flow_runtime_node_plan_t;
 
 typedef struct flow_runtime_edge_plan_s {
@@ -308,6 +313,9 @@ typedef struct flow_stage_semantic_plan_s {
   /* Canonical reflected semantics copied/bound during compile. */
   const cmeta_type_desc *canonical_input_type;
   const cmeta_type_desc *canonical_output_type;
+  /** Borrowed stable semantic IDs frozen during compile; NULL when unknown. */
+  const char *input_semantic_id;
+  const char *output_semantic_id;
   cmeta_callable callable;
   cflow_function_typed_adapter_projection typed_adapter_projection;
   int reflected_typed_adapter;
