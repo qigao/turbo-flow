@@ -5,6 +5,7 @@
 #include "turbo_flow_inbox.h"
 
 #include <orm.h>
+#include <orm_runtime.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -119,7 +120,7 @@ TURBO_FLOW_C_API int turbo_flow_turbodb_command_open_in_transaction(
     const turbo_flow_turbodb_source_config_t *source_config, cflow_publisher *message_publisher,
     orm_error_t *orm_error);
 
-#define TURBO_FLOW_TURBODB_INBOX_API_VERSION UINT32_C(1)
+#define TURBO_FLOW_TURBODB_INBOX_API_VERSION UINT32_C(2)
 #define TURBO_FLOW_TURBODB_INBOX_SCHEMA_VERSION UINT32_C(3)
 #define TURBO_FLOW_TURBODB_INBOX_DEFAULT_CONNECTIONS 4u
 #define TURBO_FLOW_TURBODB_INBOX_MAX_CONNECTIONS 64u
@@ -128,8 +129,10 @@ TURBO_FLOW_C_API int turbo_flow_turbodb_command_open_in_transaction(
 /**
  * Exact v3 durable inbox configuration.
  *
- * `database` and every view reachable from it are borrowed only during create;
- * successful create owns all opened ORM connections. `namespace_name` is also
+ * `database_runtime`, `database`, and every view reachable from the database
+ * config are borrowed only during create; successful create owns all opened ORM
+ * connections. The runtime must already contain the exact selected driver; Inbox
+ * never loads, aliases, scans for, or falls back to a driver. `namespace_name` is also
  * borrowed only during create and must match `[A-Za-z_][A-Za-z0-9_]*`. It maps
  * to `<namespace_name>_inbox_meta_v3` and
  * `<namespace_name>_inbox_records_v3`.
@@ -158,6 +161,7 @@ typedef enum turbo_flow_turbodb_inbox_open_mode_e {
 typedef struct turbo_flow_turbodb_inbox_config_s {
   size_t size;
   uint32_t version;
+  orm_runtime_t *database_runtime;
   const orm_config_t *database;
   const char *namespace_name;
   size_t max_records;
@@ -192,8 +196,9 @@ TURBO_FLOW_C_API turbo_flow_turbodb_inbox_config_t turbo_flow_turbodb_inbox_conf
  * completion. Calls may be concurrent; an exhausted finite connection pool or
  * SQLite lock contention returns `SALTS_EBUSY`.
  *
- * @param config Exact-version configuration with a valid ORM config and
- * pre-provisioned v2 namespace.
+ * @param config Exact-version configuration with an explicit ORM runtime,
+ * a valid ORM config selecting one already-loaded driver, and a pre-provisioned
+ * v3 namespace.
  * @param out Exact-version empty `TURBO_FLOW_INBOX_INIT` handle receiving the
  * provider vtable and ownership.
  * @param orm_error Detailed error for an ORM boundary failure; initialized by
