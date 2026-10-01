@@ -224,9 +224,11 @@ cmake_add_test(
   LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_provider_binding
-  test_flow_salts_provider_fixture)
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture)
 target_compile_definitions(test_flow_provider_binding PRIVATE
-  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>")
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_target_properties(test_flow_provider_binding PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
