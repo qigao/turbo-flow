@@ -123,7 +123,7 @@ static void cleanup_driver(flow_inbox_driver_t *driver, turbo_flow_t *flow,
 spec("Internal Inbox claim-to-Graph driver") {
   it("resumes after its buffer without re-admission and preserves generic durable identity") {
     static const char graph[] = "source input\n"
-                                "buffer intake resource intake.store\n"
+                                "buffer intake provider flow.durable.memory resource intake.store\n"
                                 "stage sink adapter test.sink\n"
                                 "stage main {\n"
                                 "  input -> intake -> sink\n"
@@ -171,9 +171,9 @@ spec("Internal Inbox claim-to-Graph driver") {
 
   it("treats the next buffer as a new execution cut") {
     static const char graph[] = "source input\n"
-                                "buffer first resource first.store\n"
+                                "buffer first provider flow.durable.memory resource first.store\n"
                                 "stage middle adapter test.middle\n"
-                                "buffer second resource second.store\n"
+                                "buffer second provider flow.durable.memory resource second.store\n"
                                 "stage sink adapter test.sink\n"
                                 "stage main {\n"
                                 "  input -> first -> middle -> second -> sink\n"
@@ -232,7 +232,7 @@ spec("Internal Inbox claim-to-Graph driver") {
 
   it("settles cancellation without running or replaying the Graph") {
     static const char graph[] = "source input\n"
-                                "buffer intake resource intake.store\n"
+                                "buffer intake provider flow.durable.memory resource intake.store\n"
                                 "stage sink adapter test.sink\n"
                                 "stage main {\n"
                                 "  input -> intake -> sink\n"
@@ -272,7 +272,7 @@ spec("Internal Inbox claim-to-Graph driver") {
 
   it("settles a synchronous Graph failure once") {
     static const char graph[] = "source input\n"
-                                "buffer intake resource intake.store\n"
+                                "buffer intake provider flow.durable.memory resource intake.store\n"
                                 "stage sink adapter test.sink\n"
                                 "stage main {\n"
                                 "  input -> intake -> sink\n"
@@ -317,7 +317,7 @@ spec("Internal Inbox claim-to-Graph driver") {
 
   it("holds the Inbox claim until async-terminal completion") {
     static const char graph[] = "source input\n"
-                                "buffer intake resource intake.store\n"
+                                "buffer intake provider flow.durable.memory resource intake.store\n"
                                 "stage output adapter async.out\n"
                                 "stage main {\n"
                                 "  input -> intake -> output\n"
