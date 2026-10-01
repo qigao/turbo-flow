@@ -9,7 +9,7 @@ message HttpConfig {
 
 message BatchConfig {
   @Min(1) @Max(1024) uint32 batch;
-  bool durable;
+  @Min(1) @Max(64) uint32 concurrency;
 }
 
 

@@ -31,6 +31,8 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_resource.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_config_binding.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_instance.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
@@ -143,6 +145,8 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_product_databind.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_resource.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_config_binding.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_instance.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_binding.h

@@ -42,7 +42,7 @@ cmake_add_test(
   test_flow_provider_typed_config
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_typed_config.c
   LIBS
-    TurboFlow::Graph
+    TurboFlow::Product
     Salts::TinyTest
     ${turbo_flow_provider_config_fixture_NATIVE_TARGET}
   INCLUDES
@@ -185,7 +185,12 @@ set_tests_properties(test_flow_provider_interface
 
 add_library(test_flow_salts_provider_fixture SHARED salts_provider_fixture.c)
 target_link_libraries(test_flow_salts_provider_fixture
-  PRIVATE TurboFlow::Product Salts::Plugin)
+  PRIVATE TurboFlow::Product Salts::Plugin
+          ${turbo_flow_provider_config_fixture_NATIVE_TARGET})
+target_include_directories(test_flow_salts_provider_fixture PRIVATE
+  ${turbo_flow_provider_config_fixture_GENERATED_DIR})
+add_dependencies(test_flow_salts_provider_fixture
+  turbo_flow_provider_config_fixture_idl_codegen)
 set_target_properties(test_flow_salts_provider_fixture PROPERTIES
   FOLDER "turbo_flow/tests/fixtures"
   C_VISIBILITY_PRESET hidden
@@ -205,10 +210,13 @@ cmake_add_test(
   test_flow_salts_provider_binding
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_salts_provider_binding.c
   LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+       ${turbo_flow_provider_config_fixture_NATIVE_TARGET}
+  INCLUDES ${turbo_flow_provider_config_fixture_GENERATED_DIR}
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_salts_provider_binding
   test_flow_salts_provider_fixture
-  test_flow_salts_resource_fixture)
+  test_flow_salts_resource_fixture
+  turbo_flow_provider_config_fixture_idl_codegen)
 target_compile_definitions(test_flow_salts_provider_binding PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
@@ -222,10 +230,13 @@ cmake_add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/provider_binding_header_cpp.cpp
   LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+       ${turbo_flow_provider_config_fixture_NATIVE_TARGET}
+  INCLUDES ${turbo_flow_provider_config_fixture_GENERATED_DIR}
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_provider_binding
   test_flow_salts_provider_fixture
-  test_flow_salts_resource_fixture)
+  test_flow_salts_resource_fixture
+  turbo_flow_provider_config_fixture_idl_codegen)
 target_compile_definitions(test_flow_provider_binding PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
@@ -236,6 +247,24 @@ set_tests_properties(test_flow_provider_binding PROPERTIES
   LABELS "graph;provider;plugin;interface;lease"
   TIMEOUT 30)
 
+cmake_add_test(
+  test_flow_compiled_provider_instance
+  SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_compiled_provider_instance.c
+  LIBS TurboFlow::Product Salts::Plugin Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+add_dependencies(test_flow_compiled_provider_instance
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture)
+target_compile_definitions(test_flow_compiled_provider_instance PRIVATE
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
+set_target_properties(test_flow_compiled_provider_instance PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+set_tests_properties(test_flow_compiled_provider_instance PROPERTIES
+  LABELS "graph;provider;plugin;interface;lease;config;resource"
+  TIMEOUT 30)
 
 cmake_add_test(
   test_flow_resource_binding
@@ -273,7 +302,7 @@ set_tests_properties(test_turbo_flow_diagnostic
 cmake_add_test(
   test_flow_provider_config
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_config.c
-  LIBS TurboFlow::Graph Salts::TinyTest
+  LIBS TurboFlow::Product Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_provider_config

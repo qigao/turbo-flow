@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define FLOW_TEST_RESOURCE_CONTRACT_ID "test.turboflow.resource"
+#define FLOW_TEST_RESOURCE_IDENTITY "db_main"
 enum {
   FLOW_TEST_RESOURCE_CONTRACT_VERSION = 1u,
   FLOW_TEST_RESOURCE_CAP_READ = UINT64_C(1) << 0
