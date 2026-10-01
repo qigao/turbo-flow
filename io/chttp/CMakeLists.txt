@@ -19,13 +19,23 @@ target_link_libraries(tf_chttp_adapter PUBLIC
 
 install(FILES include/turbo_flow_chttp.h DESTINATION include)
 
+salts_idl_target(
+  TARGET turbo_flow_chttp_provider_policy
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_chttp_provider_policy.schema"
+  ARTIFACT_NAME "chttp_provider_policy"
+  ARTIFACTS MESSAGE)
+
 add_library(tf_chttp_plugin SHARED src/turbo_flow_chttp_plugin.c
   src/turbo_flow_chttp_plugin_config.c src/turbo_flow_chttp_plugin_internal.h)
 cmake_config_target(tf_chttp_plugin FOLDER "io/chttp")
 target_compile_definitions(tf_chttp_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
-target_include_directories(tf_chttp_plugin PRIVATE include src)
-target_link_libraries(tf_chttp_plugin PRIVATE tf_chttp_adapter TurboFlow::Product Salts::CSTL
-                                             Salts::UriParser)
+target_include_directories(tf_chttp_plugin PRIVATE
+  include src
+  "${turbo_flow_chttp_provider_policy_GENERATED_DIR}")
+target_link_libraries(tf_chttp_plugin PRIVATE
+  tf_chttp_adapter TurboFlow::Product Salts::CSTL Salts::UriParser
+  ${turbo_flow_chttp_provider_policy_NATIVE_TARGET})
+add_dependencies(tf_chttp_plugin turbo_flow_chttp_provider_policy_idl_codegen)
 set_target_properties(tf_chttp_plugin PROPERTIES C_VISIBILITY_PRESET hidden
                                                VISIBILITY_INLINES_HIDDEN YES)
 install(TARGETS tf_chttp_plugin RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
