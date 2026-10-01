@@ -25,7 +25,7 @@ spec("flow typed provider config") {
         "}\n"
         "stage batch adapter fixture.batch {\n"
         "  batch 32\n"
-        "  durable false\n"
+        "  concurrency 4\n"
         "}\n";
     turbo_flow_t *flow = turbo_flow_create();
     flow_provider_typed_config_t http = {0};
@@ -72,7 +72,7 @@ spec("flow typed provider config") {
     batch_value = (const BatchConfig_t *)view.value;
     check_not_null(batch_value);
     check_equal(batch_value->batch, 32u);
-    check_false(batch_value->durable);
+    check_equal(batch_value->concurrency, 4u);
 
     check_equal(flow_provider_typed_config_destroy(&batch), SALTS_OK);
     check_equal(flow_provider_typed_config_destroy(&http), SALTS_OK);
@@ -108,7 +108,7 @@ spec("flow typed provider config") {
     static const char *src =
         "stage batch adapter fixture.batch {\n"
         "  batch 32\n"
-        "  durable false\n"
+        "  concurrency 4\n"
         "  unexpected 1\n"
         "}\n";
     turbo_flow_t *flow = turbo_flow_create();
