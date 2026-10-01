@@ -1538,7 +1538,7 @@ static bool inbox_vstr_equal(vstr a, const char *b) {
 }
 static bool inbox_config_valid(const turbo_flow_turbodb_inbox_config_t *c) {
   if (!c || c->size != sizeof(*c) || c->version != TURBO_FLOW_TURBODB_INBOX_API_VERSION ||
-      !c->database || !c->namespace_name)
+      !c->database_runtime || !c->database || !c->namespace_name)
     return false;
   if (c->database->struct_size != sizeof(*c->database) ||
       c->database->abi_version != ORM_C_ABI_VERSION ||
@@ -1611,7 +1611,8 @@ int turbo_flow_turbodb_inbox_create(const turbo_flow_turbodb_inbox_config_t *c,
   }
   for (size_t i = 0; i < o->connection_count; ++i) {
     inbox_connection_slot_t *connection = inbox_connection_at(o, i);
-    orm_status_t s = orm_connect(c->database, &connection->connection, error);
+    orm_status_t s = orm_runtime_connect(
+        c->database_runtime, c->database, &connection->connection, error);
     if (s != ORM_STATUS_OK) {
       int rc = inbox_orm_status(s);
       inbox_owner_free(o);
