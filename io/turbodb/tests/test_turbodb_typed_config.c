@@ -10,9 +10,9 @@ static void fill_valid(DurableTurboDbConfig_t *config) {
   config->max_record_bytes = 8192u;
   config->max_claims = 32u;
   config->connection_count = 2u;
-  config->identity_mode = DurableIdentityMode_Generated;
+  config->identity_mode = 0u;
   config->expected_generation = 0u;
-  config->open_mode = InboxOpenMode_Exclusive;
+  config->open_mode = 0u;
 }
 
 spec("TurboDB typed provider config") {
@@ -74,7 +74,7 @@ spec("TurboDB typed provider config") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
     fill_valid(&typed);
-    typed.open_mode = InboxOpenMode_Takeover;
+    typed.open_mode = 1u;
     typed.expected_generation = 0u;
     check_equal(
         durable_turbodb_config_from_typed(
