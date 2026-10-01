@@ -130,7 +130,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|salts_provider_binding|provider_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin))             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|salts_provider_binding|provider_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin))
 
       - name: Verify TurboDB adapter does not absorb native database drivers
         shell: bash
