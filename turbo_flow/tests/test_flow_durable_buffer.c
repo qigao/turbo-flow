@@ -66,7 +66,7 @@ static void durable_buffer_binding_fixture_cleanup(durable_buffer_binding_fixtur
 
 static turbo_flow_t *durable_buffer_compile_graph(size_t *sink_calls) {
   static const char graph[] =
-      "buffer intake resource intake.store\n"
+      "buffer intake provider flow.durable.memory resource intake.store\n"
       "source telemetry\n"
       "stage normalize adapter sink\n"
       "stage main {\n"
@@ -85,7 +85,7 @@ static turbo_flow_t *durable_buffer_compile_graph(size_t *sink_calls) {
 spec("Graph durable buffer DSL") {
   it("parses one root buffer with an explicit resource binding") {
     static const char graph[] =
-        "buffer intake resource intake.store\n"
+        "buffer intake provider flow.durable.memory resource intake.store\n"
         "source telemetry\n"
         "stage normalize\n"
         "stage main {\n"
@@ -124,7 +124,7 @@ spec("Graph durable buffer DSL") {
   it("rejects duplicate buffer and stage names") {
     turbo_flow_t *flow = turbo_flow_create();
     static const char graph[] =
-        "buffer intake resource intake.store\n"
+        "buffer intake provider flow.durable.memory resource intake.store\n"
         "stage intake\n"
         "source telemetry\n"
         "stage main {\n"
@@ -141,7 +141,7 @@ spec("Graph durable buffer DSL") {
     static const char graph[] =
         "stage reusable {\n"
         "  in input\n"
-        "  buffer queued resource queue.store\n"
+        "  buffer queued provider flow.durable.memory resource queue.store\n"
         "  out output\n"
         "  input -> queued -> output\n"
         "}\n"
@@ -248,8 +248,8 @@ spec("Graph durable buffer DSL") {
 
   it("rejects one durable binding shared by multiple buffer stages") {
     static const char graph[] =
-        "buffer intake resource shared.store\n"
-        "buffer archive resource shared.store\n"
+        "buffer intake provider flow.durable.memory resource shared.store\n"
+        "buffer archive provider flow.durable.memory resource shared.store\n"
         "source telemetry\n"
         "stage main {\n"
         "  telemetry -> intake\n"
@@ -267,8 +267,8 @@ spec("Graph durable buffer DSL") {
 
   it("resolves independent buffer bindings again after a stopped recompile") {
     static const char graph[] =
-        "buffer intake resource intake.store\n"
-        "buffer archive resource archive.store\n"
+        "buffer intake provider flow.durable.memory resource intake.store\n"
+        "buffer archive provider flow.durable.memory resource archive.store\n"
         "source telemetry\n"
         "stage main {\n"
         "  telemetry -> intake\n"
@@ -309,7 +309,7 @@ spec("Graph durable buffer DSL") {
 
   it("admits at a bound durable buffer without activating downstream") {
     static const char graph[] =
-        "buffer intake resource intake.store\n"
+        "buffer intake provider flow.durable.memory resource intake.store\n"
         "source telemetry\n"
         "stage downstream adapter sink\n"
         "stage main {\n"
