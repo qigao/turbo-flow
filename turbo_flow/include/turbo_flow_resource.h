@@ -61,8 +61,11 @@ typedef struct turbo_flow_resource_binding_s turbo_flow_resource_binding_t;
  * Resolve, acquire and exact-contract-check one deployment resource.
  *
  * Success owns one Salts Plugin lease until turbo_flow_resource_binding_release.
- * Only non-secret identity/export text is copied into the binding. The resource
- * Interface {self,vtable} remains plugin-owned and borrowed under the lease.
+ * The binding separately copies the authoring resource_name plus the resolver's
+ * non-secret deployment identity/export text. The provider-facing view therefore
+ * never assumes that a .flow reference and a resolved deployment identity are
+ * equal. The resource Interface {self,vtable} remains plugin-owned and borrowed
+ * under the lease.
  *
  * Normal failures leave *out NULL. If exact-contract rejection succeeds but
  * cleanup of the just-acquired lease itself fails, the function returns that
