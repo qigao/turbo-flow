@@ -27,14 +27,14 @@ static int resolve_resource(
   if (!fixture || !out || out->size != sizeof(*out))
     return SALTS_EINVAL;
   ++fixture->calls;
-  if (!resource_name || strcmp(resource_name, "db-main") != 0) {
+  if (!resource_name || strcmp(resource_name, "db_main") != 0) {
     if (error && error->size == sizeof(*error)) {
       *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
       error->status = SALTS_ENOENT;
     }
     return SALTS_ENOENT;
   }
-  out->identity = "deployment.db-main";
+  out->identity = "deployment.db_main";
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -83,13 +83,14 @@ spec("TurboFlow deployment resource binding") {
     resolver.resolve = resolve_resource;
 
     check_equal(turbo_flow_resource_binding_acquire(
-                    &resolver, "db-main", &requirement, &binding, &error),
+                    &resolver, "db_main", &requirement, &binding, &error),
                 SALTS_OK);
     check_not_null(binding);
     check_equal(fixture.calls, 1u);
 
     check_equal(turbo_flow_resource_binding_view(binding, &view), SALTS_OK);
-    check_true(strcmp(view.identity, "deployment.db-main") == 0);
+    check_true(strcmp(view.reference_name, "db_main") == 0);
+    check_true(strcmp(view.identity, "deployment.db_main") == 0);
     check_true(strcmp(view.export_id, "fixture.resource") == 0);
     check_true(cmeta_interface_desc_equal(
         view.interface_desc, flow_test_resource_interface()));
@@ -142,7 +143,7 @@ spec("TurboFlow deployment resource binding") {
     ++requirement.contract_version;
 
     check_equal(turbo_flow_resource_binding_acquire(
-                    &resolver, "db-main", &requirement, &binding, &error),
+                    &resolver, "db_main", &requirement, &binding, &error),
                 SALTS_EPROTO);
     check_null(binding);
     check_equal(error.status, SALTS_EPROTO);
