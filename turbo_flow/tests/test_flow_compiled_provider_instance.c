@@ -1,4 +1,5 @@
 #include "flow_provider_instance_internal.h"
+#include "salts_resource_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_provider.h"
@@ -62,14 +63,14 @@ static int resolve_resource(
       out->size != sizeof(*out))
     return SALTS_EINVAL;
   ++fixture->calls;
-  if (!resource_name || strcmp(resource_name, "db-main") != 0) {
+  if (!resource_name || strcmp(resource_name, FLOW_TEST_RESOURCE_IDENTITY) != 0) {
     if (error && error->size == sizeof(*error)) {
       *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
       error->status = SALTS_ENOENT;
     }
     return SALTS_ENOENT;
   }
-  out->identity = "db-main";
+  out->identity = FLOW_TEST_RESOURCE_IDENTITY;
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -95,7 +96,7 @@ spec("compiled provider instance") {
   it("binds provider config and resource before provider preflight") {
     static const char *src =
         "stage worker adapter fixture.provider {\n"
-        "  resource db-main\n"
+        "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 7\n"
         "  durable true\n"
         "}\n";
@@ -162,7 +163,7 @@ spec("compiled provider instance") {
     check_not_null(view->config.value);
     check_true(view->config.value_bytes > 0u);
     check_not_null(view->resource);
-    check_equal(view->resource->identity, "db-main");
+    check_equal(view->resource->identity, FLOW_TEST_RESOURCE_IDENTITY);
     check_equal(view->resource->export_id, "fixture.resource");
 
     check_equal(
@@ -218,7 +219,7 @@ spec("compiled provider instance") {
   it("rejects invalid typed config before resource resolution") {
     static const char *src =
         "stage worker adapter fixture.provider {\n"
-        "  resource db-main\n"
+        "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 0\n"
         "  durable true\n"
         "}\n";
