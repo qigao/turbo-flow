@@ -4,14 +4,19 @@
 #include <salts/thread.h>
 
 #include <stdbool.h>
+#include <string.h>
 
 #ifndef FLOW_TURBODB_RESOURCE_FIXTURE_DB
 #error "FLOW_TURBODB_RESOURCE_FIXTURE_DB is required"
+#endif
+#ifndef FLOW_TURBODB_SQLITE_DRIVER
+#error "FLOW_TURBODB_SQLITE_DRIVER is required"
 #endif
 
 typedef struct database_resource_state_s {
   bool started;
   bool stopping;
+  orm_runtime_t *runtime;
   orm_option_t filename;
   orm_config_t database;
 } database_resource_state_t;
@@ -21,12 +26,13 @@ static database_resource_state_t resource_state;
 static int resource_snapshot(
     void *self, turbo_flow_turbodb_database_view_t *view_out) {
   database_resource_state_t *state = (database_resource_state_t *)self;
-  if (!state || !state->started || state->stopping || !view_out ||
-      view_out->size != sizeof(*view_out))
+  if (!state || !state->started || state->stopping || !state->runtime ||
+      !view_out || view_out->size != sizeof(*view_out))
     return SALTS_EINVAL;
 
   *view_out =
       (turbo_flow_turbodb_database_view_t)TURBO_FLOW_TURBODB_DATABASE_VIEW_INIT;
+  view_out->runtime = state->runtime;
   view_out->database = &state->database;
   view_out->namespace_name = "orders";
   return SALTS_OK;
@@ -78,7 +84,30 @@ static void resource_init(void) {
 
 static salts_plugin_status SALTS_PLUGIN_CALL resource_start(void *self) {
   database_resource_state_t *state = (database_resource_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  orm_runtime_config_t runtime_config;
+  orm_driver_load_config_t load = {0};
+  orm_error_t error;
+
+  if (!state || state->runtime) return SALTS_PLUGIN_INVALID_ARGUMENT;
+
+  orm_runtime_config_init(&runtime_config);
+  orm_error_init(&error);
+  if (orm_runtime_create(&runtime_config, &state->runtime, &error) !=
+      ORM_STATUS_OK)
+    return SALTS_PLUGIN_LOAD_FAILED;
+
+  load.struct_size = (uint32_t)sizeof(load);
+  load.abi_version = ORM_RUNTIME_ABI_VERSION;
+  load.module_path = orm_view(FLOW_TURBODB_SQLITE_DRIVER);
+  load.expected_driver_id = orm_view("sqlite");
+  if (orm_runtime_load_driver(state->runtime, &load, &error) !=
+      ORM_STATUS_OK) {
+    (void)orm_runtime_close(state->runtime, &error);
+    orm_runtime_release(state->runtime);
+    state->runtime = NULL;
+    return SALTS_PLUGIN_LOAD_FAILED;
+  }
+
   state->stopping = false;
   state->started = true;
   return SALTS_PLUGIN_OK;
@@ -93,9 +122,20 @@ static salts_plugin_status SALTS_PLUGIN_CALL resource_request_stop(void *self) {
 }
 
 static bool SALTS_PLUGIN_CALL resource_is_quiescent(const void *self) {
-  const database_resource_state_t *state =
-      (const database_resource_state_t *)self;
-  return state && state->stopping;
+  database_resource_state_t *state =
+      (database_resource_state_t *)(uintptr_t)self;
+  orm_error_t error;
+  orm_status_t status;
+
+  if (!state || !state->stopping) return false;
+  if (!state->runtime) return true;
+
+  orm_error_init(&error);
+  status = orm_runtime_close(state->runtime, &error);
+  if (status != ORM_STATUS_OK) return false;
+  orm_runtime_release(state->runtime);
+  state->runtime = NULL;
+  return true;
 }
 
 static void SALTS_PLUGIN_CALL resource_destroy(void *self) {
