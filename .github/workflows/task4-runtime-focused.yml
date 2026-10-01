@@ -124,13 +124,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_typed_config test_turbodb_durable_buffer_plugin                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_salts_provider_binding test_flow_provider_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_adapter test_turbodb_typed_config test_turbodb_durable_buffer_plugin                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_salts_provider_binding test_flow_provider_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
       - name: Run provider-neutral durable Graph tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|salts_provider_binding|provider_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|salts_provider_binding|provider_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(adapter|typed_config|durable_buffer_plugin))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
       - name: Verify TurboDB adapter does not absorb native database drivers
         shell: bash
