@@ -159,7 +159,101 @@ static int resolve_resource(
   return SALTS_OK;
 }
 
+typedef struct provider_acceptance_fixture_s {
+  turbo_flow_t *flow;
+  salts_plugin_registry registry;
+  int registry_initialized;
+  salts_plugin_ref provider_ref;
+  salts_plugin_ref resource_ref;
+  int provider_loaded;
+  int resource_loaded;
+  int provider_started;
+  int resource_started;
+  flow_compiled_provider_instance_t *compiled;
+  turbo_flow_runtime_owner *owner;
+  int database_created;
+} provider_acceptance_fixture_t;
+
+static provider_acceptance_fixture_t acceptance;
+
+static void acceptance_cleanup(void) {
+  turbo_flow_runtime_owner *owner = acceptance.owner;
+
+  if (acceptance.compiled) {
+    if (!owner) {
+      turbo_flow_runtime_owner *borrowed = NULL;
+      if (flow_compiled_provider_instance_owner(
+              acceptance.compiled, &borrowed) == SALTS_OK)
+        owner = borrowed;
+    }
+    if (owner && turbo_flow_runtime_owner_contract_valid(owner)) {
+      (void)turbo_flow_runtime_owner_quiesce(owner, 10u);
+      (void)turbo_flow_runtime_owner_drain(owner, 10u);
+      if (turbo_flow_runtime_owner_shutdown(owner) == SALTS_OK)
+        (void)flow_compiled_provider_instance_owner_destroy(
+            acceptance.compiled);
+    }
+    acceptance.owner = NULL;
+    (void)flow_compiled_provider_instance_release(&acceptance.compiled);
+  }
+
+  if (acceptance.registry_initialized) {
+    bool quiescent = false;
+    if (acceptance.provider_started) {
+      (void)salts_plugin_registry_request_stop(
+          &acceptance.registry, acceptance.provider_ref);
+      acceptance.provider_started = 0;
+    }
+    if (acceptance.resource_started) {
+      (void)salts_plugin_registry_request_stop(
+          &acceptance.registry, acceptance.resource_ref);
+      acceptance.resource_started = 0;
+    }
+    if (acceptance.provider_loaded &&
+        salts_plugin_registry_poll_quiescent(
+            &acceptance.registry, acceptance.provider_ref,
+            &quiescent) == SALTS_PLUGIN_OK &&
+        quiescent) {
+      if (salts_plugin_registry_unload(
+              &acceptance.registry,
+              acceptance.provider_ref) == SALTS_PLUGIN_OK)
+        acceptance.provider_loaded = 0;
+    }
+    quiescent = false;
+    if (acceptance.resource_loaded &&
+        salts_plugin_registry_poll_quiescent(
+            &acceptance.registry, acceptance.resource_ref,
+            &quiescent) == SALTS_PLUGIN_OK &&
+        quiescent) {
+      if (salts_plugin_registry_unload(
+              &acceptance.registry,
+              acceptance.resource_ref) == SALTS_PLUGIN_OK)
+        acceptance.resource_loaded = 0;
+    }
+    if (!acceptance.provider_loaded && !acceptance.resource_loaded) {
+      (void)salts_plugin_registry_destroy(&acceptance.registry);
+      acceptance.registry_initialized = 0;
+    }
+  }
+
+  if (acceptance.flow) {
+    turbo_flow_destroy(acceptance.flow);
+    acceptance.flow = NULL;
+  }
+  if (acceptance.database_created) {
+    (void)remove(FLOW_TURBODB_RESOURCE_FIXTURE_DB);
+    acceptance.database_created = 0;
+  }
+}
+
 spec("TurboDB canonical Salts provider") {
+  before_each() {
+    memset(&acceptance, 0, sizeof(acceptance));
+    acceptance.flow = turbo_flow_create();
+  }
+
+  after_each() { acceptance_cleanup(); }
+
   it("materializes typed policy with an exact leased database resource") {
     static const char *src =
         "source input\n"
@@ -180,70 +274,82 @@ spec("TurboDB canonical Salts provider") {
         "stage main {\n"
         "  input -> durable_buffer -> output\n"
         "}\n";
-    salts_plugin_registry registry = {0};
     salts_plugin_registry_config registry_config = {2u};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
     resolver_fixture_t provider_fixture = {0};
     resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver =
         TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
     turbo_flow_resource_resolver_v1_t resource_resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
-    flow_compiled_provider_instance_t *compiled = NULL;
     const turbo_flow_provider_instance_v1_t *view = NULL;
-    turbo_flow_runtime_owner *owner = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_t *flow = turbo_flow_create();
     flow_test_operation_t operation =
         flow_test_operation_init("test.output", output, NULL);
     int stage_index;
+    int rc;
     bool quiescent = true;
 
+    acceptance.database_created = 1;
     provision_database();
-    check_not_null(flow);
-    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    stage_index = turbo_flow_find_stage(flow, "durable_buffer");
+    check_not_null(acceptance.flow);
+    check_equal(
+        flow_test_operation_register(acceptance.flow, &operation),
+        SALTS_OK);
+    check_equal(
+        turbo_flow_parse_string(acceptance.flow, src, strlen(src)),
+        SALTS_OK);
+    stage_index =
+        turbo_flow_find_stage(acceptance.flow, "durable_buffer");
     check_true(stage_index >= 0);
 
-    check_equal(
-        salts_plugin_registry_init(&registry, &registry_config),
-        SALTS_PLUGIN_OK);
-    check_equal(
-        salts_plugin_registry_load(
-            &registry, FLOW_TURBODB_PROVIDER_FIXTURE, &provider_ref),
-        SALTS_PLUGIN_OK);
-    check_equal(
-        salts_plugin_registry_load(
-            &registry, FLOW_TURBODB_RESOURCE_FIXTURE, &resource_ref),
-        SALTS_PLUGIN_OK);
-    check_equal(
-        salts_plugin_registry_start(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
-    check_equal(
-        salts_plugin_registry_start(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
+    rc = salts_plugin_registry_init(
+        &acceptance.registry, &registry_config);
+    if (rc == SALTS_PLUGIN_OK) acceptance.registry_initialized = 1;
+    check_equal(rc, SALTS_PLUGIN_OK);
 
-    provider_fixture.registry = &registry;
-    provider_fixture.plugin = provider_ref;
+    rc = salts_plugin_registry_load(
+        &acceptance.registry, FLOW_TURBODB_PROVIDER_FIXTURE,
+        &acceptance.provider_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.provider_loaded = 1;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
+    rc = salts_plugin_registry_load(
+        &acceptance.registry, FLOW_TURBODB_RESOURCE_FIXTURE,
+        &acceptance.resource_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.resource_loaded = 1;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
+    rc = salts_plugin_registry_start(
+        &acceptance.registry, acceptance.provider_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.provider_started = 1;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
+    rc = salts_plugin_registry_start(
+        &acceptance.registry, acceptance.resource_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.resource_started = 1;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
+    provider_fixture.registry = &acceptance.registry;
+    provider_fixture.plugin = acceptance.provider_ref;
     provider_resolver.ctx = &provider_fixture;
     provider_resolver.resolve = resolve_provider;
-    resource_fixture.registry = &registry;
-    resource_fixture.plugin = resource_ref;
+    resource_fixture.registry = &acceptance.registry;
+    resource_fixture.plugin = acceptance.resource_ref;
     resource_resolver.ctx = &resource_fixture;
     resource_resolver.resolve = resolve_resource;
 
     check_equal(
         flow_compiled_provider_instance_prepare(
-            flow, (size_t)stage_index, &provider_resolver,
-            &resource_resolver, &compiled, &error),
+            acceptance.flow, (size_t)stage_index,
+            &provider_resolver, &resource_resolver,
+            &acceptance.compiled, &error),
         SALTS_OK);
-    check_not_null(compiled);
+    check_not_null(acceptance.compiled);
     check_equal(provider_fixture.calls, 1u);
     check_equal(resource_fixture.calls, 1u);
     check_equal(
-        flow_compiled_provider_instance_view(compiled, &view),
+        flow_compiled_provider_instance_view(
+            acceptance.compiled, &view),
         SALTS_OK);
     check_not_null(view);
     check_equal(view->instance_name, "durable_buffer");
@@ -252,63 +358,85 @@ spec("TurboDB canonical Salts provider") {
     check_equal(view->resource->identity, "telemetry_db");
 
     check_equal(
-        flow_compiled_provider_instance_materialize(compiled, flow, &error),
+        flow_compiled_provider_instance_materialize(
+            acceptance.compiled, acceptance.flow, &error),
         SALTS_OK);
-    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_compile(acceptance.flow), SALTS_OK);
     check_equal(
-        flow_compiled_provider_instance_owner(compiled, &owner),
+        flow_compiled_provider_instance_owner(
+            acceptance.compiled, &acceptance.owner),
         SALTS_OK);
-    check_not_null(owner);
-    check_true(turbo_flow_runtime_owner_contract_valid(owner));
+    check_not_null(acceptance.owner);
+    check_true(
+        turbo_flow_runtime_owner_contract_valid(acceptance.owner));
+
+    rc = salts_plugin_registry_request_stop(
+        &acceptance.registry, acceptance.provider_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.provider_started = 0;
+    check_equal(rc, SALTS_PLUGIN_OK);
+    rc = salts_plugin_registry_request_stop(
+        &acceptance.registry, acceptance.resource_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.resource_started = 0;
+    check_equal(rc, SALTS_PLUGIN_OK);
 
     check_equal(
-        salts_plugin_registry_request_stop(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
-    check_equal(
-        salts_plugin_registry_request_stop(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
-    check_equal(
         salts_plugin_registry_poll_quiescent(
-            &registry, provider_ref, &quiescent),
+            &acceptance.registry, acceptance.provider_ref, &quiescent),
         SALTS_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
         salts_plugin_registry_poll_quiescent(
-            &registry, resource_ref, &quiescent),
+            &acceptance.registry, acceptance.resource_ref, &quiescent),
         SALTS_PLUGIN_OK);
     check_false(quiescent);
 
-    check_equal(turbo_flow_runtime_owner_quiesce(owner, 10u), SALTS_OK);
-    check_equal(turbo_flow_runtime_owner_drain(owner, 10u), SALTS_OK);
-    check_equal(turbo_flow_runtime_owner_shutdown(owner), SALTS_OK);
     check_equal(
-        flow_compiled_provider_instance_owner_destroy(compiled),
+        turbo_flow_runtime_owner_quiesce(acceptance.owner, 10u),
         SALTS_OK);
-    owner = NULL;
     check_equal(
-        flow_compiled_provider_instance_release(&compiled),
+        turbo_flow_runtime_owner_drain(acceptance.owner, 10u),
         SALTS_OK);
-    check_null(compiled);
+    check_equal(
+        turbo_flow_runtime_owner_shutdown(acceptance.owner),
+        SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_owner_destroy(
+            acceptance.compiled),
+        SALTS_OK);
+    acceptance.owner = NULL;
+    check_equal(
+        flow_compiled_provider_instance_release(
+            &acceptance.compiled),
+        SALTS_OK);
+    check_null(acceptance.compiled);
 
     check_equal(
         salts_plugin_registry_poll_quiescent(
-            &registry, provider_ref, &quiescent),
+            &acceptance.registry, acceptance.provider_ref, &quiescent),
         SALTS_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(
-        salts_plugin_registry_unload(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
+    rc = salts_plugin_registry_unload(
+        &acceptance.registry, acceptance.provider_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.provider_loaded = 0;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
     check_equal(
         salts_plugin_registry_poll_quiescent(
-            &registry, resource_ref, &quiescent),
+            &acceptance.registry, acceptance.resource_ref, &quiescent),
         SALTS_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(
-        salts_plugin_registry_unload(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
+    rc = salts_plugin_registry_unload(
+        &acceptance.registry, acceptance.resource_ref);
+    if (rc == SALTS_PLUGIN_OK) acceptance.resource_loaded = 0;
+    check_equal(rc, SALTS_PLUGIN_OK);
 
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
-    turbo_flow_destroy(flow);
+    rc = salts_plugin_registry_destroy(&acceptance.registry);
+    if (rc == SALTS_PLUGIN_OK) acceptance.registry_initialized = 0;
+    check_equal(rc, SALTS_PLUGIN_OK);
+
+    turbo_flow_destroy(acceptance.flow);
+    acceptance.flow = NULL;
     check_equal(remove(FLOW_TURBODB_RESOURCE_FIXTURE_DB), 0);
+    acceptance.database_created = 0;
   }
 }
