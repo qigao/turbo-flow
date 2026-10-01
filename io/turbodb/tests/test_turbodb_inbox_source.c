@@ -2,6 +2,7 @@
 #include "tinytest.h"
 #include "turbo_flow_inbox_source.h"
 #include "turbo_flow_turbodb.h"
+#include "turbodb_test_runtime.h"
 
 #include <salts_error.h>
 
@@ -16,6 +17,7 @@
 
 typedef struct inbox_source_db_fixture_s {
   char *path;
+  orm_runtime_t *runtime;
   orm_option_t filename;
   orm_config_t database;
 } inbox_source_db_fixture_t;
@@ -77,6 +79,11 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
   orm_error_t error;
 
   memset(fixture, 0, sizeof(*fixture));
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_sqlite_runtime_open(&fixture->runtime, &error),
+      ORM_STATUS_OK);
+  check_not_null(fixture->runtime);
   fixture->path = tt_make_temp_file("turbo-flow-turbodb-inbox-source", ".sqlite3");
   check_not_null(fixture->path);
   orm_config(&fixture->database);
@@ -86,8 +93,10 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
   fixture->database.options = &fixture->filename;
   fixture->database.option_count = 1u;
 
-  orm_error_init(&error);
-  check_equal(orm_connect(&fixture->database, &connection, &error), ORM_STATUS_OK);
+  check_equal(
+      orm_runtime_connect(
+          fixture->runtime, &fixture->database, &connection, &error),
+      ORM_STATUS_OK);
   check_not_null(connection);
   inbox_source_db_execute(connection, INBOX_SOURCE_META_DDL, &error);
   inbox_source_db_execute(connection, INBOX_SOURCE_RECORDS_DDL, &error);
@@ -98,7 +107,12 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
 }
 
 static void inbox_source_db_fixture_destroy(inbox_source_db_fixture_t *fixture) {
+  orm_error_t error;
   check_not_null(fixture);
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_runtime_close(&fixture->runtime, &error),
+      ORM_STATUS_OK);
   check_not_null(fixture->path);
   check_equal(tt_remove_file(fixture->path), 0);
   free(fixture->path);
@@ -108,6 +122,7 @@ static void inbox_source_db_fixture_destroy(inbox_source_db_fixture_t *fixture) 
 static turbo_flow_turbodb_inbox_config_t
 inbox_source_db_config(const inbox_source_db_fixture_t *fixture) {
   turbo_flow_turbodb_inbox_config_t config = turbo_flow_turbodb_inbox_config_default();
+  config.database_runtime = fixture->runtime;
   config.database = &fixture->database;
   config.namespace_name = "orders";
   config.max_records = INBOX_SOURCE_TEST_MAX_RECORDS;
