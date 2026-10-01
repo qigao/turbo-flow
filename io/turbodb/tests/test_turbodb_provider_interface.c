@@ -369,12 +369,15 @@ spec("TurboDB canonical Salts provider") {
     resource_resolver.ctx = &resource_fixture;
     resource_resolver.resolve = resolve_resource;
 
-    check_equal(
-        flow_compiled_provider_instance_prepare(
-            acceptance.flow, (size_t)stage_index,
-            &provider_resolver, &resource_resolver,
-            &acceptance.compiled, &error),
-        SALTS_OK);
+    rc = flow_compiled_provider_instance_prepare(
+        acceptance.flow, (size_t)stage_index,
+        &provider_resolver, &resource_resolver,
+        &acceptance.compiled, &error);
+    info("compiled TurboDB provider prepare status=%d provider_calls=%u "
+         "resource_calls=%u path=%s reason=%s",
+         rc, provider_fixture.calls, resource_fixture.calls,
+         error.path, error.message);
+    check_equal(rc, SALTS_OK);
     check_not_null(acceptance.compiled);
     check_equal(provider_fixture.calls, 1u);
     check_equal(resource_fixture.calls, 1u);
