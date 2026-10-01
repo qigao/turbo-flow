@@ -19,6 +19,9 @@
 #ifndef FLOW_TURBODB_RESOURCE_FIXTURE_DB
 #error "FLOW_TURBODB_RESOURCE_FIXTURE_DB is required"
 #endif
+#ifndef FLOW_TURBODB_SQLITE_DRIVER
+#error "FLOW_TURBODB_SQLITE_DRIVER is required"
+#endif
 
 static const char INBOX_META_DDL[] =
     "CREATE TABLE orders_inbox_meta_v3 ("
@@ -81,13 +84,38 @@ static void sql(orm_connection_t *connection, const char *text) {
   orm_query_destroy(query);
 }
 
+static orm_runtime_t *sqlite_runtime(orm_error_t *error) {
+  orm_runtime_config_t runtime_config;
+  orm_driver_load_config_t load = {0};
+  orm_runtime_t *runtime = NULL;
+
+  orm_runtime_config_init(&runtime_config);
+  check_equal(
+      orm_runtime_create(&runtime_config, &runtime, error),
+      ORM_STATUS_OK);
+  check_not_null(runtime);
+
+  load.struct_size = (uint32_t)sizeof(load);
+  load.abi_version = ORM_RUNTIME_ABI_VERSION;
+  load.module_path = orm_view(FLOW_TURBODB_SQLITE_DRIVER);
+  load.expected_driver_id = orm_view("sqlite");
+  check_equal(
+      orm_runtime_load_driver(runtime, &load, error),
+      ORM_STATUS_OK);
+  return runtime;
+}
+
 static void provision_database(void) {
   orm_config_t database;
   orm_option_t filename;
+  orm_runtime_t *runtime;
   orm_connection_t *connection = NULL;
   orm_error_t error;
 
   (void)remove(FLOW_TURBODB_RESOURCE_FIXTURE_DB);
+  orm_error_init(&error);
+  runtime = sqlite_runtime(&error);
+
   orm_config(&database);
   filename.keyword = orm_view("filename");
   filename.value = orm_view(FLOW_TURBODB_RESOURCE_FIXTURE_DB);
@@ -95,8 +123,9 @@ static void provision_database(void) {
   database.options = &filename;
   database.option_count = 1u;
 
-  orm_error_init(&error);
-  check_equal(orm_connect(&database, &connection, &error), ORM_STATUS_OK);
+  check_equal(
+      orm_runtime_connect(runtime, &database, &connection, &error),
+      ORM_STATUS_OK);
   check_not_null(connection);
   sql(connection, INBOX_META_DDL);
   sql(connection, INBOX_RECORDS_DDL);
@@ -104,6 +133,8 @@ static void provision_database(void) {
   sql(connection, INBOX_PHASE_INDEX_DDL);
   sql(connection, INBOX_META_V3_ROW);
   orm_disconnect(connection);
+  check_equal(orm_runtime_close(runtime, &error), ORM_STATUS_OK);
+  orm_runtime_release(runtime);
 }
 
 static int output(turbo_flow_msg_t *message, void *ctx) {
