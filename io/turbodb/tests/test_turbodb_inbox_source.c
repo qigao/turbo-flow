@@ -29,7 +29,7 @@ typedef struct inbox_source_db_probe_s {
 } inbox_source_db_probe_t;
 
 static const char INBOX_SOURCE_META_DDL[] =
-    "CREATE TABLE orders_inbox_meta_v2 ("
+    "CREATE TABLE orders_inbox_meta_v3 ("
     "singleton_id integer primary key not null, schema_magic text not null, "
     "schema_version integer not null, generation bigint not null, owner_state integer not null, "
     "next_record_id bigint not null, next_claim_token bigint not null, max_records bigint not "
@@ -40,7 +40,7 @@ static const char INBOX_SOURCE_META_DDL[] =
     "null, retried bigint not null, discarded bigint not null)";
 
 static const char INBOX_SOURCE_RECORDS_DDL[] =
-    "CREATE TABLE orders_inbox_records_v2 ("
+    "CREATE TABLE orders_inbox_records_v3 ("
     "record_id bigint primary key not null, phase integer not null, claim_generation bigint not "
     "null, claim_token bigint not null, failure_status integer not null, failure_kind integer not "
     "null, terminal_kind integer not null, envelope_schema text not null, "
@@ -53,15 +53,15 @@ static const char INBOX_SOURCE_RECORDS_DDL[] =
     "null, correlation bytea not null, payload bytea not null, retained_bytes bigint not null)";
 
 static const char INBOX_SOURCE_DEDUPE_INDEX_DDL[] =
-    "CREATE UNIQUE INDEX orders_inbox_records_v2_admission ON "
-    "orders_inbox_records_v2(source_id, admission_id)";
+    "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
+    "orders_inbox_records_v3(source_id, admission_id)";
 
 static const char INBOX_SOURCE_PHASE_INDEX_DDL[] =
-    "CREATE INDEX orders_inbox_records_v2_phase ON orders_inbox_records_v2(phase, record_id)";
+    "CREATE INDEX orders_inbox_records_v3_phase ON orders_inbox_records_v3(phase, record_id)";
 
 static const char INBOX_SOURCE_META_ROW[] =
-    "INSERT INTO orders_inbox_meta_v2 VALUES "
-    "(1, 'turbo-flow.turbodb.inbox', 2, 0, 0, 1, 1, 4, 256, 128, 1, "
+    "INSERT INTO orders_inbox_meta_v3 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 3, 0, 0, 1, 1, 4, 256, 128, 1, "
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 static void inbox_source_db_execute(orm_connection_t *connection, const char *sql,
