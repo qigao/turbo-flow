@@ -89,6 +89,7 @@ cmake_add_test(
   test_turbodb_typed_config
   SOURCES
     test_turbodb_typed_config.c
+    turbodb_adapter_header_cpp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/turbo_flow_turbodb_durable_config.c
   LIBS
     TurboFlow::Product
@@ -102,6 +103,9 @@ cmake_add_test(
 add_dependencies(
   test_turbodb_typed_config
   turbo_flow_turbodb_provider_config_idl_codegen)
+set_target_properties(test_turbodb_typed_config PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 set_tests_properties(test_turbodb_typed_config PROPERTIES
   LABELS "turbodb-adapter;graph;config;databind" TIMEOUT 30)
 
