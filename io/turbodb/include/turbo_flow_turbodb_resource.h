@@ -29,7 +29,8 @@ enum {
  * database may carry driver/session/credential options owned by the deployment
  * resource. TurboFlow Core never copies or logs those values. namespace_name is
  * the physical durable-inbox namespace and is borrowed under the same resource
- * Salts Plugin lease.
+ * Salts Plugin lease. Only the TurboDB provider interprets this provider-specific
+ * view; the generic resource binder treats the Interface value as opaque.
  */
 typedef struct turbo_flow_turbodb_database_view_s {
   size_t size;
