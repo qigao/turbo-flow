@@ -163,7 +163,7 @@ static void complete_ready_terminals(lifecycle_fixture_t *f) {
 static void open_fixture_mode(lifecycle_fixture_t *f, int asynchronous,
                               turbo_flow_durable_identity_mode_t identity_mode) {
   static const char graph[] = "source input\n"
-    "buffer intake resource intake.store\n"
+    "buffer intake provider flow.durable.memory resource intake.store\n"
     "stage output adapter sink\n"
     "stage main {\n input -> intake -> output\n}\n";
   turbo_flow_inbox_memory_config_t memory = turbo_flow_inbox_memory_config_default();
@@ -208,7 +208,7 @@ static void open_fixture(lifecycle_fixture_t *f, int asynchronous) {
 
 static void open_fixture_async_emit(lifecycle_fixture_t *f) {
   static const char graph[] = "source input\n"
-    "buffer intake resource intake.store\n"
+    "buffer intake provider flow.durable.memory resource intake.store\n"
     "stage request adapter emit\n"
     "stage output adapter sink\n"
     "stage main {\n input -> intake -> request -> output\n}\n";
@@ -918,7 +918,7 @@ spec("durable buffer lifecycle") {
   it("rebuilds an idle driver after stopped reparse changes the buffer stage index") {
     static const char reordered[] = "stage output adapter sink\n"
       "source input\n"
-      "buffer intake resource intake.store\n"
+      "buffer intake provider flow.durable.memory resource intake.store\n"
       "stage main {\n input -> intake -> output\n}\n";
     lifecycle_fixture_t f; open_fixture(&f, 0); publish(&f);
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);
