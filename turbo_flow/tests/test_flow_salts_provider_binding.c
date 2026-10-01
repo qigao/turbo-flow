@@ -1,6 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow_provider.h"
 #include "salts_resource_fixture.h"
+#include "provider_config_native.h"
 
 #include <salts/plugin.h>
 
@@ -31,6 +32,10 @@ spec("Salts Plugin provider/resource binding") {
     turbo_flow_provider_instance_v1_t instance =
         TURBO_FLOW_PROVIDER_INSTANCE_V1_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    DataBindNativeTypeBinding native = {0};
+    DataBindError databind_error = DATA_BIND_ERROR_INIT;
+    BatchConfig_t config;
+    const DataBindMessageNativeArtifact *artifact;
     bool provider_quiescent = true;
     bool resource_quiescent = true;
 
@@ -80,7 +85,15 @@ spec("Salts Plugin provider/resource binding") {
     check_equal(turbo_flow_provider_factory_contract(factory, &contract),
                 SALTS_OK);
     check_true(turbo_flow_provider_contract_valid(&contract));
-    check_true(contract.config.message_artifact != NULL);
+    artifact = contract.config.message_artifact;
+    check_not_null(artifact);
+    check_true(strcmp(artifact->type_name, "BatchConfig") == 0);
+    check_equal(
+        artifact->native_binding(&native, &databind_error),
+        DATA_BIND_OK);
+    BatchConfig_init(&config);
+    config.batch = 7u;
+    config.durable = true;
     check_true(contract.resource.contract_id != NULL);
     check_true(strcmp(contract.resource.contract_id,
                       FLOW_TEST_RESOURCE_CONTRACT_ID) == 0);
@@ -103,13 +116,16 @@ spec("Salts Plugin provider/resource binding") {
             contract.resource.expected_interface),
         SALTS_PLUGIN_OK);
 
-    resource_view.identity = "db-main";
+    resource_view.identity = FLOW_TEST_RESOURCE_IDENTITY;
     resource_view.export_id = resource_entry->export_id;
     resource_view.interface_desc = resource_entry->value.interface.desc;
     resource_view.interface_value = resource_entry->value.interface.value;
 
     instance.instance_name = "stage_a";
-    instance.config.type_name = "FixtureProviderConfig";
+    instance.config.type_name = artifact->type_name;
+    instance.config.data = native.data;
+    instance.config.value = &config;
+    instance.config.value_bytes = sizeof(config);
     instance.resource = &resource_view;
     check_equal(
         turbo_flow_provider_factory_preflight(factory, &instance, &error),
@@ -161,6 +177,7 @@ spec("Salts Plugin provider/resource binding") {
                 SALTS_PLUGIN_OK);
 
     check_equal(salts_plugin_registry_count(&registry), (size_t)0u);
+    BatchConfig_clear(&config);
     check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
   }
 }
