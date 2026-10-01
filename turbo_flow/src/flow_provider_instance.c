@@ -18,6 +18,12 @@ struct flow_compiled_provider_instance_s {
   int owner_live;
 };
 
+static const char *compiled_provider_identity(
+    const flow_stage_plan_impl_t *stage) {
+  if (!stage) return NULL;
+  return stage->is_buffer ? stage->provider_name : stage->adapter_name;
+}
+
 static int compiled_provider_error(
     turbo_flow_config_error_t *error,
     int status,
@@ -121,6 +127,7 @@ int flow_compiled_provider_instance_prepare(
     flow_compiled_provider_instance_t **out,
     turbo_flow_config_error_t *error) {
   const flow_stage_plan_impl_t *stage;
+  const char *provider_identity;
   flow_compiled_provider_instance_t *compiled;
   flow_provider_typed_config_view_t config_view;
   DataBindMessagePlanDiagnostic diagnostic =
@@ -136,8 +143,9 @@ int flow_compiled_provider_instance_prepare(
 
   stage = (const flow_stage_plan_impl_t *)vec_at_const(
       &flow->stages, stage_index);
-  if (!stage || !stage->name || !stage->adapter_name ||
-      !stage->adapter_name[0])
+  provider_identity = compiled_provider_identity(stage);
+  if (!stage || !stage->name || !provider_identity ||
+      !provider_identity[0])
     return compiled_provider_error(
         error, SALTS_EPROTO, stage ? stage->name : NULL, "provider",
         "stage has no canonical provider identity");
@@ -162,7 +170,7 @@ int flow_compiled_provider_instance_prepare(
       (turbo_flow_provider_instance_v1_t)TURBO_FLOW_PROVIDER_INSTANCE_V1_INIT;
 
   rc = turbo_flow_provider_binding_acquire(
-      provider_resolver, stage->adapter_name,
+      provider_resolver, provider_identity,
       &compiled->provider_binding, error);
   if (rc != SALTS_OK) {
     if (compiled->provider_binding) {
