@@ -49,7 +49,7 @@ static int fixture_preflight(void *self,
   {
     const BatchConfig_t *config =
         (const BatchConfig_t *)instance->config.value;
-    if (config->batch != 7u || !config->durable)
+    if (config->batch != 7u || config->concurrency != 2u)
       return SALTS_EPROTO;
   }
 
