@@ -139,6 +139,48 @@ static int instance_config(
       instance->instance_name, config, error);
 }
 
+static int database_view_admitted(
+    const turbo_flow_turbodb_database_view_t *view) {
+  orm_driver_info_t info = {0};
+  orm_error_t orm_error;
+  size_t i;
+  int file_backed = 0;
+
+  if (!turbo_flow_turbodb_database_view_valid(view) ||
+      view->database->struct_size != sizeof(*view->database) ||
+      view->database->abi_version != ORM_C_ABI_VERSION ||
+      (view->database->option_count != 0u && !view->database->options) ||
+      view->database->driver.len != sizeof("sqlite") - 1u ||
+      !view->database->driver.data ||
+      memcmp(view->database->driver.data, "sqlite",
+             sizeof("sqlite") - 1u) != 0)
+    return 0;
+
+  for (i = 0u; i < view->database->option_count; ++i) {
+    const orm_option_t *option = &view->database->options[i];
+    if (option->keyword.len != sizeof("filename") - 1u ||
+        !option->keyword.data ||
+        memcmp(option->keyword.data, "filename",
+               sizeof("filename") - 1u) != 0)
+      continue;
+    file_backed =
+        option->value.data && option->value.len != 0u &&
+        !(option->value.len == sizeof(":memory:") - 1u &&
+          memcmp(option->value.data, ":memory:",
+                 sizeof(":memory:") - 1u) == 0);
+    break;
+  }
+  if (!file_backed) return 0;
+
+  orm_error_init(&orm_error);
+  return orm_runtime_driver_info(
+             view->runtime, orm_view("sqlite"), &info, &orm_error) ==
+             ORM_STATUS_OK &&
+         info.canonical_id_size == sizeof("sqlite") - 1u &&
+         memcmp(info.canonical_id, "sqlite",
+                sizeof("sqlite") - 1u) == 0;
+}
+
 static int instance_database(
     const turbo_flow_provider_instance_v1_t *instance,
     turbo_flow_turbodb_database_view_t *view,
@@ -173,13 +215,10 @@ static int instance_database(
       error, rc, instance->instance_name,
       "TurboDB database resource snapshot failed");
 
-  if (!turbo_flow_turbodb_database_view_valid(view) ||
-      view->database->struct_size != sizeof(*view->database) ||
-      view->database->abi_version != ORM_C_ABI_VERSION ||
-      (view->database->option_count != 0u && !view->database->options))
+  if (!database_view_admitted(view))
     return provider_fail(
-        error, SALTS_EPROTO, instance->instance_name,
-        "TurboDB database resource view is invalid");
+        error, SALTS_ENOTSUP, instance->instance_name,
+        "TurboDB database resource is not an admitted file-backed SQLite runtime");
 
   return SALTS_OK;
 }
