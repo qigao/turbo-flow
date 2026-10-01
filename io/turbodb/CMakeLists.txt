@@ -31,7 +31,7 @@ add_library(tf_turbodb_plugin SHARED
 cmake_config_target(tf_turbodb_plugin FOLDER "io/turbodb")
 target_compile_definitions(tf_turbodb_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
 target_link_libraries(tf_turbodb_plugin
-  PRIVATE TurboFlow::Product TurboFlow::TurboDbAdapter
+  PRIVATE TurboFlow::Product TurboFlow::TurboDbAdapter Salts::Plugin
           ${turbo_flow_turbodb_provider_config_NATIVE_TARGET})
 target_include_directories(tf_turbodb_plugin PRIVATE
   "${turbo_flow_turbodb_provider_config_GENERATED_DIR}")
@@ -40,7 +40,10 @@ add_dependencies(tf_turbodb_plugin
 set_target_properties(tf_turbodb_plugin PROPERTIES
   C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
-install(FILES include/turbo_flow_turbodb.h DESTINATION include)
+install(FILES
+  include/turbo_flow_turbodb.h
+  include/turbo_flow_turbodb_resource.h
+  DESTINATION include)
 install(TARGETS tf_turbodb_plugin
   RUNTIME DESTINATION bin COMPONENT TurboDbDurable
   LIBRARY DESTINATION lib COMPONENT TurboDbDurable)
