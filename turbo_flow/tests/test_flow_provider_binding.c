@@ -174,11 +174,15 @@ spec("TurboFlow Salts provider binding") {
     check_equal(salts_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
                 SALTS_PLUGIN_OK);
-    check_true(quiescent);
+    check_false(quiescent);
     check_equal(salts_plugin_registry_unload(&registry, resource_ref),
                 SALTS_PLUGIN_BUSY);
     check_equal(turbo_flow_resource_binding_release(&resource_binding), SALTS_OK);
     check_null(resource_binding);
+    check_equal(salts_plugin_registry_poll_quiescent(
+                    &registry, resource_ref, &quiescent),
+                SALTS_PLUGIN_OK);
+    check_true(quiescent);
     check_equal(salts_plugin_registry_unload(&registry, resource_ref),
                 SALTS_PLUGIN_OK);
     check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
