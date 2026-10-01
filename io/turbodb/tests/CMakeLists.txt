@@ -1,3 +1,8 @@
+set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
+  "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
+set(TURBO_FLOW_TURBODB_SQLITE_DRIVER
+  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
 cmake_add_test(
   test_turbodb_adapter
   SOURCES test_turbodb_adapter.c turbodb_adapter_header_cpp.cpp
@@ -22,6 +27,8 @@ add_executable(test_turbodb_inbox_crash_helper turbodb_inbox_crash_helper.c)
 target_link_libraries(test_turbodb_inbox_crash_helper PRIVATE TurboFlow::TurboDbAdapter)
 target_include_directories(test_turbodb_inbox_crash_helper
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(test_turbodb_inbox_crash_helper PRIVATE
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_target_properties(test_turbodb_inbox_crash_helper
                       PROPERTIES FOLDER "io/turbodb/tests/helpers")
 
@@ -35,8 +42,9 @@ cmake_add_test(
   FOLDER "io/turbodb/tests")
 add_dependencies(test_turbodb_inbox test_turbodb_inbox_crash_helper)
 target_compile_definitions(
-  test_turbodb_inbox
-  PRIVATE TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER="$<TARGET_FILE:test_turbodb_inbox_crash_helper>")
+  test_turbodb_inbox PRIVATE
+  TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER="$<TARGET_FILE:test_turbodb_inbox_crash_helper>"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 
 set_tests_properties(test_turbodb_inbox
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
@@ -48,13 +56,10 @@ cmake_add_test(
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
   FOLDER "io/turbodb/tests")
 
+target_compile_definitions(test_turbodb_inbox_source PRIVATE
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_tests_properties(test_turbodb_inbox_source
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
-
-set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
-  "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
-set(TURBO_FLOW_TURBODB_SQLITE_DRIVER
-  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
 add_library(test_turbodb_database_resource_fixture SHARED
   turbodb_database_resource_fixture.c)
