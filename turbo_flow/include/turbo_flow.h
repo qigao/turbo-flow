@@ -87,6 +87,7 @@ typedef struct turbo_flow_execution_stage_view_s {
   uint32_t cflow_region_index;
   const char *stage_name;
   const char *adapter_name;
+  const char *provider_name;
   const char *operation_name;
   const char *resource_name;
   const char *input_semantic_id;
@@ -99,7 +100,7 @@ typedef struct turbo_flow_execution_stage_view_s {
    TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
    TURBO_FLOW_EXECUTION_BACKEND_NATIVE,                                             \
    TURBO_FLOW_EXECUTION_PLAN_INDEX_NONE,                                            \
-   NULL, NULL, NULL, NULL, NULL, NULL}
+   NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 /** Deterministic indexed diagnostics for one compiled direct CFlow region. */
 typedef struct turbo_flow_execution_cflow_region_view_s {
@@ -2003,6 +2004,8 @@ typedef struct turbo_flow_stage_plan_s {
   int is_source;
   int is_buffer;
   const char *adapter_name;
+  /** Explicit .flow provider/capability identity; independent of runtime adapter. */
+  const char *provider_name;
   turbo_flow_data_strategy_t data_strategy;
   uint32_t data_worker_count;
   turbo_flow_exec_config_t exec;

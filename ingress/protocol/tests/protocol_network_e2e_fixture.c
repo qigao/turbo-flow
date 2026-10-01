@@ -464,7 +464,7 @@ static int protocol_network_e2e_intake_open(protocol_network_e2e_fixture_t *fixt
 
 static int protocol_network_e2e_business_open(protocol_network_e2e_fixture_t *fixture) {
   static const char graph[] = "source decoded\n"
-                              "buffer intake resource intake.store\n"
+                              "buffer intake provider flow.durable.memory resource intake.store\n"
                               "stage output adapter udp.output\n"
                               "stage main {\n"
                               "  decoded -> intake -> output\n"

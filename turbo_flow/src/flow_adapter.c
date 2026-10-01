@@ -20,6 +20,7 @@ void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_
   view->is_source = stage->is_source;
   view->is_buffer = stage->is_buffer;
   view->adapter_name = stage->adapter_name;
+  view->provider_name = stage->provider_name;
   view->operation_name = stage->operation_resolved ? stage->resolved_operation.name
                                                    : stage->operation_name;
   view->resource_name = stage->resource_name;

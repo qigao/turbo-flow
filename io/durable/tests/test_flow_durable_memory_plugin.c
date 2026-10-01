@@ -16,7 +16,7 @@ static const char valid_yaml[] =
     "      max_message_bytes: 1048576\n      max_records: 2\n"
     "      max_total_bytes: 67108864\n      max_record_bytes: 1048576\n      max_claims: 1\n";
 static const char graph_text[] =
-    "source input\nbuffer intake resource intake.store\n"
+    "source input\nbuffer intake provider flow.durable.memory resource intake.store\n"
     "stage output operation test.output\nstage main {\n input -> intake -> output\n}\n";
 typedef struct fixture_s {
   turbo_flow_plugin_host_t *host;
@@ -243,9 +243,9 @@ spec("configured bounded memory durable resource") {
   }
   it("rolls back an earlier memory owner on later materialization or compile failure") {
     static const char *const graphs[] = {
-      "source input\nbuffer intake resource intake.store\n"
+      "source input\nbuffer intake provider flow.durable.memory resource intake.store\n"
       "stage output operation test.output resource bad.store\nstage main {\n input -> intake -> output\n}\n",
-      "source input\nbuffer intake resource intake.store\n"
+      "source input\nbuffer intake provider flow.durable.memory resource intake.store\n"
       "stage output operation test.missing\nstage main {\n input -> intake -> output\n}\n"
     };
     for (size_t i=0u; i<sizeof(graphs)/sizeof(graphs[0]); ++i) {
@@ -306,7 +306,7 @@ spec("configured bounded memory durable resource") {
     static const char *const graphs[] = {
       "source input\nstage output operation test.output\nstage main {\n input -> output\n}\n",
       "source input\nstage output operation test.output resource intake.store\nstage main {\n input -> output\n}\n",
-      "source input\nbuffer a resource intake.store\nbuffer b resource intake.store\nstage output operation test.output\nstage main {\n input -> a -> b -> output\n}\n"
+      "source input\nbuffer a provider flow.durable.memory resource intake.store\nbuffer b provider flow.durable.memory resource intake.store\nstage output operation test.output\nstage main {\n input -> a -> b -> output\n}\n"
     };
     for (size_t i=0u; i<sizeof(graphs)/sizeof(graphs[0]); ++i) {
       fixture_t f; open_fixture(&f, graphs[i]);

@@ -89,6 +89,11 @@ static int flow_plugin_generation_owner_error(turbo_flow_config_error_t *error, 
 static const char *flow_plugin_generation_product_reference(
     const turbo_flow_stage_plan_t *stage, int resource) {
   if (!stage) return NULL;
+  /* Buffer adapter_name now carries the canonical .flow provider identity.
+     The legacy resolved-config generation path must not reinterpret that
+     identity as a YAML adapter-table key while the coordinated #253 cutover
+     is in progress. */
+  if (!resource && stage->is_buffer) return NULL;
   if (!resource) return stage->adapter_name;
   /* A resource attached to an operation stage belongs to the ABI3 operation
      binding. Product resource providers own Graph resources such as buffers,

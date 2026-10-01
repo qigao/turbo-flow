@@ -49,7 +49,8 @@ typedef struct flow_exec_options_s {
 typedef enum flow_node_config_kind_e {
   FLOW_NODE_CONFIG_NONE = 0,
   FLOW_NODE_CONFIG_SOURCE,
-  FLOW_NODE_CONFIG_STAGE
+  FLOW_NODE_CONFIG_STAGE,
+  FLOW_NODE_CONFIG_BUFFER
 } flow_node_config_kind_t;
 
 typedef enum flow_provider_config_value_kind_e {
@@ -83,6 +84,10 @@ typedef struct flow_stage_spec_s {
   uint32_t adapter_line;
   uint32_t adapter_column;
   int has_adapter;
+  vstr provider_name;
+  uint32_t provider_line;
+  uint32_t provider_column;
+  int has_provider;
   vstr operation_name;
   uint32_t operation_line;
   uint32_t operation_column;
@@ -136,6 +141,7 @@ int flow_parse_set_retry(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_to
 int flow_parse_set_reorder(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t capacity,
                            flow_token_t timeout);
 int flow_parse_set_adapter(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token);
+int flow_parse_set_provider(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token);
 int flow_parse_set_operation(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token);
 int flow_parse_set_resource(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token);
 flow_token_t flow_parse_append_dotted_name(flow_parse_ctx_t *ctx, flow_token_t left,
@@ -152,7 +158,7 @@ int flow_parse_add_provider_config_literal(
     flow_provider_config_value_spec_t value);
 int flow_parse_finish_node_config(flow_parse_ctx_t *ctx);
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
-int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource);
+int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_stage(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_port(flow_parse_ctx_t *ctx, flow_token_t name, int is_output);
 int flow_parse_use_stage(flow_parse_ctx_t *ctx, flow_token_t alias, flow_token_t target);

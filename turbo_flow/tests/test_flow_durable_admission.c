@@ -99,7 +99,7 @@ static int count_sink(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan
 }
 static void fixture_create(admission_fixture_t *f, const turbo_flow_inbox_memory_config_t *limits) {
   static const char graph[] =
-      "buffer intake resource intake.store\n"
+      "buffer intake provider flow.durable.memory resource intake.store\n"
       "source telemetry\n"
       "stage downstream adapter sink\n"
       "stage main {\n telemetry -> intake\n intake -> downstream\n}\n";

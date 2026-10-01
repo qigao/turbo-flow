@@ -423,7 +423,7 @@ static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
                               "  input -> decode\n"
                               "}\n";
   static const char downstream_graph[] = "source decoded\n"
-                                         "buffer intake resource protocol.store\n"
+                                         "buffer intake provider flow.durable.memory resource protocol.store\n"
                                          "stage main {\n"
                                          "  decoded -> intake\n"
                                          "}\n";
