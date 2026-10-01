@@ -1,5 +1,6 @@
 #include "turbo_flow_provider.h"
 #include "salts_resource_fixture.h"
+#include "provider_config_native.h"
 
 #include <salts/plugin.h>
 #include <salts/thread.h>
@@ -14,37 +15,12 @@ typedef struct fixture_provider_state_s {
 
 static fixture_provider_state_t fixture_state;
 
-static DataBindStatus fixture_codec_factory(DataBind **out, DataBindError *error) {
-  if (out) *out = NULL;
-  if (error) {
-    *error = (DataBindError)DATA_BIND_ERROR_INIT;
-    error->code = DATA_BIND_ERR_SCHEMA;
-  }
-  return DATA_BIND_ERR_SCHEMA;
-}
-
-static DataBindStatus fixture_native_binding(DataBindNativeTypeBinding *out,
-                                             DataBindError *error) {
-  if (out) memset(out, 0, sizeof(*out));
-  if (error) {
-    *error = (DataBindError)DATA_BIND_ERROR_INIT;
-    error->code = DATA_BIND_ERR_SCHEMA;
-  }
-  return DATA_BIND_ERR_SCHEMA;
-}
-
-static const DataBindMessageNativeArtifact FIXTURE_CONFIG_ARTIFACT = {
-    sizeof(DataBindMessageNativeArtifact),
-    DATA_BIND_MESSAGE_NATIVE_ARTIFACT_ABI_VERSION,
-    "FixtureProviderConfig",
-    fixture_native_binding};
-
 static int fixture_describe(void *self, turbo_flow_provider_contract_v1_t *out) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
   if (!state || !out || out->size != sizeof(*out)) return SALTS_EINVAL;
   *out = (turbo_flow_provider_contract_v1_t)TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
-  out->config.codec_factory = fixture_codec_factory;
-  out->config.message_artifact = &FIXTURE_CONFIG_ARTIFACT;
+  out->config.codec_factory = ProviderConfig_codec_create;
+  out->config.message_artifact = BatchConfig_native_artifact();
   out->resource.contract_id = FLOW_TEST_RESOURCE_CONTRACT_ID;
   out->resource.contract_version = FLOW_TEST_RESOURCE_CONTRACT_VERSION;
   out->resource.required_capabilities = FLOW_TEST_RESOURCE_CAP_READ;
@@ -63,6 +39,19 @@ static int fixture_preflight(void *self,
       instance->size != sizeof(*instance) || !instance->instance_name ||
       !instance->instance_name[0])
     return SALTS_EINVAL;
+
+  if (instance->config.size != sizeof(instance->config) ||
+      !instance->config.type_name ||
+      strcmp(instance->config.type_name, "BatchConfig") != 0 ||
+      !instance->config.data || !instance->config.value ||
+      instance->config.value_bytes != sizeof(BatchConfig_t))
+    return SALTS_EPROTO;
+  {
+    const BatchConfig_t *config =
+        (const BatchConfig_t *)instance->config.value;
+    if (config->batch != 7u || !config->durable)
+      return SALTS_EPROTO;
+  }
 
   resource = instance->resource;
   if (!resource || resource->size != sizeof(*resource) ||
