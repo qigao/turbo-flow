@@ -1,0 +1,314 @@
+#include "../../../tests/flow_operation_fixture.h"
+#include "flow_provider_instance_internal.h"
+#include "tinytest.h"
+#include "turbo_flow_provider_binding.h"
+#include "turbo_flow_resource.h"
+#include "turbo_flow_turbodb_resource.h"
+
+#include <salts/plugin.h>
+
+#include <stdio.h>
+#include <string.h>
+
+#ifndef FLOW_TURBODB_PROVIDER_FIXTURE
+#error "FLOW_TURBODB_PROVIDER_FIXTURE is required"
+#endif
+#ifndef FLOW_TURBODB_RESOURCE_FIXTURE
+#error "FLOW_TURBODB_RESOURCE_FIXTURE is required"
+#endif
+#ifndef FLOW_TURBODB_RESOURCE_FIXTURE_DB
+#error "FLOW_TURBODB_RESOURCE_FIXTURE_DB is required"
+#endif
+
+static const char INBOX_META_DDL[] =
+    "CREATE TABLE orders_inbox_meta_v3 ("
+    "singleton_id integer primary key not null, schema_magic text not null, "
+    "schema_version integer not null, generation bigint not null, "
+    "owner_state integer not null, next_record_id bigint not null, "
+    "next_claim_token bigint not null, max_records bigint not null, "
+    "max_total_bytes bigint not null, max_record_bytes bigint not null, "
+    "max_claims bigint not null, records bigint not null, "
+    "history_records bigint not null, pending_records bigint not null, "
+    "failed_records bigint not null, in_flight_claims bigint not null, "
+    "retained_bytes bigint not null, admitted bigint not null, "
+    "completed bigint not null, failed bigint not null, retried bigint not null, "
+    "discarded bigint not null)";
+
+static const char INBOX_RECORDS_DDL[] =
+    "CREATE TABLE orders_inbox_records_v3 ("
+    "record_id bigint primary key not null, phase integer not null, "
+    "claim_generation bigint not null, claim_token bigint not null, "
+    "failure_status integer not null, failure_kind integer not null, "
+    "terminal_kind integer not null, envelope_schema text not null, "
+    "envelope_schema_version integer not null, source_id bytea not null, "
+    "partition_key bytea not null, admission_id bytea not null, "
+    "source_sequence_be bytea not null, timestamp_ns_be bytea not null, "
+    "message_type bigint not null, message_flags bigint not null, "
+    "content_domain integer not null, content_profile integer not null, "
+    "content_encoding integer not null, content_flags bigint not null, "
+    "content_schema_version bigint not null, content_media_type text not null, "
+    "content_schema_name text not null, content_type_name text not null, "
+    "content_identity text not null, correlation bytea not null, "
+    "payload bytea not null, retained_bytes bigint not null)";
+
+static const char INBOX_DEDUPE_INDEX_DDL[] =
+    "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
+    "orders_inbox_records_v3(source_id, admission_id)";
+
+static const char INBOX_PHASE_INDEX_DDL[] =
+    "CREATE INDEX orders_inbox_records_v3_phase ON "
+    "orders_inbox_records_v3(phase, record_id)";
+
+static const char INBOX_META_V3_ROW[] =
+    "INSERT INTO orders_inbox_meta_v3 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 3, 0, 0, 1, 1, 4, 256, 128, 2, "
+    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
+
+typedef struct resolver_fixture_s {
+  salts_plugin_registry *registry;
+  salts_plugin_ref plugin;
+  unsigned calls;
+} resolver_fixture_t;
+
+static void sql(orm_connection_t *connection, const char *text) {
+  orm_error_t error;
+  orm_query_t *query = NULL;
+  orm_result_t *result = NULL;
+  orm_error_init(&error);
+  check_equal(orm_raw(connection, orm_view(text), &query, &error), ORM_STATUS_OK);
+  check_equal(orm_query_execute(query, &result, &error), ORM_STATUS_OK);
+  orm_result_destroy(result);
+  orm_query_destroy(query);
+}
+
+static void provision_database(void) {
+  orm_config_t database;
+  orm_option_t filename;
+  orm_connection_t *connection = NULL;
+  orm_error_t error;
+
+  (void)remove(FLOW_TURBODB_RESOURCE_FIXTURE_DB);
+  orm_config(&database);
+  filename.keyword = orm_view("filename");
+  filename.value = orm_view(FLOW_TURBODB_RESOURCE_FIXTURE_DB);
+  database.driver = orm_view("sqlite");
+  database.options = &filename;
+  database.option_count = 1u;
+
+  orm_error_init(&error);
+  check_equal(orm_connect(&database, &connection, &error), ORM_STATUS_OK);
+  check_not_null(connection);
+  sql(connection, INBOX_META_DDL);
+  sql(connection, INBOX_RECORDS_DDL);
+  sql(connection, INBOX_DEDUPE_INDEX_DDL);
+  sql(connection, INBOX_PHASE_INDEX_DDL);
+  sql(connection, INBOX_META_V3_ROW);
+  orm_disconnect(connection);
+}
+
+static int output(turbo_flow_msg_t *message, void *ctx) {
+  (void)message;
+  (void)ctx;
+  return SALTS_OK;
+}
+
+static int resolve_provider(
+    void *ctx, const char *provider_identity,
+    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_config_error_t *error) {
+  resolver_fixture_t *fixture = (resolver_fixture_t *)ctx;
+  if (!fixture || !out || out->size != sizeof(*out)) return SALTS_EINVAL;
+  ++fixture->calls;
+  if (!provider_identity ||
+      strcmp(provider_identity, "flow.durable.turbodb") != 0) {
+    if (error && error->size == sizeof(*error)) {
+      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+      error->status = SALTS_ENOENT;
+    }
+    return SALTS_ENOENT;
+  }
+  out->module_identity = "turbo-flow.durable.turbodb";
+  out->registry = fixture->registry;
+  out->plugin = fixture->plugin;
+  return SALTS_OK;
+}
+
+static int resolve_resource(
+    void *ctx, const char *resource_name,
+    const turbo_flow_provider_resource_requirement_v1_t *requirement,
+    turbo_flow_resource_candidate_v1_t *out,
+    turbo_flow_config_error_t *error) {
+  resolver_fixture_t *fixture = (resolver_fixture_t *)ctx;
+  if (!fixture || !requirement || !out || out->size != sizeof(*out))
+    return SALTS_EINVAL;
+  ++fixture->calls;
+  if (!resource_name || strcmp(resource_name, "telemetry_db") != 0 ||
+      !requirement->contract_id ||
+      strcmp(requirement->contract_id,
+             TURBO_FLOW_TURBODB_DATABASE_RESOURCE_CONTRACT_ID) != 0) {
+    if (error && error->size == sizeof(*error)) {
+      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+      error->status = SALTS_ENOENT;
+    }
+    return SALTS_ENOENT;
+  }
+  out->identity = "telemetry_db";
+  out->registry = fixture->registry;
+  out->plugin = fixture->plugin;
+  out->export_id = "fixture.turbodb.database";
+  return SALTS_OK;
+}
+
+spec("TurboDB canonical Salts provider") {
+  it("materializes typed policy with an exact leased database resource") {
+    static const char *src =
+        "source input\n"
+        "buffer durable_buffer provider flow.durable.turbodb {\n"
+        "  resource telemetry_db\n"
+        "  schema_version 2\n"
+        "  max_message_bytes 128\n"
+        "  max_records 4\n"
+        "  max_total_bytes 256\n"
+        "  max_record_bytes 128\n"
+        "  max_claims 2\n"
+        "  connection_count 2\n"
+        "  identity_mode StableRequired\n"
+        "  expected_generation 0\n"
+        "  open_mode Exclusive\n"
+        "}\n"
+        "stage output operation test.output\n"
+        "stage main {\n"
+        "  input -> durable_buffer -> output\n"
+        "}\n";
+    salts_plugin_registry registry = {0};
+    salts_plugin_registry_config registry_config = {2u};
+    salts_plugin_ref provider_ref = {0};
+    salts_plugin_ref resource_ref = {0};
+    resolver_fixture_t provider_fixture = {0};
+    resolver_fixture_t resource_fixture = {0};
+    turbo_flow_provider_resolver_v1_t provider_resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_resource_resolver_v1_t resource_resolver =
+        TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
+    flow_compiled_provider_instance_t *compiled = NULL;
+    const turbo_flow_provider_instance_v1_t *view = NULL;
+    turbo_flow_runtime_owner *owner = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    flow_test_operation_t operation =
+        flow_test_operation_init("test.output", output, NULL);
+    int stage_index;
+    bool quiescent = true;
+
+    provision_database();
+    check_not_null(flow);
+    check_equal(flow_test_operation_register(flow, &operation), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    stage_index = turbo_flow_find_stage(flow, "durable_buffer");
+    check_true(stage_index >= 0);
+
+    check_equal(
+        salts_plugin_registry_init(&registry, &registry_config),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_load(
+            &registry, FLOW_TURBODB_PROVIDER_FIXTURE, &provider_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_load(
+            &registry, FLOW_TURBODB_RESOURCE_FIXTURE, &resource_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_start(&registry, provider_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_start(&registry, resource_ref),
+        SALTS_PLUGIN_OK);
+
+    provider_fixture.registry = &registry;
+    provider_fixture.plugin = provider_ref;
+    provider_resolver.ctx = &provider_fixture;
+    provider_resolver.resolve = resolve_provider;
+    resource_fixture.registry = &registry;
+    resource_fixture.plugin = resource_ref;
+    resource_resolver.ctx = &resource_fixture;
+    resource_resolver.resolve = resolve_resource;
+
+    check_equal(
+        flow_compiled_provider_instance_prepare(
+            flow, (size_t)stage_index, &provider_resolver,
+            &resource_resolver, &compiled, &error),
+        SALTS_OK);
+    check_not_null(compiled);
+    check_equal(provider_fixture.calls, 1u);
+    check_equal(resource_fixture.calls, 1u);
+    check_equal(
+        flow_compiled_provider_instance_view(compiled, &view),
+        SALTS_OK);
+    check_not_null(view);
+    check_equal(view->instance_name, "durable_buffer");
+    check_equal(view->config.type_name, "DurableTurboDbConfig");
+    check_not_null(view->resource);
+    check_equal(view->resource->identity, "telemetry_db");
+
+    check_equal(
+        flow_compiled_provider_instance_materialize(compiled, flow, &error),
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_owner(compiled, &owner),
+        SALTS_OK);
+    check_not_null(owner);
+    check_true(turbo_flow_runtime_owner_contract_valid(owner));
+
+    check_equal(
+        salts_plugin_registry_request_stop(&registry, provider_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_request_stop(&registry, resource_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, provider_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_false(quiescent);
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, resource_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_false(quiescent);
+
+    check_equal(turbo_flow_runtime_owner_quiesce(owner, 10u), SALTS_OK);
+    check_equal(turbo_flow_runtime_owner_drain(owner, 10u), SALTS_OK);
+    check_equal(turbo_flow_runtime_owner_shutdown(owner), SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_owner_destroy(compiled),
+        SALTS_OK);
+    owner = NULL;
+    check_equal(
+        flow_compiled_provider_instance_release(&compiled),
+        SALTS_OK);
+    check_null(compiled);
+
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, provider_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(
+        salts_plugin_registry_unload(&registry, provider_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, resource_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(
+        salts_plugin_registry_unload(&registry, resource_ref),
+        SALTS_PLUGIN_OK);
+
+    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    turbo_flow_destroy(flow);
+    check_equal(remove(FLOW_TURBODB_RESOURCE_FIXTURE_DB), 0);
+  }
+}
