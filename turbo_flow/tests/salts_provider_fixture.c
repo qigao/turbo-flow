@@ -11,6 +11,11 @@
 typedef struct fixture_provider_state_s {
   bool started;
   bool stopping;
+  unsigned owner_quiesce_calls;
+  unsigned owner_drain_calls;
+  unsigned owner_shutdown_calls;
+  unsigned owner_poll_calls;
+  unsigned owner_destroy_calls;
 } fixture_provider_state_t;
 
 static fixture_provider_state_t fixture_state;
@@ -74,16 +79,66 @@ static int fixture_preflight(void *self,
   return SALTS_OK;
 }
 
+static int fixture_owner_quiesce(void *self, uint64_t timeout_ms) {
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  if (!state || timeout_ms == 0u) return SALTS_EINVAL;
+  ++state->owner_quiesce_calls;
+  return SALTS_OK;
+}
+
+static int fixture_owner_drain(void *self, uint64_t timeout_ms) {
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  if (!state || timeout_ms == 0u || state->owner_quiesce_calls == 0u)
+    return SALTS_EINVAL;
+  ++state->owner_drain_calls;
+  return SALTS_OK;
+}
+
+static int fixture_owner_shutdown(void *self) {
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  if (!state || state->owner_drain_calls == 0u) return SALTS_EINVAL;
+  ++state->owner_shutdown_calls;
+  return SALTS_OK;
+}
+
+static int fixture_owner_poll(void *self, uint32_t timeout_ms) {
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  (void)timeout_ms;
+  if (!state) return SALTS_EINVAL;
+  ++state->owner_poll_calls;
+  return SALTS_OK;
+}
+
+static void fixture_owner_destroy(void *self) {
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  if (state) ++state->owner_destroy_calls;
+}
+
+CMETA_IMPLEMENTS(
+    turbo_flow_runtime_owner, fixture_runtime_owner,
+    TURBO_FLOW_RUNTIME_OWNER_CONTROL_THREAD |
+        TURBO_FLOW_RUNTIME_OWNER_EXTERNAL_POLL,
+    .quiesce = fixture_owner_quiesce,
+    .drain = fixture_owner_drain,
+    .shutdown = fixture_owner_shutdown,
+    .poll = fixture_owner_poll,
+    .destroy = fixture_owner_destroy);
+
 static int fixture_materialize(void *self, turbo_flow_t *flow,
                                const turbo_flow_provider_instance_v1_t *instance,
                                turbo_flow_runtime_owner *owner_out,
                                turbo_flow_config_error_t *error) {
-  (void)self;
-  (void)flow;
-  (void)instance;
-  (void)owner_out;
+  fixture_provider_state_t *state = (fixture_provider_state_t *)self;
+  int rc;
+
+  if (!state || !flow || !owner_out) return SALTS_EINVAL;
+  rc = fixture_preflight(self, instance, error);
+  if (rc != SALTS_OK) return rc;
+
+  *owner_out =
+      fixture_runtime_owner_as_turbo_flow_runtime_owner(state);
   if (error) *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  return SALTS_ENOTSUP;
+  return SALTS_OK;
 }
 
 CMETA_IMPLEMENTS(turbo_flow_provider_factory, fixture_provider_factory, 0u,
@@ -126,6 +181,11 @@ static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
   if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
   state->stopping = false;
   state->started = true;
+  state->owner_quiesce_calls = 0u;
+  state->owner_drain_calls = 0u;
+  state->owner_shutdown_calls = 0u;
+  state->owner_poll_calls = 0u;
+  state->owner_destroy_calls = 0u;
   return SALTS_PLUGIN_OK;
 }
 
