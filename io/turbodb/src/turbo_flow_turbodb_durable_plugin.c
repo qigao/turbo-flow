@@ -202,6 +202,8 @@ static int instance_database(
 
   if (!instance || !view || !instance->resource ||
       instance->resource->size != sizeof(*instance->resource) ||
+      !instance->resource->reference_name ||
+      !instance->resource->reference_name[0] ||
       !instance->resource->identity || !instance->resource->identity[0] ||
       !instance->resource->interface_desc ||
       !instance->resource->interface_value ||
@@ -310,7 +312,7 @@ static int provider_materialize(
   if (rc != SALTS_OK) return rc;
   rc = instance_database(instance, &database, error);
   if (rc != SALTS_OK) return rc;
-  rc = references(flow, instance->resource->identity);
+  rc = references(flow, instance->resource->reference_name);
   if (rc != SALTS_OK)
     return provider_fail(
         error, rc, instance->instance_name,
@@ -335,7 +337,7 @@ static int provider_materialize(
   }
 
   ++state->owners;
-  binding.resource_name = instance->resource->identity;
+  binding.resource_name = instance->resource->reference_name;
   binding.inbox = &owner->inbox;
   binding.identity_mode = config.identity_mode;
   binding.max_message_bytes = config.max_message_bytes;
