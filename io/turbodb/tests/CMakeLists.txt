@@ -51,14 +51,39 @@ cmake_add_test(
 set_tests_properties(test_turbodb_inbox_source
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
 
+set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
+  "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
+
+add_library(test_turbodb_database_resource_fixture SHARED
+  turbodb_database_resource_fixture.c)
+target_link_libraries(test_turbodb_database_resource_fixture
+  PRIVATE TurboFlow::TurboDbAdapter Salts::Plugin)
+target_include_directories(test_turbodb_database_resource_fixture
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(test_turbodb_database_resource_fixture PRIVATE
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}")
+set_target_properties(test_turbodb_database_resource_fixture PROPERTIES
+  FOLDER "io/turbodb/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 cmake_add_test(test_turbodb_durable_buffer_plugin
-  SOURCES test_turbodb_durable_buffer_plugin.c
-  LIBS TurboFlow::PluginHost TurboFlow::TurboDbAdapter Salts::TinyTest
+  SOURCES test_turbodb_provider_interface.c
+  LIBS TurboFlow::Product TurboFlow::TurboDbAdapter
+       Salts::Plugin Salts::TinyTest
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${PROJECT_SOURCE_DIR}/turbo_flow/src
   FOLDER "io/turbodb/tests")
-add_dependencies(test_turbodb_durable_buffer_plugin tf_turbodb_plugin)
+add_dependencies(test_turbodb_durable_buffer_plugin
+  tf_turbodb_plugin
+  test_turbodb_database_resource_fixture)
+target_compile_definitions(test_turbodb_durable_buffer_plugin PRIVATE
+  FLOW_TURBODB_PROVIDER_FIXTURE="$<TARGET_FILE:tf_turbodb_plugin>"
+  FLOW_TURBODB_RESOURCE_FIXTURE="$<TARGET_FILE:test_turbodb_database_resource_fixture>"
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}")
 set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
-  LABELS "turbodb-adapter;graph;durable;plugin"
-  ENVIRONMENT "TURBO_FLOW_TURBODB_PLUGIN_PATH=$<TARGET_FILE:tf_turbodb_plugin>")
+  LABELS "turbodb-adapter;graph;durable;plugin;provider;resource;config")
 
 cmake_add_test(
   test_turbodb_typed_config
