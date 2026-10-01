@@ -155,7 +155,7 @@ spec("TurboFlow Salts provider binding") {
         DATA_BIND_OK);
     BatchConfig_init(&config);
     config.batch = 7u;
-    config.durable = true;
+    config.concurrency = 2u;
 
     instance.instance_name = "stage_a";
     instance.config.type_name = artifact->type_name;
