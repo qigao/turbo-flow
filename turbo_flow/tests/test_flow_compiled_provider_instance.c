@@ -95,7 +95,7 @@ static void stop_and_unload(
 spec("compiled provider instance") {
   it("binds provider config and resource before provider preflight") {
     static const char *src =
-        "stage worker adapter fixture.provider {\n"
+        "stage provider_stage adapter fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 7\n"
         "  durable true\n"
@@ -119,7 +119,7 @@ spec("compiled provider instance") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    stage_index = turbo_flow_find_stage(flow, "worker");
+    stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
     check_equal(salts_plugin_registry_init(&registry, &registry_config),
@@ -157,7 +157,7 @@ spec("compiled provider instance") {
         flow_compiled_provider_instance_view(compiled, &view),
         SALTS_OK);
     check_not_null(view);
-    check_equal(view->instance_name, "worker");
+    check_equal(view->instance_name, "provider_stage");
     check_equal(view->config.type_name, "BatchConfig");
     check_not_null(view->config.data);
     check_not_null(view->config.value);
@@ -218,7 +218,7 @@ spec("compiled provider instance") {
 
   it("rejects invalid typed config before resource resolution") {
     static const char *src =
-        "stage worker adapter fixture.provider {\n"
+        "stage provider_stage adapter fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 0\n"
         "  durable true\n"
@@ -239,7 +239,7 @@ spec("compiled provider instance") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    stage_index = turbo_flow_find_stage(flow, "worker");
+    stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
     check_equal(salts_plugin_registry_init(&registry, &registry_config),
@@ -274,7 +274,7 @@ spec("compiled provider instance") {
 
   it("rejects a missing required resource before provider preflight") {
     static const char *src =
-        "stage worker adapter fixture.provider {\n"
+        "stage provider_stage adapter fixture.provider {\n"
         "  batch 7\n"
         "  durable true\n"
         "}\n";
@@ -291,7 +291,7 @@ spec("compiled provider instance") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    stage_index = turbo_flow_find_stage(flow, "worker");
+    stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
     check_equal(salts_plugin_registry_init(&registry, &registry_config),
