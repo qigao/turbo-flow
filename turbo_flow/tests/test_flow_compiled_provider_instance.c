@@ -98,7 +98,7 @@ spec("compiled provider instance") {
         "stage provider_stage adapter fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 7\n"
-        "  durable true\n"
+        "  concurrency 2\n"
         "}\n";
     salts_plugin_registry registry = {0};
     salts_plugin_registry_config registry_config = {2u};
@@ -221,7 +221,7 @@ spec("compiled provider instance") {
         "stage provider_stage adapter fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 0\n"
-        "  durable true\n"
+        "  concurrency 2\n"
         "}\n";
     salts_plugin_registry registry = {0};
     salts_plugin_registry_config registry_config = {1u};
@@ -276,7 +276,7 @@ spec("compiled provider instance") {
     static const char *src =
         "stage provider_stage adapter fixture.provider {\n"
         "  batch 7\n"
-        "  durable true\n"
+        "  concurrency 2\n"
         "}\n";
     salts_plugin_registry registry = {0};
     salts_plugin_registry_config registry_config = {1u};
