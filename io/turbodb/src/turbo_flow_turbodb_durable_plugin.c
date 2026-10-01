@@ -173,12 +173,24 @@ static int database_view_admitted(
   if (!file_backed) return 0;
 
   orm_error_init(&orm_error);
-  return orm_runtime_driver_info(
-             view->runtime, orm_view("sqlite"), &info, &orm_error) ==
-             ORM_STATUS_OK &&
-         info.canonical_id_size == sizeof("sqlite") - 1u &&
-         memcmp(info.canonical_id, "sqlite",
-                sizeof("sqlite") - 1u) == 0;
+  if (orm_runtime_driver_info(
+          view->runtime, orm_view("sqlite"), &info, &orm_error) !=
+      ORM_STATUS_OK ||
+      info.canonical_id_size != sizeof("sqlite") - 1u ||
+      memcmp(info.canonical_id, "sqlite",
+             sizeof("sqlite") - 1u) != 0)
+    return 0;
+
+  {
+    const uint64_t required =
+        ORM_DRIVER_CAP_SELECT |
+        ORM_DRIVER_CAP_INSERT |
+        ORM_DRIVER_CAP_UPDATE |
+        ORM_DRIVER_CAP_DELETE |
+        ORM_DRIVER_CAP_RAW_SQL |
+        ORM_DRIVER_CAP_TRANSACTION;
+    return (info.capabilities & required) == required;
+  }
 }
 
 static int instance_database(
