@@ -183,7 +183,7 @@ static int resolve_resource(
     }
     return SALTS_ENOENT;
   }
-  out->identity = "telemetry_db";
+  out->identity = "deployment.telemetry.primary";
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.turbodb.database";
@@ -389,7 +389,9 @@ spec("TurboDB canonical Salts provider") {
     check_equal(view->instance_name, "durable_buffer");
     check_equal(view->config.type_name, "DurableTurboDbConfig");
     check_not_null(view->resource);
-    check_equal(view->resource->identity, "telemetry_db");
+    check_equal(view->resource->reference_name, "telemetry_db");
+    check_equal(
+        view->resource->identity, "deployment.telemetry.primary");
 
     check_equal(
         flow_compiled_provider_instance_materialize(
