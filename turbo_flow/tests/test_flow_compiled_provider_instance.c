@@ -112,6 +112,7 @@ spec("compiled provider instance") {
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     flow_compiled_provider_instance_t *compiled = NULL;
     const turbo_flow_provider_instance_v1_t *view = NULL;
+    turbo_flow_runtime_owner *owner = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_t *flow = turbo_flow_create();
     int stage_index;
@@ -167,6 +168,21 @@ spec("compiled provider instance") {
     check_equal(view->resource->export_id, "fixture.resource");
 
     check_equal(
+        flow_compiled_provider_instance_materialize(compiled, flow, &error),
+        SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_owner(compiled, &owner),
+        SALTS_OK);
+    check_not_null(owner);
+    check_true(turbo_flow_runtime_owner_contract_valid(owner));
+    check_true(turbo_flow_runtime_owner_has(
+        owner, TURBO_FLOW_RUNTIME_OWNER_EXTERNAL_POLL));
+    check_equal(turbo_flow_runtime_owner_poll(owner, 0u), SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_materialize(compiled, flow, &error),
+        SALTS_EALREADY);
+
+    check_equal(
         salts_plugin_registry_request_stop(&registry, provider_ref),
         SALTS_PLUGIN_OK);
     check_equal(
@@ -189,6 +205,23 @@ spec("compiled provider instance") {
     check_equal(
         salts_plugin_registry_unload(&registry, resource_ref),
         SALTS_PLUGIN_BUSY);
+
+    check_equal(
+        flow_compiled_provider_instance_release(&compiled),
+        SALTS_EBUSY);
+    check_not_null(compiled);
+
+    check_equal(turbo_flow_runtime_owner_quiesce(owner, 10u), SALTS_OK);
+    check_equal(turbo_flow_runtime_owner_drain(owner, 10u), SALTS_OK);
+    check_equal(turbo_flow_runtime_owner_shutdown(owner), SALTS_OK);
+    check_equal(
+        flow_compiled_provider_instance_owner_destroy(compiled),
+        SALTS_OK);
+    owner = NULL;
+    check_equal(
+        flow_compiled_provider_instance_owner(compiled, &owner),
+        SALTS_EINVAL);
+    check_null(owner);
 
     check_equal(
         flow_compiled_provider_instance_release(&compiled),
