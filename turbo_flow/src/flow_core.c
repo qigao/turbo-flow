@@ -82,6 +82,7 @@ void flow_stage_impl_destroy(flow_stage_plan_impl_t *stage) {
   if (!stage) return;
   tstr_freep(&stage->name);
   tstr_freep(&stage->adapter_name);
+  tstr_freep(&stage->provider_name);
   tstr_freep(&stage->operation_name);
   tstr_freep(&stage->resource_name);
   flow_provider_config_literals_destroy(&stage->provider_config_literals);
@@ -2168,6 +2169,7 @@ const turbo_flow_stage_plan_t *turbo_flow_stage_at(const turbo_flow_t *flow, siz
   view.is_source = stage->is_source;
   view.is_buffer = stage->is_buffer;
   view.adapter_name = stage->adapter_name;
+  view.provider_name = stage->provider_name;
   view.operation_name =
       stage->operation_resolved ? stage->resolved_operation.name : stage->operation_name;
   view.resource_name = stage->resource_name;

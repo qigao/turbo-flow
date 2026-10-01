@@ -11,7 +11,7 @@
 #include <string.h>
 }
 
-%token SOURCE STAGE STEP USE IN OUT WORKER EXEC WORKERS LANES POOL ADAPTER OPERATION RESOURCE BUFFER.
+%token SOURCE STAGE STEP USE IN OUT WORKER EXEC WORKERS LANES POOL ADAPTER OPERATION PROVIDER RESOURCE BUFFER.
 %token INLINE THREAD CORO ROUTE WHEN REJECT RETRY ATTEMPTS DELAY.
 %token REORDER CAPACITY TIMEOUT.
 %token IDENT NUMBER STRING ARROW EXPR.
@@ -39,6 +39,7 @@ top_items ::= top_items top_item.
 top_item ::= source_decl NEWLINE.
 top_item ::= source_config_block.
 top_item ::= buffer_decl NEWLINE.
+top_item ::= buffer_config_block.
 top_item ::= stage_decl NEWLINE.
 top_item ::= stage_config_block.
 top_item ::= stage_block.
@@ -70,9 +71,30 @@ source_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
 }
 source_config_line ::= NEWLINE.
 
-buffer_decl ::= BUFFER IDENT(N) RESOURCE adapter_name(R). {
-  flow_parse_add_buffer(ctx, N, R);
+buffer_decl ::= BUFFER IDENT(N) PROVIDER adapter_name(P) RESOURCE adapter_name(R). {
+  flow_stage_spec_t spec = flow_stage_spec_default();
+  flow_parse_set_provider(ctx, &spec, P);
+  flow_parse_set_resource(ctx, &spec, R);
+  flow_parse_add_buffer(ctx, N, spec);
 }
+
+buffer_config_block ::= buffer_config_start NEWLINE buffer_config_lines RBRACE NEWLINE. {
+  flow_parse_finish_node_config(ctx);
+}
+buffer_config_start ::= BUFFER IDENT(N) PROVIDER adapter_name(P) LBRACE. {
+  flow_stage_spec_t spec = flow_stage_spec_default();
+  flow_parse_set_provider(ctx, &spec, P);
+  flow_parse_begin_node_config(ctx, N, spec, FLOW_NODE_CONFIG_BUFFER);
+}
+buffer_config_lines ::= .
+buffer_config_lines ::= buffer_config_lines buffer_config_line.
+buffer_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
+  flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
+}
+buffer_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
+  flow_parse_add_provider_config_literal(ctx, N, V);
+}
+buffer_config_line ::= NEWLINE.
 
 stage_decl ::= STAGE IDENT(N) stage_options(O). {
   flow_parse_add_stage(ctx, N, O);
@@ -271,6 +293,7 @@ binding_segment(A) ::= LANES(T). { A = T; }
 binding_segment(A) ::= POOL(T). { A = T; }
 binding_segment(A) ::= ADAPTER(T). { A = T; }
 binding_segment(A) ::= OPERATION(T). { A = T; }
+binding_segment(A) ::= PROVIDER(T). { A = T; }
 binding_segment(A) ::= RESOURCE(T). { A = T; }
 binding_segment(A) ::= INLINE(T). { A = T; }
 binding_segment(A) ::= THREAD(T). { A = T; }

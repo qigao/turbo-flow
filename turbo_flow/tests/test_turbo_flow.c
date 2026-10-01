@@ -893,6 +893,88 @@ suite("Turbo Flow") {
       turbo_flow_destroy(flow);
     }
 
+    it("requires explicit provider identity for inline buffers") {
+      static const char *src =
+          "source input\n"
+          "buffer inbox provider turbodb.inbox resource telemetry_db\n"
+          "stage main {\n"
+          "  input -> inbox\n"
+          "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      const turbo_flow_stage_plan_t *buffer;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+
+      buffer = turbo_flow_stage_at(
+          flow, (size_t)turbo_flow_find_stage(flow, "inbox"));
+      check_not_null(buffer);
+      check_true(buffer->is_buffer);
+      check_null(buffer->adapter_name);
+      check_equal(buffer->provider_name, "turbodb.inbox");
+      check_equal(buffer->resource_name, "telemetry_db");
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("parses buffer provider config blocks into compile-only literals") {
+      static const char *src =
+          "source input\n"
+          "buffer inbox provider turbodb.inbox {\n"
+          "  resource telemetry_db\n"
+          "  max_records 128\n"
+          "  durable true\n"
+          "}\n"
+          "stage main {\n"
+          "  input -> inbox\n"
+          "}\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      const flow_stage_plan_impl_t *buffer;
+      const flow_provider_config_literal_t *literal;
+
+      check_not_null(flow);
+      check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+
+      buffer = (const flow_stage_plan_impl_t *)vec_at_const(
+          &flow->stages, (size_t)turbo_flow_find_stage(flow, "inbox"));
+      check_not_null(buffer);
+      check_true(buffer->is_buffer);
+      check_null(buffer->adapter_name);
+      check_equal(buffer->provider_name, "turbodb.inbox");
+      check_equal(buffer->resource_name, "telemetry_db");
+      check_equal(vec_size(&buffer->provider_config_literals), (size_t)2u);
+
+      literal = (const flow_provider_config_literal_t *)vec_at_const(
+          &buffer->provider_config_literals, 0u);
+      check_not_null(literal);
+      check_equal(literal->name, "max_records");
+      check_equal(literal->kind, FLOW_PROVIDER_CONFIG_LITERAL_UINT);
+      check_equal(literal->uint_value, UINT64_C(128));
+
+      literal = (const flow_provider_config_literal_t *)vec_at_const(
+          &buffer->provider_config_literals, 1u);
+      check_not_null(literal);
+      check_equal(literal->name, "durable");
+      check_equal(literal->kind, FLOW_PROVIDER_CONFIG_LITERAL_BOOL);
+      check_equal(literal->bool_value, 1);
+
+      turbo_flow_destroy(flow);
+    }
+
+    it("rejects legacy buffer declarations without provider identity") {
+      static const char *src =
+          "buffer inbox resource telemetry_db\n";
+      turbo_flow_t *flow = turbo_flow_create();
+      int rc;
+
+      check_not_null(flow);
+      rc = turbo_flow_parse_string(flow, src, strlen(src));
+      check_true(rc != SALTS_OK);
+      check_true(turbo_flow_last_error(flow)->code != SALTS_OK);
+
+      turbo_flow_destroy(flow);
+    }
+
     it("parses step configuration blocks inside reusable stages") {
       static const char *src =
           "stage cleanse {\n"

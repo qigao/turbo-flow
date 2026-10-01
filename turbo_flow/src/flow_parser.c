@@ -250,6 +250,20 @@ int flow_parse_set_adapter(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_
   return SALTS_OK;
 }
 
+int flow_parse_set_provider(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
+  if (!spec || !token.value || token.length == 0) {
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "provider identity required");
+  }
+  if (spec->has_provider) {
+    return parse_fail(ctx, SALTS_EALREADY, token.line, token.column, "duplicate provider option");
+  }
+  spec->provider_name = token_view(token);
+  spec->provider_line = token.line;
+  spec->provider_column = token.column;
+  spec->has_provider = 1;
+  return SALTS_OK;
+}
+
 int flow_parse_set_operation(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token) {
   if (!spec || token.length == 0) {
     return parse_fail(ctx, SALTS_EINVAL, token.line, token.column, "operation name required");
@@ -466,6 +480,7 @@ static int copy_stage_with_prefix(flow_parse_ctx_t *ctx, const flow_stage_plan_i
   stage.retry = source->retry;
   stage.reorder = source->reorder;
   if (clone_tstr(&stage.adapter_name, source->adapter_name) != SALTS_OK ||
+      clone_tstr(&stage.provider_name, source->provider_name) != SALTS_OK ||
       clone_tstr(&stage.operation_name, source->operation_name) != SALTS_OK ||
       clone_tstr(&stage.resource_name, source->resource_name) != SALTS_OK ||
       flow_provider_config_literals_copy(&stage.provider_config_literals,
@@ -594,6 +609,13 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
       return parse_fail(ctx, SALTS_ENOMEM, spec.adapter_line, spec.adapter_column, "out of memory");
     }
   }
+  if (spec.provider_name.data && spec.provider_name.len > 0) {
+    stage.provider_name = tstr_from_v(spec.provider_name);
+    if (!stage.provider_name) {
+      flow_stage_impl_destroy(&stage);
+      return parse_fail(ctx, SALTS_ENOMEM, spec.provider_line, spec.provider_column, "out of memory");
+    }
+  }
   if (spec.operation_name.data && spec.operation_name.len > 0) {
     stage.operation_name = tstr_from_v(spec.operation_name);
     if (!stage.operation_name) {
@@ -714,6 +736,8 @@ int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
     rc = flow_parse_add_source(ctx, name, spec);
   } else if (kind == FLOW_NODE_CONFIG_STAGE) {
     rc = flow_parse_add_stage(ctx, name, spec);
+  } else if (kind == FLOW_NODE_CONFIG_BUFFER) {
+    rc = flow_parse_add_buffer(ctx, name, spec);
   } else {
     rc = parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                     "unknown node configuration block kind");
@@ -734,8 +758,7 @@ int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_s
   return stage_plan_add(ctx, token_view(name), 1, 0, 0, spec, name.line, name.column);
 }
 
-int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t resource) {
-  flow_stage_spec_t spec = flow_stage_spec_default();
+int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec) {
   flow_stage_plan_impl_t *stage;
   int index;
   int rc;
@@ -748,8 +771,10 @@ int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_token_t
     return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "declarations are not allowed after the root block");
   }
-  rc = flow_parse_set_resource(ctx, &spec, resource);
-  if (rc != SALTS_OK) return rc;
+  if (!spec.has_provider || !spec.provider_name.data || spec.provider_name.len == 0u) {
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "buffer provider identity is required");
+  }
   rc = stage_plan_add(ctx, token_view(name), 0, 0, 0, spec, name.line, name.column);
   if (rc != SALTS_OK) return rc;
   index = flow_find_stage_view(ctx->flow, token_view(name));

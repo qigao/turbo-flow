@@ -166,11 +166,18 @@ Declarations and reusable stage definitions after the root block are rejected.
 program         := top_items
 
 top_item        := source_decl NEWLINE
+                 | buffer_decl NEWLINE
+                 | buffer_config_block
                  | stage_decl NEWLINE
                  | stage_block
                  | NEWLINE
 
 source_decl     := "source" IDENT source_options
+buffer_decl     := "buffer" IDENT "provider" adapter_name
+                   "resource" adapter_name
+buffer_config_block
+                := "buffer" IDENT "provider" adapter_name "{"
+                   NEWLINE buffer_config_lines "}" NEWLINE
 stage_decl      := "stage" IDENT stage_options
 step_decl       := "step" IDENT stage_options
 use_stmt        := "use" IDENT "=" IDENT
@@ -178,6 +185,22 @@ use_stmt        := "use" IDENT "=" IDENT
 
 `source` declarations are accepted at top level for compatibility and inside
 the root block. Reusable composite stages cannot declare sources.
+
+Buffer provider identity is explicit in `.flow`. It is never inferred from the
+deployment resource:
+
+```flow
+buffer inbox provider turbodb.inbox resource telemetry_db
+
+buffer audit provider turbodb.inbox {
+  resource audit_db
+  max_records 100000
+}
+```
+
+The parser stores the provider identity on the buffer stage and keeps
+`resource` as a separate deployment-resource reference. The legacy form
+`buffer NAME resource RESOURCE` is rejected.
 
 Supported source options:
 
@@ -197,7 +220,7 @@ such as `socket.server` and direction names such as `codec.json.in` do not need
 quotes. The dot must be adjacent to both segments; `http . client` is rejected.
 Quoted names remain supported for compatibility and names outside this shape.
 This includes `route`, `when`, and `reject`: they retain keyword meaning in
-statements but are ordinary segments after `adapter`, `operation`, or
+statements but are ordinary segments after `adapter`, `provider`, `operation`, or
 `resource`. In particular, `when` starts expression capture only after an arrow
 on the same route line, so bindings such as `rules.when` remain unambiguous.
 

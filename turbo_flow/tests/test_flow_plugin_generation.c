@@ -172,7 +172,7 @@ static const char flow_plugin_generation_resource_yaml[] =
 
 static const char flow_plugin_generation_resource_graph[] =
     "source input adapter input.adapter\n"
-    "buffer routing_buffer resource routing\n"
+    "buffer routing_buffer provider fixture.transactional.resource resource routing\n"
     "stage main {\n"
     "  input -> routing_buffer\n"
     "}\n";
@@ -276,7 +276,7 @@ flow_plugin_generation_test_replace_documents(flow_plugin_generation_test_contex
 
 static void check_expired_managed_source_retirement(int pending) {
   static const char graph[] = "source input adapter input.adapter\n"
-    "buffer intake resource intake.store\n"
+    "buffer intake provider fixture.transactional.resource resource intake.store\n"
     "stage output adapter output.adapter\n"
     "stage retained adapter async.adapter\n"
     "stage main {\n input -> intake -> output\n input -> retained\n}\n";
@@ -362,7 +362,7 @@ spec("transactional plugin Graph generation") {
   }
   it("retires an open managed source while fencing new demand and draining accepted values") {
     static const char graph[] = "source input adapter input.adapter\n"
-      "buffer intake resource intake.store\n"
+      "buffer intake provider fixture.transactional.resource resource intake.store\n"
       "stage output adapter output.adapter\n"
       "stage main {\n input -> intake -> output\n}\n";
     static const char yaml[] = "version: 1\nchannels:\n"
@@ -428,8 +428,8 @@ spec("transactional plugin Graph generation") {
   }
   it("drains chained durable backlog before owner quiesce and preserves owners on failure") {
     static const char graph[] = "source input adapter input.adapter\n"
-      "buffer second resource second.store\n"
-      "buffer first resource first.store\n"
+      "buffer second provider fixture.transactional.resource resource second.store\n"
+      "buffer first provider fixture.transactional.resource resource first.store\n"
       "stage output adapter output.adapter\n"
       "stage main {\n input -> first -> second -> output\n}\n";
     static const char yaml[] = "version: 1\nchannels:\n"

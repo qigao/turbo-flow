@@ -68,6 +68,7 @@ typedef struct flow_stage_plan_impl_s {
   int is_port_output;
   int async_emitting;
   tstr adapter_name;
+  tstr provider_name;
   tstr operation_name;
   tstr resource_name;
   /** Bounded source literals used only by compile/preflight provider binding. */
@@ -248,6 +249,7 @@ typedef struct flow_runtime_node_plan_s {
   /** Borrowed immutable compile-time names; valid for the sealed plan lifetime. */
   const char *stage_name;
   const char *adapter_name;
+  const char *provider_name;
   const char *operation_name;
   const char *resource_name;
   /** DataBind Channel plan index for Source stages, or FLOW_PLAN_INDEX_NONE. */

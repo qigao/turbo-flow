@@ -474,7 +474,7 @@ spec("RulesForge real network composition") {
     static const char graph_text[] =
         "source jtt_decoded\n"
         "source coap_decoded\n"
-        "buffer intake resource intake.store\n"
+        "buffer intake provider flow.durable.memory resource intake.store\n"
         "stage rules operation rulesforge.apply resource rules.adult\n"
         "stage verify operation test.verify_decision\n"
         "stage output adapter datagram.sink\n"

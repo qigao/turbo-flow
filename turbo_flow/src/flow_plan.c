@@ -545,6 +545,7 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     }
     node->stage_name = stage->name;
     node->adapter_name = stage->adapter_name;
+    node->provider_name = stage->provider_name;
     node->operation_name = stage->operation_name;
     node->resource_name = stage->resource_name;
     node->databind_channel_index = FLOW_PLAN_INDEX_NONE;
@@ -852,6 +853,7 @@ int turbo_flow_execution_plan_stage_at(
           : *region_index;
   out->stage_name = node->stage_name;
   out->adapter_name = node->adapter_name;
+  out->provider_name = node->provider_name;
   out->operation_name = node->operation_name;
   out->resource_name = node->resource_name;
   out->input_semantic_id = semantics->input_semantic_id;
