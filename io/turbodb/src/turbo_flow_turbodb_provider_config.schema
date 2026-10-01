@@ -19,8 +19,6 @@ message DurableTurboDbConfig {
   @Min(1) @Max(9223372036854775807) uint64 max_claims;
   @Min(1) @Max(64) uint32 connection_count;
   DurableIdentityMode identity_mode;
-  @Size(min = 1, max = 4095) string filename;
-  @Size(min = 1, max = 63) @Pattern("^[A-Za-z_][A-Za-z0-9_]*$") string namespace_name;
   @Max(9223372036854775807) uint64 expected_generation;
   InboxOpenMode open_mode;
 }
