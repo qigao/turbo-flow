@@ -13,7 +13,9 @@ struct flow_compiled_provider_instance_s {
   turbo_flow_provider_config_view_v1_t config_view;
   turbo_flow_provider_resource_view_v1_t resource_view;
   turbo_flow_provider_instance_v1_t instance;
+  turbo_flow_runtime_owner owner;
   int preflight_complete;
+  int owner_live;
 };
 
 static int compiled_provider_error(
@@ -66,6 +68,7 @@ static int compiled_provider_cleanup(
   int rc;
 
   if (!compiled) return SALTS_EINVAL;
+  if (compiled->owner_live) return SALTS_EBUSY;
 
   if (compiled->typed_config.artifact || compiled->typed_config.plan ||
       compiled->typed_config.storage_allocation ||
@@ -268,6 +271,68 @@ int flow_compiled_provider_instance_view(
       !compiled->instance.instance_name[0])
     return SALTS_EINVAL;
   *out = &compiled->instance;
+  return SALTS_OK;
+}
+
+int flow_compiled_provider_instance_materialize(
+    flow_compiled_provider_instance_t *compiled,
+    turbo_flow_t *flow,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_runtime_owner owner = {0};
+  int rc;
+
+  if (!compiled || !flow || !compiled->preflight_complete ||
+      !compiled->provider_binding)
+    return compiled_provider_error(
+        error, SALTS_EINVAL,
+        compiled ? compiled->instance.instance_name : NULL, NULL,
+        "invalid compiled provider materialization arguments");
+  if (compiled->owner_live)
+    return compiled_provider_error(
+        error, SALTS_EALREADY, compiled->instance.instance_name, NULL,
+        "compiled provider instance is already materialized");
+
+  rc = turbo_flow_provider_binding_materialize(
+      compiled->provider_binding, flow, &compiled->instance, &owner, error);
+  if (rc != SALTS_OK) {
+    if (!error || error->size != sizeof(*error) || error->status == SALTS_OK)
+      compiled_provider_error(
+          error, rc, compiled->instance.instance_name, NULL,
+          "provider materialization failed");
+    return rc;
+  }
+
+  compiled->owner = owner;
+  compiled->owner_live = 1;
+  if (!turbo_flow_runtime_owner_contract_valid(&compiled->owner))
+    return compiled_provider_error(
+        error, SALTS_EPROTO, compiled->instance.instance_name, NULL,
+        "provider returned an invalid runtime owner");
+
+  return SALTS_OK;
+}
+
+int flow_compiled_provider_instance_owner(
+    flow_compiled_provider_instance_t *compiled,
+    turbo_flow_runtime_owner **out) {
+  if (out) *out = NULL;
+  if (!compiled || !out || !compiled->owner_live)
+    return SALTS_EINVAL;
+  if (!turbo_flow_runtime_owner_contract_valid(&compiled->owner))
+    return SALTS_EPROTO;
+  *out = &compiled->owner;
+  return SALTS_OK;
+}
+
+int flow_compiled_provider_instance_owner_destroy(
+    flow_compiled_provider_instance_t *compiled) {
+  if (!compiled || !compiled->owner_live) return SALTS_EINVAL;
+  if (!turbo_flow_runtime_owner_contract_valid(&compiled->owner))
+    return SALTS_EPROTO;
+
+  turbo_flow_runtime_owner_destroy(&compiled->owner);
+  memset(&compiled->owner, 0, sizeof(compiled->owner));
+  compiled->owner_live = 0;
   return SALTS_OK;
 }
 
