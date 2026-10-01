@@ -39,14 +39,14 @@ static int resolve_resource(
   if (!fixture || !out || out->size != sizeof(*out))
     return SALTS_EINVAL;
   ++fixture->calls;
-  if (!resource_name || strcmp(resource_name, "db-main") != 0) {
+  if (!resource_name || strcmp(resource_name, FLOW_TEST_RESOURCE_IDENTITY) != 0) {
     if (error && error->size == sizeof(*error)) {
       *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
       error->status = SALTS_ENOENT;
     }
     return SALTS_ENOENT;
   }
-  out->identity = "db-main";
+  out->identity = FLOW_TEST_RESOURCE_IDENTITY;
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -139,7 +139,7 @@ spec("TurboFlow Salts provider binding") {
     resource_resolver.ctx = &resource_fixture;
     resource_resolver.resolve = resolve_resource;
     check_equal(turbo_flow_resource_binding_acquire(
-                    &resource_resolver, "db-main", &contract.resource,
+                    &resource_resolver, FLOW_TEST_RESOURCE_IDENTITY, &contract.resource,
                     &resource_binding, &error),
                 SALTS_OK);
     check_not_null(resource_binding);
@@ -148,7 +148,7 @@ spec("TurboFlow Salts provider binding") {
                     resource_binding, &resource_view),
                 SALTS_OK);
 
-    artifact = BatchConfig_native_artifact();
+    artifact = contract.config.message_artifact;
     check_not_null(artifact);
     check_equal(
         artifact->native_binding(&native, &databind_error),
