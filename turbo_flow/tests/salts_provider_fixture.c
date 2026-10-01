@@ -60,8 +60,10 @@ static int fixture_preflight(void *self,
 
   resource = instance->resource;
   if (!resource || resource->size != sizeof(*resource) ||
+      !resource->reference_name ||
+      strcmp(resource->reference_name, FLOW_TEST_RESOURCE_IDENTITY) != 0 ||
       !resource->identity ||
-      strcmp(resource->identity, FLOW_TEST_RESOURCE_IDENTITY) != 0 ||
+      strcmp(resource->identity, "deployment.db_main") != 0 ||
       !resource->export_id ||
       strcmp(resource->export_id, "fixture.resource") != 0 ||
       !resource->interface_desc ||
