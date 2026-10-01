@@ -70,7 +70,7 @@ static int resolve_resource(
     }
     return SALTS_ENOENT;
   }
-  out->identity = FLOW_TEST_RESOURCE_IDENTITY;
+  out->identity = "deployment.db_main";
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -164,7 +164,8 @@ spec("compiled provider instance") {
     check_not_null(view->config.value);
     check_true(view->config.value_bytes > 0u);
     check_not_null(view->resource);
-    check_equal(view->resource->identity, FLOW_TEST_RESOURCE_IDENTITY);
+    check_equal(view->resource->reference_name, FLOW_TEST_RESOURCE_IDENTITY);
+    check_equal(view->resource->identity, "deployment.db_main");
     check_equal(view->resource->export_id, "fixture.resource");
 
     check_equal(
