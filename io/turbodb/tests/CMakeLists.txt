@@ -53,6 +53,8 @@ set_tests_properties(test_turbodb_inbox_source
 
 set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
   "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
+set(TURBO_FLOW_TURBODB_SQLITE_DRIVER
+  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
 add_library(test_turbodb_database_resource_fixture SHARED
   turbodb_database_resource_fixture.c)
@@ -61,7 +63,8 @@ target_link_libraries(test_turbodb_database_resource_fixture
 target_include_directories(test_turbodb_database_resource_fixture
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_definitions(test_turbodb_database_resource_fixture PRIVATE
-  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}")
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_target_properties(test_turbodb_database_resource_fixture PROPERTIES
   FOLDER "io/turbodb/tests/fixtures"
   C_VISIBILITY_PRESET hidden
@@ -81,7 +84,8 @@ add_dependencies(test_turbodb_durable_buffer_plugin
 target_compile_definitions(test_turbodb_durable_buffer_plugin PRIVATE
   FLOW_TURBODB_PROVIDER_FIXTURE="$<TARGET_FILE:tf_turbodb_plugin>"
   FLOW_TURBODB_RESOURCE_FIXTURE="$<TARGET_FILE:test_turbodb_database_resource_fixture>"
-  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}")
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
   LABELS "turbodb-adapter;graph;durable;plugin;provider;resource;config")
 
