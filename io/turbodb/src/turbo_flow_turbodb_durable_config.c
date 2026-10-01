@@ -51,10 +51,10 @@ int durable_turbodb_config_from_typed(
   out->inbox = turbo_flow_turbodb_inbox_config_default();
 
   switch (typed->identity_mode) {
-    case DurableIdentityMode_Generated:
+    case 0u:
       out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_GENERATED;
       break;
-    case DurableIdentityMode_StableRequired:
+    case 1u:
       out->identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
       break;
     default:
@@ -63,14 +63,14 @@ int durable_turbodb_config_from_typed(
   }
 
   switch (typed->open_mode) {
-    case InboxOpenMode_Exclusive:
+    case 0u:
       if (typed->expected_generation != 0u)
         return typed_fail(
             error, SALTS_EINVAL, name, "expected_generation",
             "exclusive open requires expected_generation == 0");
       out->inbox.open_mode = TURBO_FLOW_TURBODB_INBOX_OPEN_EXCLUSIVE;
       break;
-    case InboxOpenMode_Takeover:
+    case 1u:
       if (typed->expected_generation == 0u)
         return typed_fail(
             error, SALTS_EINVAL, name, "expected_generation",
