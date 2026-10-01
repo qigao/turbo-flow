@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID "turbo_flow.provider_factory"
-enum { TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION = 1u };
+enum { TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION = 2u };
 
 /**
  * Generated DataBind contract required to bind one provider's .flow literals.
@@ -88,12 +88,15 @@ typedef struct turbo_flow_provider_config_view_v1_s {
 /**
  * Already-resolved deployment resource Interface borrowed for a callback.
  *
- * identity/export_id are non-secret diagnostics. interface_value points at the
- * exact mutable {self,vtable} handle published by the resource's Salts Plugin
- * INTERFACE export. Generation owns the corresponding plugin lease.
+ * reference_name is the exact .flow authoring reference used for Graph binding.
+ * identity/export_id are resolved non-secret deployment diagnostics and may differ
+ * from reference_name. interface_value points at the exact mutable {self,vtable}
+ * handle published by the resource's Salts Plugin INTERFACE export. Generation
+ * owns the corresponding plugin lease.
  */
 typedef struct turbo_flow_provider_resource_view_v1_s {
   size_t size;
+  const char *reference_name;
   const char *identity;
   const char *export_id;
   const cmeta_interface_desc *interface_desc;
@@ -101,7 +104,7 @@ typedef struct turbo_flow_provider_resource_view_v1_s {
 } turbo_flow_provider_resource_view_v1_t;
 
 #define TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT \
-  {sizeof(turbo_flow_provider_resource_view_v1_t), NULL, NULL, NULL, NULL}
+  {sizeof(turbo_flow_provider_resource_view_v1_t), NULL, NULL, NULL, NULL, NULL}
 
 /** One explicit .flow provider instance passed to preflight/materialize. */
 typedef struct turbo_flow_provider_instance_v1_s {
