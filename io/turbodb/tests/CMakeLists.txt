@@ -85,6 +85,9 @@ target_compile_definitions(test_turbodb_durable_buffer_plugin PRIVATE
 set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
   LABELS "turbodb-adapter;graph;durable;plugin;provider;resource;config")
 
+# Keep the canonical provider gate self-contained while compiling the installed
+# TurboDB/resource headers under C++17; the broader adapter runtime suite has
+# additional CBind dependencies outside this focused package contract.
 cmake_add_test(
   test_turbodb_typed_config
   SOURCES
