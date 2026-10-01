@@ -265,6 +265,7 @@ static int provider_materialize(
         error, rc, instance->instance_name,
         "TurboDB durable provider requires exactly one buffer reference");
 
+  config.inbox.database_runtime = database.runtime;
   config.inbox.database = database.database;
   config.inbox.namespace_name = database.namespace_name;
 
