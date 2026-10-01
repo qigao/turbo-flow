@@ -1,7 +1,7 @@
 set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
   "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
 set(TURBO_FLOW_TURBODB_SQLITE_DRIVER
-  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_MODULE_SUFFIX}")
 if(NOT EXISTS "${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
   message(FATAL_ERROR
     "TurboDB packaged SQLite driver is required: ${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
