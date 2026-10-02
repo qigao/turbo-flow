@@ -559,7 +559,7 @@ static int flow_parse_copy_provider_literals(
     event.bool_value = source->bool_value;
     event.line = source->line;
     event.column = source->column;
-    if (source->text.data && source->text.len != 0u) {
+    if (source->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT) {
       event.text = tstr_from_v(source->text);
       if (!event.text) {
         flow_provider_config_literals_destroy(destination);
@@ -734,7 +734,9 @@ int flow_parse_add_provider_config_value(
   int boolean = 0;
 
   if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
-      !value.token.value || value.token.length == 0u)
+      !value.token.value ||
+      (value.token.length == 0u &&
+       value.kind != FLOW_PROVIDER_CONFIG_VALUE_TEXT))
     return parse_fail(
         ctx, SALTS_EINVAL, value.token.line, value.token.column,
         "provider config scalar is invalid");
