@@ -79,13 +79,12 @@ message CHttpClientConfig {
   uint32 retry_delay_ms;
   @Min(1) uint32 max_attempts;
   @Min(1) uint32 stop_timeout_ms;
+  CHttpMethod method;
 
   @Size(min = 1, max = 511)
   string authority;
   @Size(min = 1, max = 511)
   string target;
-  CHttpMethod method;
-
   @Size(max = 64)
   list<CHttpHeader> headers;
 }
@@ -136,9 +135,6 @@ message CHttpServerConfig {
   uint32 h2_hpack_dynamic_table_bytes;
   uint32 h2_max_settings_count;
   @Min(1) uint32 poll_slice_ms;
-
-  @Size(min = 1, max = 511)
-  string path;
   CHttpMethod method;
   @Min(1) uint32 max_request_message_bytes;
   @Min(200) @Max(599) uint32 success_status;
@@ -147,6 +143,9 @@ message CHttpServerConfig {
   @Min(200) @Max(599) uint32 graph_error_status;
   @Min(1) uint64 first_message_id;
   @Min(1) uint32 stop_timeout_ms;
+
+  @Size(min = 1, max = 511)
+  string path;
   @Size(min = 1, max = 511)
   string response_content_type;
   @Size(min = 1, max = 511)
@@ -201,11 +200,6 @@ message CHttpWebSocketServerConfig {
   uint32 h2_hpack_dynamic_table_bytes;
   uint32 h2_max_settings_count;
   @Min(1) uint32 poll_slice_ms;
-
-  @Size(min = 1, max = 511)
-  string path;
-  @Size(max = 511)
-  string subprotocol;
   @Min(1) uint32 session_capacity;
   @Min(1) uint32 frame_capacity;
   @Min(2) uint32 max_frame_bytes;
@@ -213,4 +207,9 @@ message CHttpWebSocketServerConfig {
   @Min(1) uint32 max_buffered_input_bytes;
   @Min(1) uint64 first_message_id;
   @Min(1) uint32 stop_timeout_ms;
+
+  @Size(min = 1, max = 511)
+  string path;
+  @Size(max = 511)
+  string subprotocol;
 }
