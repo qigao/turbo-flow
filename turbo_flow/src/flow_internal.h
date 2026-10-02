@@ -146,6 +146,9 @@ typedef struct flow_adapter_registration_s {
   int provider_scoped;
   /** Optional managed resource owner created atomically with this scoped adapter. */
   tstr provider_managed_owner_name;
+  /** Exact resource registry entry created with this scoped adapter. */
+  size_t provider_managed_resource_index;
+  int provider_managed_resource_bound;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
