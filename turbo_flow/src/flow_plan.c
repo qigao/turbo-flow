@@ -552,7 +552,8 @@ int flow_build_runtime_plan(turbo_flow_t *flow) {
     node->databind_transport = FLOW_DATABIND_TRANSPORT_NONE;
     node->databind_service_index = FLOW_PLAN_INDEX_NONE;
     if (stage->adapter_name) {
-      int adapter_index = flow_find_adapter(flow, stage->adapter_name);
+      int adapter_index =
+          flow_adapter_index_for_stage(flow, stage, (uint32_t)stage_index);
       if (adapter_index < 0) {
         return flow_plan_fail(flow, &candidate, SALTS_EPROTO,
                               "compiled adapter binding is inconsistent");

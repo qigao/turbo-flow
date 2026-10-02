@@ -363,7 +363,7 @@ static int compile_validate_registrations(turbo_flow_t *flow) {
     if (stage_in_inactive_template(flow, stage)) continue;
 
     if (stage->adapter_name) {
-      adapter = flow_adapter_for_stage(flow, stage);
+      adapter = flow_adapter_for_stage(flow, stage, (uint32_t)i);
       if (!adapter) {
         return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                               "stage or source adapter is not registered");
@@ -800,7 +800,7 @@ static int compile_validate_operation_runtime(turbo_flow_t *flow,
       TURBO_FLOW_SETTLEMENT_COMPLETE | TURBO_FLOW_SETTLEMENT_REQUEUE |
       TURBO_FLOW_SETTLEMENT_DEAD_LETTER | TURBO_FLOW_SETTLEMENT_ACKNOWLEDGE |
       TURBO_FLOW_SETTLEMENT_CANCELED;
-  const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage);
+  const flow_adapter_registration_t *adapter = flow_adapter_for_stage(flow, stage, stage_index);
 
   if (stage->is_buffer) return SALTS_OK;
   if (stage->is_source && runtime->deadline_ms != 0u) {
@@ -899,7 +899,7 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
       return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                             "runtime node has no resolved operation contract");
     }
-    adapter = flow_adapter_for_stage(flow, stage);
+    adapter = flow_adapter_for_stage(flow, stage, (uint32_t)i);
     required_role = stage->is_source ? TURBO_FLOW_OPERATION_SOURCE : TURBO_FLOW_OPERATION_STAGE;
     if (!(operation->flags & required_role)) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,

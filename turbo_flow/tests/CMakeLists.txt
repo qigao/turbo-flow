@@ -183,6 +183,17 @@ cmake_add_test(
 set_tests_properties(test_flow_provider_interface
   PROPERTIES LABELS "graph;provider;plugin;interface" TIMEOUT 30)
 
+cmake_add_test(
+  test_flow_provider_adapter_binding
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_adapter_binding.c
+  LIBS TurboFlow::Product Salts::TinyTest
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  FOLDER "turbo_flow/tests")
+set_target_properties(test_flow_provider_adapter_binding PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+set_tests_properties(test_flow_provider_adapter_binding PROPERTIES
+  LABELS "graph;provider;adapter;instance" TIMEOUT 30)
+
 add_library(test_flow_salts_provider_fixture SHARED salts_provider_fixture.c)
 target_link_libraries(test_flow_salts_provider_fixture
   PRIVATE TurboFlow::Product Salts::Plugin

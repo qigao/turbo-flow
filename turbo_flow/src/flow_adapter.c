@@ -33,15 +33,39 @@ void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_
   view->reorder = stage->reorder;
 }
 
-const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *flow,
-                                                          const flow_stage_plan_impl_t *stage) {
+int flow_adapter_index_for_stage(
+    const turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+    uint32_t stage_index) {
+  const flow_adapter_registration_t *adapter;
   int adapter_index;
 
-  if (!flow || !stage || !stage->adapter_name) return NULL;
+  if (!flow || !stage || !stage->adapter_name ||
+      stage_index >= vec_size(&flow->stages))
+    return -1;
+
+  if (stage->provider_adapter_bound) {
+    if (stage->provider_adapter_index >= vec_size(&flow->adapters))
+      return -1;
+    adapter = (const flow_adapter_registration_t *)vec_at_const(
+        &flow->adapters, stage->provider_adapter_index);
+    if (!adapter || !adapter->provider_scoped || !adapter->name ||
+        strcmp(adapter->name, stage->adapter_name) != 0)
+      return -1;
+    return (int)stage->provider_adapter_index;
+  }
+
   adapter_index = flow_find_adapter(flow, stage->adapter_name);
+  if (adapter_index < 0) return -1;
+  return adapter_index;
+}
+
+const flow_adapter_registration_t *flow_adapter_for_stage(
+    const turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+    uint32_t stage_index) {
+  int adapter_index = flow_adapter_index_for_stage(flow, stage, stage_index);
   if (adapter_index < 0) return NULL;
-  return (const flow_adapter_registration_t *)vec_at_const(&flow->adapters,
-                                                                 (size_t)adapter_index);
+  return (const flow_adapter_registration_t *)vec_at_const(
+      &flow->adapters, (size_t)adapter_index);
 }
 
 const flow_adapter_registration_t *flow_adapter_for_compiled_stage(const turbo_flow_t *flow,

@@ -71,6 +71,9 @@ typedef struct flow_stage_plan_impl_s {
   tstr provider_name;
   tstr operation_name;
   tstr resource_name;
+  /** Exact provider-materialized adapter registry entry for this stage. */
+  uint32_t provider_adapter_index;
+  int provider_adapter_bound;
   /** Bounded source literals used only by compile/preflight provider binding. */
   vec_t provider_config_literals; /* flow_provider_config_literal_t */
   turbo_flow_operation_descriptor_t resolved_operation;
@@ -139,6 +142,13 @@ typedef struct flow_adapter_registration_s {
   turbo_flow_option_field_t *schema_fields;
   vec_t operation_bindings;
   int managed_source;
+  /** Hidden from legacy global name lookup; selected only by exact stage binding. */
+  int provider_scoped;
+  /** Optional managed resource owner created atomically with this scoped adapter. */
+  tstr provider_managed_owner_name;
+  /** Exact resource registry entry created with this scoped adapter. */
+  size_t provider_managed_resource_index;
+  int provider_managed_resource_bound;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
@@ -871,6 +881,12 @@ int flow_native_resource_document_at(const turbo_flow_t *flow, size_t index,
 int flow_native_resource_command(turbo_flow_t *flow, size_t index,
                                  const turbo_flow_resource_command_t *command);
 void flow_make_stage_view(const flow_stage_plan_impl_t *stage, turbo_flow_stage_plan_t *view);
+int flow_adapter_index_for_stage(
+    const turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+    uint32_t stage_index);
+const flow_adapter_registration_t *flow_adapter_for_stage(
+    const turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
+    uint32_t stage_index);
 int flow_find_primitive_index(const turbo_flow_t *flow, const char *name);
 int flow_find_operation_index(const turbo_flow_t *flow, const char *name);
 const flow_operation_registration_t *
@@ -1004,8 +1020,6 @@ void flow_close_managed_source_runs(turbo_flow_t *flow);
 int flow_stop_non_source_adapters(turbo_flow_t *flow);
 int flow_stop_source_adapters(turbo_flow_t *flow);
 int flow_stop_adapters(turbo_flow_t *flow);
-const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *flow,
-                                                          const flow_stage_plan_impl_t *stage);
 TURBO_FLOW_C_API const flow_adapter_registration_t *
 flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
