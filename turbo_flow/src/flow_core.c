@@ -1347,8 +1347,7 @@ int turbo_flow_provider_adapter_register(
   if (registration->schema) {
     if (registration->schema->roles & TURBO_FLOW_ADAPTER_SOURCE)
       required_boundary_roles |= TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
-    if (registration->async_terminal_ops &&
-        (registration->schema->roles & TURBO_FLOW_ADAPTER_SINK))
+    if (registration->schema->roles & TURBO_FLOW_ADAPTER_SINK)
       required_boundary_roles |= TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   }
 
