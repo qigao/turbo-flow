@@ -33,9 +33,14 @@ static int resource_snapshot(
 }
 
 CMETA_IMPLEMENTS(
-    turbo_flow_chttp_deployment_resource, fixture_resource_impl,
+    turbo_flow_chttp_deployment_resource, fixture_client_resource_impl,
     TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
         TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT,
+    .snapshot = resource_snapshot);
+
+CMETA_IMPLEMENTS(
+    turbo_flow_chttp_deployment_resource, fixture_server_resource_impl,
+    TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT,
     .snapshot = resource_snapshot);
 
 static turbo_flow_chttp_deployment_resource client_handle;
@@ -67,10 +72,10 @@ static void fixture_init(void) {
   fixture_root.server.view.bind_port = 0u;
 
   client_handle =
-      fixture_resource_impl_as_turbo_flow_chttp_deployment_resource(
+      fixture_client_resource_impl_as_turbo_flow_chttp_deployment_resource(
           &fixture_root.client);
   server_handle =
-      fixture_resource_impl_as_turbo_flow_chttp_deployment_resource(
+      fixture_server_resource_impl_as_turbo_flow_chttp_deployment_resource(
           &fixture_root.server);
 
   fixture_exports[0] = (salts_plugin_export){
@@ -91,9 +96,7 @@ static void fixture_init(void) {
       .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
       .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
       .contract_version = TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION,
-      .capabilities =
-          TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
-          TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT,
+      .capabilities = TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT,
       .export_id = "fixture.chttp.server",
       .contract_id = TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
       .value.interface = {
