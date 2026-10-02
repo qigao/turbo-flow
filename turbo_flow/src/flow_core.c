@@ -799,27 +799,16 @@ int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
 }
 
 
-int turbo_flow_register_adapter_transport_reply(
-    turbo_flow_t *flow, const char *adapter_name,
+static int flow_transport_reply_attach(
+    flow_adapter_registration_t *adapter,
     const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
-  int index;
-  flow_adapter_registration_t *adapter;
-  if (!flow || !adapter_name || !adapter_name[0] || !ops ||
+  if (!adapter || !ops ||
       ops->size < TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_V1_SIZE ||
       ops->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
-      !ops->capture || !ops->send || !ops->take_terminal) {
+      !ops->capture || !ops->send || !ops->take_terminal)
     return SALTS_EINVAL;
-  }
-  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED ||
-      flow->state == TURBO_FLOW_STATE_STOPPED || flow->state == TURBO_FLOW_STATE_FAILED) {
-    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
-                                     "cannot register transport reply provider after compile");
-  }
-  index = flow_find_adapter(flow, adapter_name);
-  if (index < 0) return SALTS_ENOENT;
-  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
-  if (!adapter) return SALTS_ENOENT;
-  if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u) return SALTS_EINVAL;
+  if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u)
+    return SALTS_EINVAL;
   if (adapter->transport_reply_ops.capture) return SALTS_EALREADY;
   memset(&adapter->transport_reply_ops, 0, sizeof(adapter->transport_reply_ops));
   memcpy(&adapter->transport_reply_ops, ops,
@@ -831,6 +820,62 @@ int turbo_flow_register_adapter_transport_reply(
   return SALTS_OK;
 }
 
+int turbo_flow_register_adapter_transport_reply(
+    turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
+  int index;
+  flow_adapter_registration_t *adapter;
+  if (!flow || !adapter_name || !adapter_name[0]) return SALTS_EINVAL;
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED ||
+      flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "cannot register transport reply provider after compile");
+  }
+  index = flow_find_adapter(flow, adapter_name);
+  if (index < 0) return SALTS_ENOENT;
+  adapter = (flow_adapter_registration_t *)vec_at(
+      &flow->adapters, (size_t)index);
+  return flow_transport_reply_attach(adapter, ops, ctx);
+}
+
+int turbo_flow_provider_adapter_transport_reply_register(
+    turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
+  int stage_index;
+  flow_stage_plan_impl_t *stage;
+  flow_adapter_registration_t *adapter;
+  int adapter_index;
+
+  if (!flow || !stage_name || !stage_name[0]) return SALTS_EINVAL;
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED ||
+      flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "cannot register provider transport reply after compile");
+  }
+
+  stage_index = turbo_flow_find_stage(flow, stage_name);
+  if (stage_index < 0) return SALTS_ENOENT;
+  stage = (flow_stage_plan_impl_t *)vec_at(
+      &flow->stages, (size_t)stage_index);
+  if (!stage || !stage->provider_adapter_bound)
+    return SALTS_ENOENT;
+
+  adapter_index = flow_adapter_index_for_stage(
+      flow, stage, (uint32_t)stage_index);
+  if (adapter_index < 0) return SALTS_EPROTO;
+  adapter = (flow_adapter_registration_t *)vec_at(
+      &flow->adapters, (size_t)adapter_index);
+  if (!adapter || !adapter->provider_scoped)
+    return SALTS_EPROTO;
+  return flow_transport_reply_attach(adapter, ops, ctx);
+}
+
 static const flow_adapter_registration_t *flow_transport_reply_adapter(
     const turbo_flow_t *flow, const char *adapter_name) {
   int index;
@@ -840,6 +885,25 @@ static const flow_adapter_registration_t *flow_transport_reply_adapter(
   if (index < 0) return NULL;
   adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, (size_t)index);
   return adapter && adapter->transport_reply_ops.capture ? adapter : NULL;
+}
+
+static const flow_adapter_registration_t *flow_transport_reply_stage_adapter(
+    const turbo_flow_t *flow, const char *stage_name) {
+  int stage_index;
+  const flow_adapter_registration_t *adapter;
+  if (!flow || !stage_name || !stage_name[0]) return NULL;
+  if (flow->state != TURBO_FLOW_STATE_COMPILED &&
+      flow->state != TURBO_FLOW_STATE_STARTED &&
+      flow->state != TURBO_FLOW_STATE_STOPPED &&
+      flow->state != TURBO_FLOW_STATE_FAILED)
+    return NULL;
+  stage_index = turbo_flow_find_stage(flow, stage_name);
+  if (stage_index < 0) return NULL;
+  adapter = flow_adapter_for_compiled_stage(flow, (uint32_t)stage_index);
+  return adapter && adapter->provider_scoped &&
+                 adapter->transport_reply_ops.capture
+             ? adapter
+             : NULL;
 }
 
 int turbo_flow_transport_reply_supported(
