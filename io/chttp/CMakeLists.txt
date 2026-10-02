@@ -29,7 +29,12 @@ add_library(tf_chttp_provider_support STATIC
   src/turbo_flow_chttp_typed_config_internal.h)
 set_target_properties(tf_chttp_provider_support PROPERTIES
   FOLDER "io/chttp"
-  POSITION_INDEPENDENT_CODE ON)
+  POSITION_INDEPENDENT_CODE ON
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+set_target_properties(${turbo_flow_chttp_provider_config_NATIVE_TARGET} PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
 target_include_directories(tf_chttp_provider_support PRIVATE
   include
   src
