@@ -45,7 +45,7 @@ spec("flow provider config literals") {
     stage = (const flow_stage_plan_impl_t *)vec_at_const(
         &flow->stages, (size_t)turbo_flow_find_stage(flow, "input"));
     check_not_null(stage);
-    check_equal(vec_size(&stage->provider_config_literals), (size_t)4u);
+    check_equal(vec_size(&stage->provider_config_literals), (size_t)8u);
     check_equal(flow_provider_config_reader_init(&config_reader, stage), SALTS_OK);
 
     expect_token(&config_reader.reader, CSERDE_MAP_BEGIN, NULL, 0u, 0);
@@ -63,7 +63,7 @@ spec("flow provider config literals") {
     turbo_flow_destroy(flow);
   }
 
-  it("copies provider literals exactly through reusable use expansion") {
+  it("copies structured provider literals exactly through reusable use expansion") {
     static const char *src =
         "stage cleanse {\n"
         "  in raw\n"
@@ -71,6 +71,7 @@ spec("flow provider config literals") {
         "  step trim operation Text.trim {\n"
         "    locale \"en-US\"\n"
         "    strict true\n"
+        "    headers [{ name \"x-trace\", value \"a\" }, { name \"x-trace\", value \"b\" }]\n"
         "  }\n"
         "  raw -> trim -> clean\n"
         "}\n"
@@ -81,7 +82,8 @@ spec("flow provider config literals") {
     turbo_flow_t *flow = turbo_flow_create();
     const flow_stage_plan_impl_t *declared;
     const flow_stage_plan_impl_t *instance;
-    const flow_provider_config_literal_t *literal;
+    flow_provider_config_reader_t reader;
+    cserde_token token = {0};
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
@@ -92,21 +94,32 @@ spec("flow provider config literals") {
         &flow->stages, (size_t)turbo_flow_find_stage(flow, "c.trim"));
     check_not_null(declared);
     check_not_null(instance);
-    check_equal(vec_size(&declared->provider_config_literals), (size_t)2u);
-    check_equal(vec_size(&instance->provider_config_literals), (size_t)2u);
+    check_equal(vec_size(&declared->provider_config_literals), (size_t)19u);
+    check_equal(vec_size(&instance->provider_config_literals), (size_t)19u);
 
-    literal = (const flow_provider_config_literal_t *)vec_at_const(
-        &instance->provider_config_literals, 0u);
-    check_not_null(literal);
-    check_equal(literal->name, "locale");
-    check_equal(literal->text, "en-US");
-
-    literal = (const flow_provider_config_literal_t *)vec_at_const(
-        &instance->provider_config_literals, 1u);
-    check_not_null(literal);
-    check_equal(literal->name, "strict");
-    check_equal(literal->kind, FLOW_PROVIDER_CONFIG_LITERAL_BOOL);
-    check_equal(literal->bool_value, 1);
+    check_equal(flow_provider_config_reader_init(&reader, instance), SALTS_OK);
+    expect_token(&reader.reader, CSERDE_MAP_BEGIN, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "locale", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "en-US", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "strict", 0u, 0);
+    expect_token(&reader.reader, CSERDE_BOOL, NULL, 0u, 1);
+    expect_token(&reader.reader, CSERDE_STRING, "headers", 0u, 0);
+    expect_token(&reader.reader, CSERDE_ARRAY_BEGIN, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_MAP_BEGIN, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "name", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "x-trace", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "value", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "a", 0u, 0);
+    expect_token(&reader.reader, CSERDE_MAP_END, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_MAP_BEGIN, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "name", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "x-trace", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "value", 0u, 0);
+    expect_token(&reader.reader, CSERDE_STRING, "b", 0u, 0);
+    expect_token(&reader.reader, CSERDE_MAP_END, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_ARRAY_END, NULL, 0u, 0);
+    expect_token(&reader.reader, CSERDE_MAP_END, NULL, 0u, 0);
+    check_equal(cserde_reader_next(&reader.reader, &token), CSERDE_DONE);
 
     turbo_flow_destroy(flow);
   }
