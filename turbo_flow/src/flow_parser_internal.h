@@ -56,7 +56,8 @@ typedef enum flow_node_config_kind_e {
 typedef enum flow_provider_config_value_kind_e {
   FLOW_PROVIDER_CONFIG_VALUE_TEXT = 1,
   FLOW_PROVIDER_CONFIG_VALUE_UINT,
-  FLOW_PROVIDER_CONFIG_VALUE_IDENT
+  FLOW_PROVIDER_CONFIG_VALUE_IDENT,
+  FLOW_PROVIDER_CONFIG_VALUE_STRUCTURED
 } flow_provider_config_value_kind_t;
 
 typedef struct flow_provider_config_value_spec_s {
@@ -146,6 +147,8 @@ int flow_parse_set_operation(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flo
 int flow_parse_set_resource(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_token_t token);
 flow_token_t flow_parse_append_dotted_name(flow_parse_ctx_t *ctx, flow_token_t left,
                                            flow_token_t dot, flow_token_t right);
+flow_token_t flow_parse_provider_config_span(
+    flow_parse_ctx_t *ctx, flow_token_t first, flow_token_t last);
 int flow_parse_set_exec(flow_parse_ctx_t *ctx, flow_stage_spec_t *spec, flow_exec_spec_t exec_spec,
                         flow_token_t exec_token);
 int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *options,
