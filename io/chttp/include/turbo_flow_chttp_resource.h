@@ -17,7 +17,14 @@ extern "C" {
 
 enum {
   TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION = 1u,
-  TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT = UINT64_C(1) << 0
+  TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT = UINT64_C(1) << 0,
+  /*
+   * snapshot() returns immutable borrowed deployment facts that remain stable
+   * for every concurrent Salts Plugin lease. Multiple provider instances may
+   * therefore share one resolved resource identity without sharing a native
+   * socket/connection owner.
+   */
+  TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT = UINT64_C(1) << 1
 };
 
 typedef enum turbo_flow_chttp_deployment_kind_e {
@@ -30,7 +37,10 @@ typedef enum turbo_flow_chttp_deployment_kind_e {
  *
  * Secrets and environment-specific endpoint identity stay owned by the
  * resource plugin under its Salts Plugin lease. The provider may borrow these
- * pointers only while that lease remains alive.
+ * pointers only while that lease remains alive. An export that advertises
+ * TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT guarantees that these borrowed
+ * facts are immutable/stable across concurrent leases; native CHTTP owners are
+ * still materialized independently per stage instance.
  */
 typedef struct turbo_flow_chttp_deployment_view_s {
   size_t size;
