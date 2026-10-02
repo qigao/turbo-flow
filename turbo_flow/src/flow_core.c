@@ -1,6 +1,6 @@
 #include "flow_internal.h"
 #include "flow_provider_config_internal.h"
-#include "turbo_flow_provider.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <stdint.h>
 #include <stdio.h>
