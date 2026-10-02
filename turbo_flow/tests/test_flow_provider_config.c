@@ -5,6 +5,7 @@
 
 #include <cserde/reader.h>
 
+#include <stdio.h>
 #include <string.h>
 
 static void check_slice(const cserde_slice *slice, const char *text) {
@@ -251,8 +252,8 @@ spec("flow provider config literals") {
          used + 2u < sizeof(src);
          ++i)
       src[used++] = ']';
-    memcpy(src + used, "\n}\n", 4u);
-    used += 4u;
+    memcpy(src + used, "\n}\n", 3u);
+    used += 3u;
     src[used] = '\0';
 
     check_not_null(flow);
