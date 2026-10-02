@@ -1,6 +1,7 @@
 #include "../../../tests/flow_operation_fixture.h"
 #include "chttp_provider_config_native.h"
 #include "tinytest.h"
+#include "turbo_flow_chttp.h"
 #include "turbo_flow_chttp_resource.h"
 #include "turbo_flow_provider_binding.h"
 #include "turbo_flow_resource.h"
