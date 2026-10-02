@@ -149,6 +149,7 @@ void flow_adapter_registration_destroy(flow_adapter_registration_t *adapter) {
   vec_destroy(&adapter->operation_bindings);
   flow_adapter_schema_destroy(adapter);
   tstr_freep(&adapter->name);
+  tstr_freep(&adapter->provider_managed_owner_name);
   memset(&adapter->ops, 0, sizeof(adapter->ops));
   memset(&adapter->async_terminal_ops, 0, sizeof(adapter->async_terminal_ops));
   memset(&adapter->async_emit_ops, 0, sizeof(adapter->async_emit_ops));
@@ -191,6 +192,48 @@ static int flow_registration_commit_ready(turbo_flow_t *flow,
                                           flow_registration_checkpoint_t checkpoint) {
   if (!flow->registration_fault.before_commit) return SALTS_OK;
   return flow->registration_fault.before_commit(flow->registration_fault.ctx, checkpoint);
+}
+
+static void flow_clear_provider_scoped_registrations(turbo_flow_t *flow) {
+  size_t adapter_index;
+
+  if (!flow) return;
+
+  /*
+   * Parsed stages and the sealed runtime plan have already been cleared before
+   * this helper runs. Provider-scoped adapters therefore have no surviving
+   * stage-index consumers and may be compacted without index repair.
+   */
+  adapter_index = vec_size(&flow->adapters);
+  while (adapter_index > 0u) {
+    flow_adapter_registration_t *adapter;
+    --adapter_index;
+    adapter = (flow_adapter_registration_t *)vec_at(
+        &flow->adapters, adapter_index);
+    if (!adapter || !adapter->provider_scoped) continue;
+
+    if (adapter->provider_managed_owner_name) {
+      size_t resource_index = vec_size(&flow->resources);
+      while (resource_index > 0u) {
+        flow_resource_registration_t *resource;
+        --resource_index;
+        resource = (flow_resource_registration_t *)vec_at(
+            &flow->resources, resource_index);
+        if (!resource || !resource->owner_name ||
+            strcmp(resource->owner_name,
+                   adapter->provider_managed_owner_name) != 0)
+          continue;
+        flow_resource_registration_destroy(resource);
+        (void)turbo_flow_stl_error(
+            vec_erase(&flow->resources, resource_index, NULL));
+        break;
+      }
+    }
+
+    flow_adapter_registration_destroy(adapter);
+    (void)turbo_flow_stl_error(
+        vec_erase(&flow->adapters, adapter_index, NULL));
+  }
 }
 
 void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge) {
@@ -517,6 +560,8 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   if (!keep_registry) {
     flow_clear_registry(flow);
     flow_durable_buffer_clear_bindings(flow);
+  } else {
+    flow_clear_provider_scoped_registrations(flow);
   }
   atomic_store_explicit(&flow->next_sequence, 0u, memory_order_release);
   flow->state = TURBO_FLOW_STATE_NEW;
@@ -1341,6 +1386,12 @@ int turbo_flow_provider_adapter_register(
   }
 
   if (registration->managed_boundary_ops) {
+    adapter->provider_managed_owner_name =
+        tstr_dup(registration->managed_owner_name);
+    if (!adapter->provider_managed_owner_name) {
+      rc = SALTS_ENOMEM;
+      goto rollback;
+    }
     rc = turbo_flow_register_managed_boundary_provider(
         flow, registration->managed_owner_name,
         registration->managed_boundary_ops, registration->ctx);
