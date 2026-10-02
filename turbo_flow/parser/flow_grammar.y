@@ -31,6 +31,7 @@
 %type provider_config_array_items {flow_token_t}
 %type provider_config_object_fields {flow_token_t}
 %type provider_config_object_field {flow_token_t}
+%type provider_config_newlines {flow_token_t}
 
 %start_symbol start
 
@@ -277,12 +278,22 @@ provider_config_nested_value(A) ::= NUMBER(V). { A = V; }
 provider_config_nested_value(A) ::= IDENT(V). { A = V; }
 provider_config_nested_value(A) ::= provider_config_structured(V). { A = V; }
 
+provider_config_newlines(A) ::= . {
+  memset(&A, 0, sizeof(A));
+}
+provider_config_newlines(A) ::= provider_config_newlines(I) NEWLINE(N). {
+  (void)I;
+  A = N;
+}
+
 provider_config_array_items(A) ::= . {
   memset(&A, 0, sizeof(A));
 }
 provider_config_array_items(A) ::= provider_config_nested_value(V). { A = V; }
-provider_config_array_items(A) ::= provider_config_array_items(I) COMMA provider_config_nested_value(V). {
+provider_config_array_items(A) ::= provider_config_array_items(I) provider_config_newlines(N1) COMMA provider_config_newlines(N2) provider_config_nested_value(V). {
   (void)I;
+  (void)N1;
+  (void)N2;
   A = V;
 }
 
@@ -294,17 +305,23 @@ provider_config_object_fields(A) ::= . {
   memset(&A, 0, sizeof(A));
 }
 provider_config_object_fields(A) ::= provider_config_object_field(F). { A = F; }
-provider_config_object_fields(A) ::= provider_config_object_fields(I) COMMA provider_config_object_field(F). {
+provider_config_object_fields(A) ::= provider_config_object_fields(I) provider_config_newlines(N1) COMMA provider_config_newlines(N2) provider_config_object_field(F). {
   (void)I;
+  (void)N1;
+  (void)N2;
   A = F;
 }
 
-provider_config_structured(A) ::= LBRACKET(L) provider_config_array_items(I) RBRACKET(R). {
+provider_config_structured(A) ::= LBRACKET(L) provider_config_newlines(N1) provider_config_array_items(I) provider_config_newlines(N2) RBRACKET(R). {
+  (void)N1;
   (void)I;
+  (void)N2;
   A = flow_parse_provider_config_span(ctx, L, R);
 }
-provider_config_structured(A) ::= LBRACE(L) provider_config_object_fields(I) RBRACE(R). {
+provider_config_structured(A) ::= LBRACE(L) provider_config_newlines(N1) provider_config_object_fields(I) provider_config_newlines(N2) RBRACE(R). {
+  (void)N1;
   (void)I;
+  (void)N2;
   A = flow_parse_provider_config_span(ctx, L, R);
 }
 
