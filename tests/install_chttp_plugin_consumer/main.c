@@ -11,7 +11,8 @@ static int check_provider(
     const salts_plugin_manifest *manifest,
     const char *export_id,
     const char *expected_type,
-    const char *expected_resource_contract) {
+    const char *expected_resource_contract,
+    uint64_t expected_resource_capabilities) {
   const salts_plugin_export *entry = NULL;
   turbo_flow_provider_factory *factory;
   turbo_flow_provider_contract_v1_t contract =
@@ -53,8 +54,7 @@ static int check_provider(
       contract.resource.contract_version !=
           TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION ||
       contract.resource.required_capabilities !=
-          (TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
-           TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT) ||
+          expected_resource_capabilities ||
       !cmeta_interface_desc_equal(
           contract.resource.expected_interface,
           turbo_flow_chttp_deployment_resource_interface()))
@@ -119,16 +119,20 @@ int main(int argc, char **argv) {
 
   rc = check_provider(
       manifest, "chttp.client", "CHttpClientConfig",
-      TURBO_FLOW_CHTTP_CLIENT_RESOURCE_CONTRACT_ID);
+      TURBO_FLOW_CHTTP_CLIENT_RESOURCE_CONTRACT_ID,
+      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+          TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT);
   if (rc != 0) goto cleanup;
   rc = check_provider(
       manifest, "chttp.server", "CHttpServerConfig",
-      TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID);
+      TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
+      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT);
   if (rc != 0) goto cleanup;
   rc = check_provider(
       manifest, "chttp.websocket_server",
       "CHttpWebSocketServerConfig",
-      TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID);
+      TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
+      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT);
   if (rc != 0) goto cleanup;
 
   if (salts_plugin_registry_request_stop(&registry, plugin) !=
