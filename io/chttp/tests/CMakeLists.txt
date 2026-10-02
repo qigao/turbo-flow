@@ -1,3 +1,20 @@
+cmake_add_test(
+  test_chttp_typed_contract
+  SOURCES test_chttp_typed_contract.c
+  LIBS
+    TurboFlow::Product
+    Salts::TinyTest
+    ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${turbo_flow_chttp_provider_config_GENERATED_DIR}
+  FOLDER "io/chttp/tests")
+add_dependencies(
+  test_chttp_typed_contract
+  turbo_flow_chttp_provider_config_idl_codegen)
+set_tests_properties(test_chttp_typed_contract PROPERTIES
+  LABELS "chttp-plugin;provider;config;resource;databind")
+
 cmake_add_test(test_chttp_plugin
   SOURCES test_chttp_plugin.c
   LIBS TurboFlow::PluginHost CHttp::Client CHttp::Server Salts::TinyTest

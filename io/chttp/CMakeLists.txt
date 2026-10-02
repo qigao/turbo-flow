@@ -17,7 +17,16 @@ target_include_directories(
 target_link_libraries(tf_chttp_adapter PUBLIC
   TurboFlow::Graph CHttp::Client CHttp::Server)
 
-install(FILES include/turbo_flow_chttp.h DESTINATION include)
+salts_idl_target(
+  TARGET turbo_flow_chttp_provider_config
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_chttp_provider_config.schema"
+  ARTIFACT_NAME "chttp_provider_config"
+  ARTIFACTS MESSAGE)
+
+install(FILES
+  include/turbo_flow_chttp.h
+  include/turbo_flow_chttp_resource.h
+  DESTINATION include)
 
 add_library(tf_chttp_plugin SHARED src/turbo_flow_chttp_plugin.c
   src/turbo_flow_chttp_plugin_config.c src/turbo_flow_chttp_plugin_internal.h)
