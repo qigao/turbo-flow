@@ -81,12 +81,13 @@ message CHttpClientConfig {
   @Min(1) uint32 stop_timeout_ms;
   CHttpMethod method;
 
+  @Size(max = 64)
+  list<CHttpHeader> headers;
+
   @Size(min = 1, max = 511)
   string authority;
   @Size(min = 1, max = 511)
   string target;
-  @Size(max = 64)
-  list<CHttpHeader> headers;
 }
 
 message CHttpServerConfig {
