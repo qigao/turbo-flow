@@ -26,6 +26,11 @@
 %type dotted_name {flow_token_t}
 %type binding_segment {flow_token_t}
 %type provider_config_value {flow_provider_config_value_spec_t}
+%type provider_config_structured {flow_token_t}
+%type provider_config_nested_value {flow_token_t}
+%type provider_config_array_items {flow_token_t}
+%type provider_config_object_fields {flow_token_t}
+%type provider_config_object_field {flow_token_t}
 
 %start_symbol start
 
@@ -261,6 +266,46 @@ provider_config_value(A) ::= NUMBER(V). {
 provider_config_value(A) ::= IDENT(V). {
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_IDENT;
   A.token = V;
+}
+provider_config_value(A) ::= provider_config_structured(V). {
+  A.kind = FLOW_PROVIDER_CONFIG_VALUE_STRUCTURED;
+  A.token = V;
+}
+
+provider_config_nested_value(A) ::= STRING(V). { A = V; }
+provider_config_nested_value(A) ::= NUMBER(V). { A = V; }
+provider_config_nested_value(A) ::= IDENT(V). { A = V; }
+provider_config_nested_value(A) ::= provider_config_structured(V). { A = V; }
+
+provider_config_array_items(A) ::= . {
+  memset(&A, 0, sizeof(A));
+}
+provider_config_array_items(A) ::= provider_config_nested_value(V). { A = V; }
+provider_config_array_items(A) ::= provider_config_array_items(I) COMMA provider_config_nested_value(V). {
+  (void)I;
+  A = V;
+}
+
+provider_config_object_field(A) ::= IDENT(K) provider_config_nested_value(V). {
+  (void)V;
+  A = K;
+}
+provider_config_object_fields(A) ::= . {
+  memset(&A, 0, sizeof(A));
+}
+provider_config_object_fields(A) ::= provider_config_object_field(F). { A = F; }
+provider_config_object_fields(A) ::= provider_config_object_fields(I) COMMA provider_config_object_field(F). {
+  (void)I;
+  A = F;
+}
+
+provider_config_structured(A) ::= LBRACKET(L) provider_config_array_items(I) RBRACKET(R). {
+  (void)I;
+  A = flow_parse_provider_config_span(ctx, L, R);
+}
+provider_config_structured(A) ::= LBRACE(L) provider_config_object_fields(I) RBRACE(R). {
+  (void)I;
+  A = flow_parse_provider_config_span(ctx, L, R);
 }
 
 exec_spec(A) ::= INLINE exec_options(O). {
