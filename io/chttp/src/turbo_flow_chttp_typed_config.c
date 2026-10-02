@@ -137,7 +137,7 @@ static int deployment_tls_empty(
 }
 
 static int backend_kind(
-    CHttpBackend_t value, native_io_backend_kind *out) {
+    uint32_t value, native_io_backend_kind *out) {
   if (!out) return SALTS_EINVAL;
   switch (value) {
     case CHttpBackend_Iocp:
@@ -158,7 +158,7 @@ static int backend_kind(
   return native_io_backend_kind_supported(*out) ? SALTS_OK : SALTS_ENOTSUP;
 }
 
-static int method_kind(CHttpMethod_t value, chttp_method *out) {
+static int method_kind(uint32_t value, chttp_method *out) {
   if (!out) return SALTS_EINVAL;
   switch (value) {
     case CHttpMethod_Get: *out = CHTTP_METHOD_GET; return SALTS_OK;
@@ -172,7 +172,7 @@ static int method_kind(CHttpMethod_t value, chttp_method *out) {
   }
 }
 
-static size_t method_token_size(CHttpMethod_t value) {
+static size_t method_token_size(uint32_t value) {
   switch (value) {
     case CHttpMethod_Get: return 3u;
     case CHttpMethod_Post: return 4u;
@@ -186,7 +186,7 @@ static size_t method_token_size(CHttpMethod_t value) {
 }
 
 static int client_protocol(
-    CHttpClientProtocol_t value, chttp_protocol *out,
+    uint32_t value, chttp_protocol *out,
     const char **alpn) {
   if (!out || !alpn) return SALTS_EINVAL;
   switch (value) {
@@ -204,7 +204,7 @@ static int client_protocol(
 }
 
 static int server_protocol(
-    CHttpServerProtocol_t value, int *enable_http2) {
+    uint32_t value, int *enable_http2) {
   if (!enable_http2) return SALTS_EINVAL;
   switch (value) {
     case CHttpServerProtocol_H1:
@@ -219,7 +219,7 @@ static int server_protocol(
 }
 
 static int client_auth(
-    CHttpTlsClientAuth_t value, cnet_tls_client_auth *out) {
+    uint32_t value, cnet_tls_client_auth *out) {
   if (!out) return SALTS_EINVAL;
   switch (value) {
     case CHttpTlsClientAuth_None:
