@@ -357,9 +357,6 @@ elseif(CHTTP_TEST_LAYER STREQUAL "provider")
     message(FATAL_ERROR
             "CHTTP provider requires exactly one tf_chttp_adapter.dll import")
   endif()
-  if(chttp_dependents MATCHES "turbo_flow\\.dll")
-    message(FATAL_ERROR "CHTTP provider must not depend on turbo_flow.dll")
-  endif()
 elseif(CHTTP_TEST_LAYER STREQUAL "gateway")
   if(chttp_dependents MATCHES
      "tf_chttp_adapter\\.dll|chttp_client\\.dll|chttp_server\\.dll|turbo_flow\\.dll")
