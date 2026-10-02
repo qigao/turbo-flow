@@ -9,6 +9,7 @@ on:
       - 'turbo_flow/**'
       - 'io/durable/**'
       - 'io/turbodb/**'
+      - 'io/chttp/**'
       - 'ingress/protocol/inbox/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
@@ -30,7 +31,7 @@ env:
 
 jobs:
   focused-runtime:
-    name: Published TurboDB SDK + durable Graph contract
+    name: Published TurboDB/CHTTP SDK + provider Graph contract
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -61,6 +62,7 @@ jobs:
             turbo_flow/tests/
             io/durable/
             io/turbodb/
+            io/chttp/
 
       - name: Use empty vcpkg L1 cache
         shell: bash
@@ -104,6 +106,8 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -x "$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"
           test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
+          test -n "${HTTP_SERVICES_ROOT:-}"
+          test -f "$HTTP_SERVICES_ROOT/lib/cmake/Chttp/ChttpConfig.cmake"
           test -z "${DATABIND_ROOT:-}"
           test -z "${DATABIND_HOST_ROOT:-}"
 
@@ -111,7 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py --turbodb
+          python3 .github/ci/task4_runtime_assembly.py --turbodb --chttp
           git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt             | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
 
       - name: Configure focused exact-source Graph build
@@ -120,17 +124,142 @@ jobs:
           set -euxo pipefail
           cmake -S . -B build/task4-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
 
-      - name: Build durable Graph tests and TurboDB adapter
+      - name: Build provider Graph tests and native adapters
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_typed_config test_turbodb_durable_buffer_plugin test_turbodb_inbox test_turbodb_inbox_source                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_provider_adapter_binding test_flow_salts_provider_binding test_flow_provider_binding test_flow_resource_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_typed_config test_turbodb_durable_buffer_plugin test_turbodb_inbox test_turbodb_inbox_source                      tf_chttp_plugin test_chttp_typed_contract test_chttp_provider_interface                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_provider_adapter_binding test_flow_salts_provider_binding test_flow_provider_binding test_flow_resource_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
       - name: Run provider-neutral durable Graph tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|provider_adapter_binding|salts_provider_binding|provider_binding|resource_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin|inbox|inbox_source))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|provider_adapter_binding|salts_provider_binding|provider_binding|resource_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin|inbox|inbox_source)|test_chttp_(typed_contract|provider_interface))             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+
+      - name: Verify TurboDB adapter does not absorb native database drivers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          adapter="$(find build/task4-runtime -type f -name 'libtf_turbodb_adapter.so*' | head -n1)"
+          test -n "$adapter"
+          if command -v readelf >/dev/null; then
+            ! readelf -d "$adapter" | grep -Ei 'sqlite|tidesdb|pq|mysql|mongo'
+          fi
+          printf '%s\n' "$adapter" > "$RUNNER_TEMP/task4-runtime-evidence/turbodb-adapter.txt"
+
+      - name: Configure Release ThreadSanitizer concurrency build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/task4-runtime-tsan -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DENABLE_SANITIZER_THREAD=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure-tsan.log"
+
+      - name: Build and run Release ThreadSanitizer concurrency tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/task4-runtime-tsan             --target test_flow_durable_lifecycle test_flow_inbox test_flow_inbox_driver test_flow_async_terminal             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build-tsan.log"
+          ctest --test-dir build/task4-runtime-tsan             -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
+
+      - name: Install and load the durable memory plugin component
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
+          installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
+          test -f "$installed_plugin"
+          sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
+          cmake -E env             "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin"             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:$LD_LIBRARY_PATH"             "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin"             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
+
+      - name: Verify committed source remained untouched
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)
+
+      - name: Upload Task 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/task4-runtime-evidence/
+            build/task4-runtime/CMakeCache.txt
+            build/task4-runtime-tsan/CMakeCache.txt
+             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+
+      - name: Verify TurboDB adapter does not absorb native database drivers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          adapter="$(find build/task4-runtime -type f -name 'libtf_turbodb_adapter.so*' | head -n1)"
+          test -n "$adapter"
+          if command -v readelf >/dev/null; then
+            ! readelf -d "$adapter" | grep -Ei 'sqlite|tidesdb|pq|mysql|mongo'
+          fi
+          printf '%s\n' "$adapter" > "$RUNNER_TEMP/task4-runtime-evidence/turbodb-adapter.txt"
+
+      - name: Configure Release ThreadSanitizer concurrency build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/task4-runtime-tsan -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DENABLE_SANITIZER_THREAD=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure-tsan.log"
+
+      - name: Build and run Release ThreadSanitizer concurrency tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/task4-runtime-tsan             --target test_flow_durable_lifecycle test_flow_inbox test_flow_inbox_driver test_flow_async_terminal             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build-tsan.log"
+          ctest --test-dir build/task4-runtime-tsan             -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
+
+      - name: Install and load the durable memory plugin component
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
+          installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
+          test -f "$installed_plugin"
+          sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
+          cmake -E env             "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin"             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:$LD_LIBRARY_PATH"             "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin"             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
+
+      - name: Verify committed source remained untouched
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)$' || true)"
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
+
+      - name: Upload Task 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/task4-runtime-evidence/
+            build/task4-runtime/CMakeCache.txt
+            build/task4-runtime-tsan/CMakeCache.txt
+ || true)"
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb io/chttp
+
+      - name: Upload Task 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-durable-buffer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/task4-runtime-evidence/
+            build/task4-runtime/CMakeCache.txt
+            build/task4-runtime-tsan/CMakeCache.txt
+             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
       - name: Verify TurboDB adapter does not absorb native database drivers
         shell: bash
