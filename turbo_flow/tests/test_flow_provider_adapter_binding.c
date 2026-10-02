@@ -57,6 +57,80 @@ static int fail_async_terminal_bind(
              : SALTS_OK;
 }
 
+typedef struct scoped_boundary_s {
+  turbo_flow_resource_metadata_t metadata;
+  turbo_flow_managed_boundary_descriptor_t descriptor;
+  turbo_flow_managed_boundary_snapshot_t snapshot;
+} scoped_boundary_t;
+
+static void scoped_boundary_init(scoped_boundary_t *boundary) {
+  memset(boundary, 0, sizeof(*boundary));
+  boundary->metadata =
+      (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
+  boundary->metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
+  boundary->metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
+  memcpy(boundary->metadata.uid, "connection:scoped", sizeof("connection:scoped"));
+  memcpy(boundary->metadata.owner_name, "scoped.owner", sizeof("scoped.owner"));
+  boundary->metadata.generation = 1u;
+  boundary->metadata.observed_generation = 1u;
+
+  boundary->descriptor =
+      (turbo_flow_managed_boundary_descriptor_t)
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+  boundary->descriptor.domain = boundary->metadata.domain;
+  boundary->descriptor.kind = boundary->metadata.kind;
+  boundary->descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  memcpy(boundary->descriptor.uid, boundary->metadata.uid,
+         strlen(boundary->metadata.uid) + 1u);
+  memcpy(boundary->descriptor.owner_name, boundary->metadata.owner_name,
+         strlen(boundary->metadata.owner_name) + 1u);
+  check_equal(
+      turbo_flow_content_descriptor_init(
+          &boundary->descriptor.input,
+          TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
+          TURBO_FLOW_CONTENT_PROFILE_PROTOCOL_DATA,
+          TURBO_FLOW_DATA_ENCODING_JSON,
+          "application/json", "scoped-input"),
+      SALTS_OK);
+  check_equal(
+      turbo_flow_content_descriptor_declare_schema(
+          &boundary->descriptor.input, "ScopedBoundary", "Input", 1u),
+      SALTS_OK);
+
+  boundary->snapshot =
+      (turbo_flow_managed_boundary_snapshot_t)
+          TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+  memcpy(boundary->snapshot.uid, boundary->metadata.uid,
+         strlen(boundary->metadata.uid) + 1u);
+  boundary->snapshot.generation = 1u;
+  boundary->snapshot.observed_generation = 1u;
+  boundary->snapshot.state = TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
+}
+
+static int scoped_boundary_metadata(
+    void *ctx, turbo_flow_resource_metadata_t *out) {
+  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
+  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = boundary->metadata;
+  return SALTS_OK;
+}
+
+static int scoped_boundary_descriptor(
+    void *ctx, turbo_flow_managed_boundary_descriptor_t *out) {
+  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
+  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = boundary->descriptor;
+  return SALTS_OK;
+}
+
+static int scoped_boundary_snapshot(
+    void *ctx, turbo_flow_managed_boundary_snapshot_t *out) {
+  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
+  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = boundary->snapshot;
+  return SALTS_OK;
+}
+
 static turbo_flow_adapter_schema_t sink_schema(void) {
   turbo_flow_adapter_schema_t schema;
   memset(&schema, 0, sizeof(schema));
@@ -166,6 +240,7 @@ spec("provider-scoped adapter stage binding") {
 
     /* Parsed-stage binding is not retained across reset even when registries are. */
     check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_not_equal(turbo_flow_compile(flow), SALTS_OK);
 
@@ -292,6 +367,53 @@ spec("provider-scoped adapter stage binding") {
     check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
     if (stage) check_true(stage->provider_adapter_bound);
     check_equal(probe.shutdowns, 0);
+
+    turbo_flow_destroy(flow);
+    check_equal(probe.shutdowns, 1);
+  }
+
+  it("drops scoped managed boundary ownership on keep-registry reset") {
+    static const char *src =
+        "stage sink adapter fixture.managed\n";
+    const char *stages[] = {"sink"};
+    scoped_probe_t probe = {0};
+    scoped_boundary_t boundary;
+    turbo_flow_adapter_ops_t ops = sink_ops();
+    turbo_flow_adapter_schema_t schema = sink_schema();
+    turbo_flow_managed_boundary_provider_ops_t boundary_ops =
+        TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+    turbo_flow_provider_adapter_registration_v1_t registration =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    scoped_boundary_init(&boundary);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    ops.shutdown = scoped_shutdown;
+    boundary_ops.resource.metadata = scoped_boundary_metadata;
+    boundary_ops.descriptor = scoped_boundary_descriptor;
+    boundary_ops.snapshot = scoped_boundary_snapshot;
+
+    registration.provider_identity = "fixture.managed";
+    registration.stage_names = stages;
+    registration.stage_count = 1u;
+    registration.adapter_ops = &ops;
+    registration.schema = &schema;
+    registration.managed_owner_name = boundary.metadata.owner_name;
+    registration.managed_boundary_ops = &boundary_ops;
+    registration.ctx = &probe;
+
+    check_equal(
+        turbo_flow_provider_adapter_register(flow, &registration),
+        SALTS_OK);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(probe.shutdowns, 0);
+
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
+    check_equal(probe.shutdowns, 1);
 
     turbo_flow_destroy(flow);
     check_equal(probe.shutdowns, 1);
