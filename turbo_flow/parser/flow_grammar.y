@@ -25,7 +25,7 @@
 %type adapter_name {flow_token_t}
 %type dotted_name {flow_token_t}
 %type binding_segment {flow_token_t}
-%type provider_config_value {flow_provider_config_value_spec_t}
+%type provider_config_scalar {flow_provider_config_value_spec_t}
 
 %start_symbol start
 
@@ -66,9 +66,7 @@ source_config_line ::= OPERATION adapter_name(N) NEWLINE. {
 source_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
   flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
 }
-source_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
-  flow_parse_add_provider_config_literal(ctx, N, V);
-}
+source_config_line ::= provider_config_field NEWLINE.
 source_config_line ::= NEWLINE.
 
 buffer_decl ::= BUFFER IDENT(N) PROVIDER adapter_name(P) RESOURCE adapter_name(R). {
@@ -91,9 +89,7 @@ buffer_config_lines ::= buffer_config_lines buffer_config_line.
 buffer_config_line ::= RESOURCE adapter_name(N) NEWLINE. {
   flow_parse_set_resource(ctx, &ctx->node_config_spec, N);
 }
-buffer_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
-  flow_parse_add_provider_config_literal(ctx, N, V);
-}
+buffer_config_line ::= provider_config_field NEWLINE.
 buffer_config_line ::= NEWLINE.
 
 stage_decl ::= STAGE IDENT(N) stage_options(O). {
@@ -245,22 +241,55 @@ stage_config_line ::= EXEC(E) IDENT(BAD) NEWLINE. {
   (void)E;
   flow_parse_unknown_executor(ctx, BAD);
 }
-stage_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
-  flow_parse_add_provider_config_literal(ctx, N, V);
-}
+stage_config_line ::= provider_config_field NEWLINE.
 stage_config_line ::= NEWLINE.
 
-provider_config_value(A) ::= STRING(V). {
+provider_config_field ::= provider_config_field_start provider_config_value.
+provider_config_field_start ::= IDENT(N). {
+  flow_parse_begin_provider_config_field(ctx, N);
+}
+
+provider_config_value ::= provider_config_scalar(V). {
+  flow_parse_add_provider_config_value(ctx, V);
+}
+provider_config_value ::= provider_config_list.
+provider_config_value ::= provider_config_object.
+
+provider_config_scalar(A) ::= STRING(V). {
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_TEXT;
   A.token = V;
 }
-provider_config_value(A) ::= NUMBER(V). {
+provider_config_scalar(A) ::= NUMBER(V). {
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_UINT;
   A.token = V;
 }
-provider_config_value(A) ::= IDENT(V). {
+provider_config_scalar(A) ::= IDENT(V). {
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_IDENT;
   A.token = V;
+}
+
+provider_config_list ::= provider_config_list_start provider_config_list_items RBRACKET(R). {
+  flow_parse_end_provider_config_list(ctx, R);
+}
+provider_config_list_start ::= LBRACKET(L). {
+  flow_parse_begin_provider_config_list(ctx, L);
+}
+provider_config_list_items ::= .
+provider_config_list_items ::= provider_config_value.
+provider_config_list_items ::= provider_config_list_items COMMA provider_config_value.
+
+provider_config_object ::= provider_config_object_start provider_config_object_fields RBRACE(R). {
+  flow_parse_end_provider_config_object(ctx, R);
+}
+provider_config_object_start ::= LBRACE(L). {
+  flow_parse_begin_provider_config_object(ctx, L);
+}
+provider_config_object_fields ::= .
+provider_config_object_fields ::= provider_config_object_field.
+provider_config_object_fields ::= provider_config_object_fields COMMA provider_config_object_field.
+provider_config_object_field ::= provider_config_object_key provider_config_value.
+provider_config_object_key ::= IDENT(N). {
+  flow_parse_add_provider_config_object_key(ctx, N);
 }
 
 exec_spec(A) ::= INLINE exec_options(O). {
