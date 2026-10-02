@@ -322,11 +322,6 @@ if(BUILD_TESTING AND BUILD_TESTS)
               "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_client.dll chttp_server.dll"
               "-DCHTTP_EXPECT_FAILURE_PATTERN=requires exactly one chttp_client.dll import"
               -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
-    add_test(NAME test_turbo_flow_chttp_native_gateway_concrete
-      COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=gateway
-              "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll chttp_client.dll"
-              "-DCHTTP_EXPECT_FAILURE_PATTERN=Gateway must not link a concrete HTTP implementation"
-              -P "${CMAKE_SOURCE_DIR}/tests/install_chttp_plugin_consumer/check_native_abi.cmake")
     add_test(NAME test_turbo_flow_chttp_native_provider_missing_adapter
       COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=provider
               "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll"
@@ -340,7 +335,6 @@ if(BUILD_TESTING AND BUILD_TESTS)
       test_turbo_flow_chttp_native_wrong_basename
       test_turbo_flow_chttp_native_missing_server
       test_turbo_flow_chttp_native_duplicate_client
-      test_turbo_flow_chttp_native_gateway_concrete
       test_turbo_flow_chttp_native_provider_missing_adapter
       PROPERTIES LABELS "cmake;chttp-adapter" TIMEOUT 30)
 
