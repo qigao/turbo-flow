@@ -69,6 +69,10 @@ static const char *optional_text(const char *value) {
   return text_present(value) ? value : NULL;
 }
 
+static const char *text_or_empty(const char *value) {
+  return value ? value : "";
+}
+
 static int clean_text(const char *text) {
   const unsigned char *cursor;
   if (!text) return 0;
@@ -388,6 +392,7 @@ static int server_base_validate(
       !clean_text(path) ||
       strlen(path) > server->max_target_bytes ||
       server->backlog > INT_MAX ||
+      out->network.max_send_bytes < CHUNK_RESERVE ||
       server->stream_chunk_bytes >
           out->network.max_send_bytes - CHUNK_RESERVE ||
       server->max_buffered_response_body_bytes >
@@ -600,6 +605,7 @@ int chttp_typed_client_config(
   if (client->max_start_line_bytes <= 15u ||
       client->max_header_count < 3u ||
       client->h2_input_buffer_bytes < H2_INPUT_MIN ||
+      out->network.max_send_bytes < CHUNK_RESERVE ||
       client->stream_chunk_bytes >
           out->network.max_send_bytes - CHUNK_RESERVE)
     return typed_fail(
@@ -633,20 +639,20 @@ int chttp_typed_client_config(
     size_t bytes;
     if (!header ||
         !header_valid(
-            header->name, header->value,
+            header->name, text_or_empty(header->value),
             adapter->protocol == CHTTP_HTTP_2))
       return typed_fail(
           error, SALTS_EINVAL, instance_name, "headers",
           "static HTTP header violates protocol policy");
     bytes = strlen(header->name);
-    if (size_add(&bytes, strlen(header->value)) != SALTS_OK ||
+    if (size_add(&bytes, strlen(text_or_empty(header->value))) != SALTS_OK ||
         size_add(&bytes, 4u) != SALTS_OK ||
         size_add(&header_bytes, bytes) != SALTS_OK)
       return typed_fail(
           error, SALTS_ERANGE, instance_name, "headers",
           "static HTTP header bytes overflow the provider bound");
     out->headers[i].name = header->name;
-    out->headers[i].value = header->value;
+    out->headers[i].value = text_or_empty(header->value);
   }
 
   if (header_count + 3u > client->max_header_count ||
@@ -758,7 +764,7 @@ int chttp_typed_server_config(
       !header_value_valid(typed->error_content_type) ||
       out->server.max_buffered_response_body_bytes <
           sizeof("request too large") - 1u ||
-      strlen(typed->graph_error_body) >
+      strlen(text_or_empty(typed->graph_error_body)) >
           out->server.max_buffered_response_body_bytes ||
       adapter->max_request_message_bytes <
           out->server.max_request_body_bytes)
@@ -783,8 +789,9 @@ int chttp_typed_server_config(
   adapter->path = typed->path;
   adapter->response_content_type = typed->response_content_type;
   adapter->error_content_type = typed->error_content_type;
-  adapter->graph_error_body = typed->graph_error_body;
-  adapter->graph_error_body_size = strlen(typed->graph_error_body);
+  adapter->graph_error_body = text_or_empty(typed->graph_error_body);
+  adapter->graph_error_body_size =
+      strlen(text_or_empty(typed->graph_error_body));
   return SALTS_OK;
 }
 
