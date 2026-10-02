@@ -1,4 +1,5 @@
 #include "turbo_flow_cnet_managed_sink.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <cflow/executor.h>
 #include <cflow/io_actor.h>
@@ -627,19 +628,23 @@ static int datagram_sink_config_validate(const turbo_flow_cnet_datagram_sink_con
   return SALTS_OK;
 }
 
-int turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_config_t *config,
-                                           turbo_flow_cnet_datagram_sink_t **sink_out) {
+static int datagram_sink_register_impl(
+    const turbo_flow_cnet_datagram_sink_config_t *config,
+    const char *provider_identity, const char *const *stage_names,
+    size_t stage_count, turbo_flow_cnet_datagram_sink_t **sink_out) {
   turbo_flow_cnet_datagram_sink_t *sink;
   turbo_flow_adapter_ops_t adapter_ops = {0};
-  turbo_flow_async_terminal_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  turbo_flow_async_terminal_adapter_ops_t async_ops =
+      TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
   turbo_flow_managed_boundary_provider_ops_t boundary_ops =
       TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
-  turbo_flow_managed_async_terminal_registration_t registration =
-      TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
   turbo_flow_adapter_schema_t schema = {0};
   int rc;
   if (!sink_out) return SALTS_EINVAL;
   *sink_out = NULL;
+  if (stage_count != 0u &&
+      (!provider_identity || !provider_identity[0] || !stage_names))
+    return SALTS_EINVAL;
   rc = datagram_sink_config_validate(config);
   if (rc != SALTS_OK) return rc;
   sink = (turbo_flow_cnet_datagram_sink_t *)calloc(1u, sizeof(*sink));
@@ -660,7 +665,8 @@ int turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_c
   sink->stop_timeout_ms = config->stop_timeout_ms;
   sink->delivered_capacity = config->datagram->send_capacity;
   sink->delivered_ids =
-      (cflow_io_request_id *)calloc(sink->delivered_capacity, sizeof(*sink->delivered_ids));
+      (cflow_io_request_id *)calloc(
+          sink->delivered_capacity, sizeof(*sink->delivered_ids));
   atomic_init(&sink->next_lease, 1u);
   atomic_init(&sink->messages_sent, 0u);
   atomic_init(&sink->bytes_sent, 0u);
@@ -698,14 +704,33 @@ int turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_c
   boundary_ops.resource.metadata = datagram_sink_resource_metadata;
   boundary_ops.descriptor = datagram_sink_managed_descriptor;
   boundary_ops.snapshot = datagram_sink_managed_snapshot;
-  registration.adapter_name = sink->adapter_name;
-  registration.adapter_ops = &adapter_ops;
-  registration.async_ops = &async_ops;
-  registration.schema = &schema;
-  registration.owner_name = sink->identity.owner;
-  registration.boundary_ops = &boundary_ops;
-  registration.ctx = sink;
-  rc = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);
+
+  if (stage_count == 0u) {
+    turbo_flow_managed_async_terminal_registration_t registration =
+        TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
+    registration.adapter_name = sink->adapter_name;
+    registration.adapter_ops = &adapter_ops;
+    registration.async_ops = &async_ops;
+    registration.schema = &schema;
+    registration.owner_name = sink->identity.owner;
+    registration.boundary_ops = &boundary_ops;
+    registration.ctx = sink;
+    rc = turbo_flow_register_managed_async_terminal_adapter(
+        config->flow, &registration);
+  } else {
+    turbo_flow_provider_adapter_registration_v1_t registration =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    registration.provider_identity = provider_identity;
+    registration.stage_names = stage_names;
+    registration.stage_count = stage_count;
+    registration.adapter_ops = &adapter_ops;
+    registration.async_terminal_ops = &async_ops;
+    registration.schema = &schema;
+    registration.managed_owner_name = sink->identity.owner;
+    registration.managed_boundary_ops = &boundary_ops;
+    registration.ctx = sink;
+    rc = turbo_flow_provider_adapter_register(config->flow, &registration);
+  }
   if (rc != SALTS_OK) {
     tstr_free(sink->adapter_name);
     tstr_free(sink->host);
@@ -716,6 +741,21 @@ int turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_c
   }
   *sink_out = sink;
   return SALTS_OK;
+}
+
+int turbo_flow_cnet_datagram_sink_register(
+    const turbo_flow_cnet_datagram_sink_config_t *config,
+    turbo_flow_cnet_datagram_sink_t **sink_out) {
+  return datagram_sink_register_impl(config, NULL, NULL, 0u, sink_out);
+}
+
+int turbo_flow_cnet_datagram_sink_register_provider(
+    const turbo_flow_cnet_datagram_sink_config_t *config,
+    const char *provider_identity, const char *const *stage_names,
+    size_t stage_count, turbo_flow_cnet_datagram_sink_t **sink_out) {
+  if (stage_count == 0u) return SALTS_EINVAL;
+  return datagram_sink_register_impl(
+      config, provider_identity, stage_names, stage_count, sink_out);
 }
 
 static int datagram_sink_snapshot_locked(const turbo_flow_cnet_datagram_sink_t *sink,
