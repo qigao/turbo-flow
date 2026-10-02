@@ -3,10 +3,12 @@ cmake_add_test(
   SOURCES test_chttp_typed_contract.c
   LIBS
     TurboFlow::Product
+    tf_chttp_provider_support
     Salts::TinyTest
     ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
   INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${turbo_flow_chttp_provider_config_GENERATED_DIR}
   FOLDER "io/chttp/tests")
 add_dependencies(
