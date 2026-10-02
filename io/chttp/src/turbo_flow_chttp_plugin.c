@@ -461,7 +461,9 @@ static int provider_contract(
       TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION;
   out->resource.required_capabilities =
       TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
-      TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT;
+      (slot->kind == CHTTP_PROVIDER_CLIENT
+           ? TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT
+           : 0u);
   out->resource.expected_interface =
       turbo_flow_chttp_deployment_resource_interface();
   return SALTS_OK;
