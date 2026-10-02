@@ -122,7 +122,7 @@ if(WIN32)
     ERROR_VARIABLE consumer_dependent_error)
   if(NOT consumer_dependent_result EQUAL 0)
     message(FATAL_ERROR
-            "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
+            "Installed CHTTP provider consumer dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
   if(consumer_dependent_output MATCHES
      "tf_chttp_adapter\\.dll|chttp_client\\.dll|chttp_server\\.dll|salts_chttp(-[0-9]+)?\\.dll")
