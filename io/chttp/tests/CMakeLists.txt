@@ -3,6 +3,7 @@ cmake_add_test(
   SOURCES test_chttp_typed_contract.c
   LIBS
     TurboFlow::Product
+    TurboFlow::CHTTPAdapter
     tf_chttp_provider_support
     Salts::TinyTest
     ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
