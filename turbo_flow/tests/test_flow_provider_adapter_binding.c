@@ -443,7 +443,9 @@ spec("provider-scoped adapter stage binding") {
     static const char *src =
         "source input\n"
         "stage sink adapter legacy.adapter\n"
-        "stage main { input -> sink }\n";
+        "stage main {\n"
+        "  input -> sink\n"
+        "}\n";
     scoped_probe_t probe = {0};
     turbo_flow_adapter_ops_t ops = sink_ops();
     turbo_flow_adapter_schema_t schema = sink_schema();
