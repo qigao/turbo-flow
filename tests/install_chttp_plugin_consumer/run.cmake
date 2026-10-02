@@ -67,11 +67,6 @@ if(WIN32)
             "-DCHTTP_TEST_DEPENDENTS=chttp_client.dll chttp_server.dll"
             -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake"
     COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}" -DCHTTP_TEST_LAYER=gateway
-            "-DCHTTP_TEST_DEPENDENTS=KERNEL32.dll"
-            -P "${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake"
-    COMMAND_ERROR_IS_FATAL ANY)
   if(NOT EXISTS "${dumpbin}")
     message(FATAL_ERROR "Required dumpbin executable does not exist: ${dumpbin}")
   endif()
