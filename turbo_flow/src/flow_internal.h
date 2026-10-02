@@ -25,6 +25,8 @@
 #define FLOW_WORKER_POOL_DEFAULT_CAPACITY 1024u
 #define FLOW_WORKER_POOL_MAX_CAPACITY 1048576u
 #define FLOW_PROVIDER_CONFIG_MAX_FIELDS 256u
+#define FLOW_PROVIDER_CONFIG_MAX_EVENTS 1024u
+#define FLOW_PROVIDER_CONFIG_MAX_LITERAL_DEPTH 16u
 enum {
   FLOW_DATA_SCHEMA_MAX_DEPTH = 16,
   FLOW_DATA_SCHEMA_MAX_NODES = 256,
@@ -40,11 +42,20 @@ typedef enum flow_databind_transport_kind_e {
 typedef enum flow_provider_config_literal_kind_e {
   FLOW_PROVIDER_CONFIG_LITERAL_TEXT = 1,
   FLOW_PROVIDER_CONFIG_LITERAL_UINT,
-  FLOW_PROVIDER_CONFIG_LITERAL_BOOL
+  FLOW_PROVIDER_CONFIG_LITERAL_BOOL,
+  FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN,
+  FLOW_PROVIDER_CONFIG_LITERAL_MAP_END,
+  FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN,
+  FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END
 } flow_provider_config_literal_kind_t;
 
+/**
+ * One bounded source-level CSerde event.
+ *
+ * TEXT is used for both map keys and text values; structural position gives it
+ * meaning exactly as in every other CSerde reader. The stage owns text storage.
+ */
 typedef struct flow_provider_config_literal_s {
-  tstr name;
   flow_provider_config_literal_kind_t kind;
   tstr text;
   uint64_t uint_value;
@@ -75,7 +86,7 @@ typedef struct flow_stage_plan_impl_s {
   uint32_t provider_adapter_index;
   int provider_adapter_bound;
   /** Bounded source literals used only by compile/preflight provider binding. */
-  vec_t provider_config_literals; /* flow_provider_config_literal_t */
+  vec_t provider_config_literals; /* bounded CSerde event stream */
   turbo_flow_operation_descriptor_t resolved_operation;
   int operation_resolved;
   turbo_flow_data_strategy_t data_strategy;
