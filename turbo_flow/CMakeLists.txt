@@ -55,6 +55,7 @@ list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_co
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_diagnostic.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h)
+list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_adapter.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_binding.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resource.h)
 list(APPEND TURBO_FLOW_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
@@ -149,6 +150,7 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_instance.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_adapter.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_binding.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_resource.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_databind.h)
