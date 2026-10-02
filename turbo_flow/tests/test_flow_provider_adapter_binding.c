@@ -1,6 +1,7 @@
 #include "flow_internal.h"
 #include "tinytest.h"
 #include "turbo_flow_provider.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <string.h>
 
@@ -139,6 +140,72 @@ static int scoped_boundary_snapshot(
 static void scoped_managed_owner_shutdown(void *ctx) {
   scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
   if (owner) ++owner->probe.shutdowns;
+}
+
+typedef struct scoped_reply_probe_s {
+  uint64_t token;
+  size_t captures;
+  size_t sends;
+  int terminal_ready;
+  turbo_flow_transport_reply_terminal_t terminal;
+} scoped_reply_probe_t;
+
+static int scoped_reply_capture(
+    void *ctx, const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  (void)message;
+  if (!probe || !session) return SALTS_EINVAL;
+  *session =
+      (turbo_flow_transport_reply_session_t)
+          TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+  session->token_size = sizeof(probe->token);
+  memcpy(session->token, &probe->token, sizeof(probe->token));
+  ++probe->captures;
+  return SALTS_OK;
+}
+
+static int scoped_reply_send(
+    void *ctx, const turbo_flow_transport_reply_request_t *request) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  if (!probe || !request || probe->terminal_ready) return SALTS_EBUSY;
+  ++probe->sends;
+  probe->terminal =
+      (turbo_flow_transport_reply_terminal_t)
+          TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  probe->terminal.session = request->session;
+  probe->terminal.kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+  probe->terminal.data_size = request->data_size;
+  probe->terminal.status = SALTS_OK;
+  probe->terminal.tag = request->tag;
+  probe->terminal_ready = 1;
+  return SALTS_OK;
+}
+
+static int scoped_reply_take(
+    void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  if (!probe || !terminal) return SALTS_EINVAL;
+  if (!probe->terminal_ready) return SALTS_ENOENT;
+  *terminal = probe->terminal;
+  probe->terminal_ready = 0;
+  return SALTS_OK;
+}
+
+static turbo_flow_adapter_schema_t source_schema(void) {
+  turbo_flow_adapter_schema_t schema;
+  memset(&schema, 0, sizeof(schema));
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+  schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+  return schema;
+}
+
+static turbo_flow_adapter_ops_t source_ops(void) {
+  turbo_flow_adapter_ops_t ops;
+  memset(&ops, 0, sizeof(ops));
+  ops.start = scoped_start;
+  return ops;
 }
 
 static turbo_flow_adapter_schema_t sink_schema(void) {
