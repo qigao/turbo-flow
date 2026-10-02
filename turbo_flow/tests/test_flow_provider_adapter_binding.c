@@ -448,22 +448,42 @@ spec("provider-scoped adapter stage binding") {
     turbo_flow_adapter_ops_t ops = sink_ops();
     turbo_flow_adapter_schema_t schema = sink_schema();
     turbo_flow_t *flow = turbo_flow_create();
+    int register_status = SALTS_ENOMEM;
+    int parse_one_status = SALTS_ENOMEM;
+    int compile_one_status = SALTS_ENOMEM;
+    int reset_status = SALTS_ENOMEM;
+    size_t adapter_count_after_reset = 0u;
+    int schema_present_after_reset = 0;
+    int parse_two_status = SALTS_ENOMEM;
+    int compile_two_status = SALTS_ENOMEM;
+
+    if (flow) {
+      register_status = turbo_flow_register_adapter_ex(
+          flow, "legacy.adapter", &ops, &probe, &schema);
+      parse_one_status = turbo_flow_parse_string(flow, src, strlen(src));
+      if (parse_one_status == SALTS_OK)
+        compile_one_status = turbo_flow_compile(flow);
+      if (compile_one_status == SALTS_OK)
+        reset_status = turbo_flow_reset(flow, 1);
+      if (reset_status == SALTS_OK) {
+        adapter_count_after_reset = turbo_flow_adapter_count(flow);
+        schema_present_after_reset =
+            turbo_flow_find_adapter_schema(flow, "legacy.adapter") != NULL;
+        parse_two_status = turbo_flow_parse_string(flow, src, strlen(src));
+        if (parse_two_status == SALTS_OK)
+          compile_two_status = turbo_flow_compile(flow);
+      }
+      turbo_flow_destroy(flow);
+    }
 
     check_not_null(flow);
-    check_equal(
-        turbo_flow_register_adapter_ex(
-            flow, "legacy.adapter", &ops, &probe, &schema),
-        SALTS_OK);
-    check_not_null(turbo_flow_find_adapter_schema(flow, "legacy.adapter"));
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(turbo_flow_compile(flow), SALTS_OK);
-
-    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
-    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
-    check_not_null(turbo_flow_find_adapter_schema(flow, "legacy.adapter"));
-    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    check_equal(turbo_flow_compile(flow), SALTS_OK);
-
-    turbo_flow_destroy(flow);
+    check_equal(register_status, SALTS_OK);
+    check_equal(parse_one_status, SALTS_OK);
+    check_equal(compile_one_status, SALTS_OK);
+    check_equal(reset_status, SALTS_OK);
+    check_equal(adapter_count_after_reset, (size_t)1u);
+    check_true(schema_present_after_reset);
+    check_equal(parse_two_status, SALTS_OK);
+    check_equal(compile_two_status, SALTS_OK);
   }
 }
