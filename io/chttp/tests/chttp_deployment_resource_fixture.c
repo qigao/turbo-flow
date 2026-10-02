@@ -40,7 +40,8 @@ CMETA_IMPLEMENTS(
 
 CMETA_IMPLEMENTS(
     turbo_flow_chttp_deployment_resource, fixture_server_resource_impl,
-    TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT,
+    TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+        TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND,
     .snapshot = resource_snapshot);
 
 static turbo_flow_chttp_deployment_resource client_handle;
@@ -96,7 +97,9 @@ static void fixture_init(void) {
       .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
       .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
       .contract_version = TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION,
-      .capabilities = TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT,
+      .capabilities =
+          TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+          TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND,
       .export_id = "fixture.chttp.server",
       .contract_id = TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
       .value.interface = {
