@@ -1,4 +1,5 @@
 #include "turbo_flow_cnet_managed_sink.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <cflow/executor.h>
 #include <cflow/io_actor.h>
@@ -908,20 +909,24 @@ static int packet_sink_config_validate(const turbo_flow_cnet_packet_sink_config_
   return SALTS_OK;
 }
 
-int turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_config_t *config,
-                                         turbo_flow_cnet_packet_sink_t **sink_out) {
+static int packet_sink_register_impl(
+    const turbo_flow_cnet_packet_sink_config_t *config,
+    const char *provider_identity, const char *const *stage_names,
+    size_t stage_count, turbo_flow_cnet_packet_sink_t **sink_out) {
   turbo_flow_cnet_packet_sink_t *sink;
   turbo_flow_adapter_ops_t adapter_ops = {0};
-  turbo_flow_async_terminal_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+  turbo_flow_async_terminal_adapter_ops_t async_ops =
+      TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
   turbo_flow_managed_boundary_provider_ops_t boundary_ops =
       TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
-  turbo_flow_managed_async_terminal_registration_t registration =
-      TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
   turbo_flow_adapter_schema_t schema = {0};
   size_t index;
   int status;
   if (!sink_out) return SALTS_EINVAL;
   *sink_out = NULL;
+  if (stage_count != 0u &&
+      (!provider_identity || !provider_identity[0] || !stage_names))
+    return SALTS_EINVAL;
   status = packet_sink_config_validate(config);
   if (status != SALTS_OK) return status;
   sink = (turbo_flow_cnet_packet_sink_t *)calloc(1u, sizeof(*sink));
@@ -943,10 +948,13 @@ int turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_confi
   sink->actor_max_steps_per_poll = config->actor_max_steps_per_poll;
   sink->stop_timeout_ms = config->stop_timeout_ms;
   sink->operations =
-      (packet_sink_operation_t *)calloc(sink->send_capacity, sizeof(*sink->operations));
+      (packet_sink_operation_t *)calloc(
+          sink->send_capacity, sizeof(*sink->operations));
   sink->delivered_ids =
-      (cflow_io_request_id *)calloc(sink->send_capacity, sizeof(*sink->delivered_ids));
-  if (!sink->adapter_name || !sink->host || !sink->operations || !sink->delivered_ids) {
+      (cflow_io_request_id *)calloc(
+          sink->send_capacity, sizeof(*sink->delivered_ids));
+  if (!sink->adapter_name || !sink->host ||
+      !sink->operations || !sink->delivered_ids) {
     packet_sink_storage_destroy(sink);
     packet_sink_lifecycle_destroy(sink);
     free(sink);
@@ -963,7 +971,8 @@ int turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_confi
     sink->operations[index].sink = sink;
     sink->operations[index].slot = (uint32_t)index;
     sink->operations[index].claim =
-        (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
+        (turbo_flow_async_terminal_claim_t)
+            TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
     atomic_init(&sink->operations[index].request_id, 0u);
     atomic_init(&sink->operations[index].generation, 0u);
     atomic_init(&sink->operations[index].ready, false);
@@ -990,14 +999,34 @@ int turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_confi
   boundary_ops.resource.metadata = packet_sink_resource_metadata;
   boundary_ops.descriptor = packet_sink_managed_descriptor;
   boundary_ops.snapshot = packet_sink_managed_snapshot;
-  registration.adapter_name = sink->adapter_name;
-  registration.adapter_ops = &adapter_ops;
-  registration.async_ops = &async_ops;
-  registration.schema = &schema;
-  registration.owner_name = sink->identity.owner;
-  registration.boundary_ops = &boundary_ops;
-  registration.ctx = sink;
-  status = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);
+
+  if (stage_count == 0u) {
+    turbo_flow_managed_async_terminal_registration_t registration =
+        TURBO_FLOW_MANAGED_ASYNC_TERMINAL_REGISTRATION_INIT;
+    registration.adapter_name = sink->adapter_name;
+    registration.adapter_ops = &adapter_ops;
+    registration.async_ops = &async_ops;
+    registration.schema = &schema;
+    registration.owner_name = sink->identity.owner;
+    registration.boundary_ops = &boundary_ops;
+    registration.ctx = sink;
+    status = turbo_flow_register_managed_async_terminal_adapter(
+        config->flow, &registration);
+  } else {
+    turbo_flow_provider_adapter_registration_v1_t registration =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    registration.provider_identity = provider_identity;
+    registration.stage_names = stage_names;
+    registration.stage_count = stage_count;
+    registration.adapter_ops = &adapter_ops;
+    registration.async_terminal_ops = &async_ops;
+    registration.schema = &schema;
+    registration.managed_owner_name = sink->identity.owner;
+    registration.managed_boundary_ops = &boundary_ops;
+    registration.ctx = sink;
+    status = turbo_flow_provider_adapter_register(
+        config->flow, &registration);
+  }
   if (status != SALTS_OK) {
     packet_sink_storage_destroy(sink);
     packet_sink_lifecycle_destroy(sink);
@@ -1006,6 +1035,21 @@ int turbo_flow_cnet_packet_sink_register(const turbo_flow_cnet_packet_sink_confi
   }
   *sink_out = sink;
   return SALTS_OK;
+}
+
+int turbo_flow_cnet_packet_sink_register(
+    const turbo_flow_cnet_packet_sink_config_t *config,
+    turbo_flow_cnet_packet_sink_t **sink_out) {
+  return packet_sink_register_impl(config, NULL, NULL, 0u, sink_out);
+}
+
+int turbo_flow_cnet_packet_sink_register_provider(
+    const turbo_flow_cnet_packet_sink_config_t *config,
+    const char *provider_identity, const char *const *stage_names,
+    size_t stage_count, turbo_flow_cnet_packet_sink_t **sink_out) {
+  if (stage_count == 0u) return SALTS_EINVAL;
+  return packet_sink_register_impl(
+      config, provider_identity, stage_names, stage_count, sink_out);
 }
 
 static int packet_sink_snapshot_locked(const turbo_flow_cnet_packet_sink_t *sink,
