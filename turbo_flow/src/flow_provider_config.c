@@ -11,7 +11,7 @@ int flow_provider_config_literals_init(vec_t *literals) {
   memset(literals, 0, sizeof(*literals));
   return turbo_flow_stl_error(vec_init_bytes(
       literals, sizeof(flow_provider_config_literal_t),
-      _Alignof(turbo_flow_max_align_t), FLOW_PROVIDER_CONFIG_MAX_FIELDS));
+      _Alignof(turbo_flow_max_align_t), FLOW_PROVIDER_CONFIG_MAX_EVENTS));
 }
 
 void flow_provider_config_literals_destroy(vec_t *literals) {
@@ -21,7 +21,6 @@ void flow_provider_config_literals_destroy(vec_t *literals) {
     flow_provider_config_literal_t *literal =
         (flow_provider_config_literal_t *)vec_at(literals, i);
     if (!literal) continue;
-    tstr_freep(&literal->name);
     tstr_freep(&literal->text);
   }
   vec_destroy(literals);
@@ -40,7 +39,7 @@ int flow_provider_config_literals_copy(vec_t *destination, const vec_t *source) 
     const flow_provider_config_literal_t *src =
         (const flow_provider_config_literal_t *)vec_at_const(source, i);
     flow_provider_config_literal_t copy;
-    if (!src || !src->name) {
+    if (!src) {
       flow_provider_config_literals_destroy(destination);
       return SALTS_EPROTO;
     }
@@ -51,22 +50,15 @@ int flow_provider_config_literals_copy(vec_t *destination, const vec_t *source) 
     copy.bool_value = src->bool_value;
     copy.line = src->line;
     copy.column = src->column;
-    copy.name = tstr_from_v(tstr_to_v(src->name));
-    if (!copy.name) {
-      flow_provider_config_literals_destroy(destination);
-      return SALTS_ENOMEM;
-    }
     if (src->text) {
       copy.text = tstr_from_v(tstr_to_v(src->text));
       if (!copy.text) {
-        tstr_freep(&copy.name);
         flow_provider_config_literals_destroy(destination);
         return SALTS_ENOMEM;
       }
     }
 
     if (turbo_flow_stl_error(vec_push(destination, &copy)) != SALTS_OK) {
-      tstr_freep(&copy.name);
       tstr_freep(&copy.text);
       flow_provider_config_literals_destroy(destination);
       return SALTS_ENOMEM;
