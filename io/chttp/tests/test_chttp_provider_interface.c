@@ -530,8 +530,7 @@ spec("CHTTP canonical Salts provider") {
         TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID);
     check_equal(
         contract.resource.required_capabilities,
-        (uint64_t)(TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
-                   TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT));
+        (uint64_t)TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT);
     check_equal(resource_view.reference_name, "server_net");
     check_equal(
         resource_view.identity,
