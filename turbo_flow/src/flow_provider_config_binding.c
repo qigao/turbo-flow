@@ -9,69 +9,333 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+  FLOW_PROVIDER_READER_OUTER_BEGIN = 0u,
+  FLOW_PROVIDER_READER_FIELD_KEY,
+  FLOW_PROVIDER_READER_FIELD_VALUE,
+  FLOW_PROVIDER_READER_DONE
+};
+
+enum {
+  FLOW_PROVIDER_STRUCTURED_MAP = 1u,
+  FLOW_PROVIDER_STRUCTURED_ARRAY = 2u
+};
+
+static void flow_provider_config_structured_skip(
+    flow_provider_config_reader_t *reader) {
+  const char *cursor;
+  if (!reader || !reader->structured_cursor || !reader->structured_limit)
+    return;
+  cursor = reader->structured_cursor;
+  for (;;) {
+    while (cursor < reader->structured_limit &&
+           (*cursor == ' ' || *cursor == '\t' ||
+            *cursor == '\r' || *cursor == '\n' || *cursor == ','))
+      ++cursor;
+    if (cursor < reader->structured_limit && *cursor == '#') {
+      while (cursor < reader->structured_limit &&
+             *cursor != '\r' && *cursor != '\n')
+        ++cursor;
+      continue;
+    }
+    if (cursor + 1 < reader->structured_limit &&
+        cursor[0] == '%' && cursor[1] == '%') {
+      cursor += 2;
+      while (cursor < reader->structured_limit &&
+             *cursor != '\r' && *cursor != '\n')
+        ++cursor;
+      continue;
+    }
+    break;
+  }
+  reader->structured_cursor = cursor;
+}
+
+static int flow_provider_config_ident_start(char value) {
+  return (value >= 'A' && value <= 'Z') ||
+         (value >= 'a' && value <= 'z') || value == '_';
+}
+
+static int flow_provider_config_ident_continue(char value) {
+  return flow_provider_config_ident_start(value) ||
+         (value >= '0' && value <= '9');
+}
+
+static void flow_provider_config_structured_value_complete(
+    flow_provider_config_reader_t *reader) {
+  const uint32_t top =
+      reader && reader->structured_depth != 0u
+          ? reader->structured_depth - 1u
+          : 0u;
+  if (reader && reader->structured_depth != 0u &&
+      reader->structured_kind[top] == FLOW_PROVIDER_STRUCTURED_MAP &&
+      reader->structured_map_expect_key[top] == 0u)
+    reader->structured_map_expect_key[top] = 1u;
+}
+
+static cserde_status flow_provider_config_structured_next(
+    flow_provider_config_reader_t *reader, cserde_token *out) {
+  const char *cursor;
+  const char *start;
+  uint32_t top;
+  int map_key = 0;
+
+  if (!reader || !out || !reader->structured_cursor ||
+      !reader->structured_limit ||
+      reader->structured_cursor > reader->structured_limit)
+    return CSERDE_INVALID_ARGUMENT;
+
+  flow_provider_config_structured_skip(reader);
+  cursor = reader->structured_cursor;
+  if (cursor == reader->structured_limit)
+    return reader->structured_depth == 0u
+               ? CSERDE_DONE
+               : CSERDE_INVALID_STATE;
+
+  if (reader->structured_tokens >=
+      FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_TOKENS)
+    return CSERDE_LIMIT_EXCEEDED;
+
+  if (reader->structured_depth != 0u) {
+    top = reader->structured_depth - 1u;
+    map_key =
+        reader->structured_kind[top] == FLOW_PROVIDER_STRUCTURED_MAP &&
+        reader->structured_map_expect_key[top] != 0u;
+  }
+
+  memset(out, 0, sizeof(*out));
+
+  if (*cursor == '[' || *cursor == '{') {
+    const uint8_t kind = *cursor == '{'
+                             ? FLOW_PROVIDER_STRUCTURED_MAP
+                             : FLOW_PROVIDER_STRUCTURED_ARRAY;
+    if (map_key ||
+        reader->structured_depth >=
+            FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_DEPTH)
+      return map_key ? CSERDE_INVALID_STATE : CSERDE_LIMIT_EXCEEDED;
+
+    flow_provider_config_structured_value_complete(reader);
+    top = reader->structured_depth++;
+    reader->structured_kind[top] = kind;
+    reader->structured_map_expect_key[top] =
+        kind == FLOW_PROVIDER_STRUCTURED_MAP ? 1u : 0u;
+    out->kind = kind == FLOW_PROVIDER_STRUCTURED_MAP
+                    ? CSERDE_MAP_BEGIN
+                    : CSERDE_ARRAY_BEGIN;
+    reader->structured_cursor = cursor + 1;
+    ++reader->structured_tokens;
+    return CSERDE_OK;
+  }
+
+  if (*cursor == ']' || *cursor == '}') {
+    const uint8_t expected =
+        *cursor == '}' ? FLOW_PROVIDER_STRUCTURED_MAP
+                       : FLOW_PROVIDER_STRUCTURED_ARRAY;
+    if (reader->structured_depth == 0u)
+      return CSERDE_INVALID_STATE;
+    top = reader->structured_depth - 1u;
+    if (reader->structured_kind[top] != expected ||
+        (expected == FLOW_PROVIDER_STRUCTURED_MAP &&
+         reader->structured_map_expect_key[top] == 0u))
+      return CSERDE_INVALID_STATE;
+
+    --reader->structured_depth;
+    out->kind = expected == FLOW_PROVIDER_STRUCTURED_MAP
+                    ? CSERDE_MAP_END
+                    : CSERDE_ARRAY_END;
+    reader->structured_cursor = cursor + 1;
+    ++reader->structured_tokens;
+    return CSERDE_OK;
+  }
+
+  if (*cursor == '"') {
+    start = ++cursor;
+    while (cursor < reader->structured_limit &&
+           *cursor != '"' && *cursor != '\r' && *cursor != '\n')
+      ++cursor;
+    if (cursor >= reader->structured_limit || *cursor != '"')
+      return CSERDE_INVALID_STATE;
+
+    out->kind = CSERDE_STRING;
+    out->value.slice.data = (const unsigned char *)start;
+    out->value.slice.size = (size_t)(cursor - start);
+    out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+    reader->structured_cursor = cursor + 1;
+    ++reader->structured_tokens;
+    if (map_key)
+      reader->structured_map_expect_key[
+          reader->structured_depth - 1u] = 0u;
+    else
+      flow_provider_config_structured_value_complete(reader);
+    return CSERDE_OK;
+  }
+
+  if (*cursor >= '0' && *cursor <= '9') {
+    uint64_t value = 0u;
+    if (map_key) return CSERDE_INVALID_STATE;
+    start = cursor;
+    while (cursor < reader->structured_limit &&
+           *cursor >= '0' && *cursor <= '9') {
+      const uint64_t digit = (uint64_t)(*cursor - '0');
+      if (value > (UINT64_MAX - digit) / UINT64_C(10))
+        return CSERDE_LIMIT_EXCEEDED;
+      value = value * UINT64_C(10) + digit;
+      ++cursor;
+    }
+    if (cursor == start) return CSERDE_INVALID_STATE;
+    out->kind = CSERDE_UINT;
+    out->value.uint = value;
+    reader->structured_cursor = cursor;
+    ++reader->structured_tokens;
+    flow_provider_config_structured_value_complete(reader);
+    return CSERDE_OK;
+  }
+
+  if (flow_provider_config_ident_start(*cursor)) {
+    start = cursor++;
+    while (cursor < reader->structured_limit &&
+           flow_provider_config_ident_continue(*cursor))
+      ++cursor;
+
+    if (map_key) {
+      out->kind = CSERDE_STRING;
+      out->value.slice.data = (const unsigned char *)start;
+      out->value.slice.size = (size_t)(cursor - start);
+      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+      reader->structured_map_expect_key[
+          reader->structured_depth - 1u] = 0u;
+    } else if ((size_t)(cursor - start) == 4u &&
+               memcmp(start, "true", 4u) == 0) {
+      out->kind = CSERDE_BOOL;
+      out->value.boolean = true;
+      flow_provider_config_structured_value_complete(reader);
+    } else if ((size_t)(cursor - start) == 5u &&
+               memcmp(start, "false", 5u) == 0) {
+      out->kind = CSERDE_BOOL;
+      out->value.boolean = false;
+      flow_provider_config_structured_value_complete(reader);
+    } else {
+      out->kind = CSERDE_STRING;
+      out->value.slice.data = (const unsigned char *)start;
+      out->value.slice.size = (size_t)(cursor - start);
+      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+      flow_provider_config_structured_value_complete(reader);
+    }
+    reader->structured_cursor = cursor;
+    ++reader->structured_tokens;
+    return CSERDE_OK;
+  }
+
+  return CSERDE_INVALID_STATE;
+}
+
 static cserde_status flow_provider_config_reader_next(
     void *context, cserde_token *out) {
   flow_provider_config_reader_t *reader =
       (flow_provider_config_reader_t *)context;
+  const flow_provider_config_literal_t *literal;
   size_t count;
-  size_t position;
 
-  if (!reader || !reader->literals || !out) return CSERDE_INVALID_ARGUMENT;
+  if (!reader || !reader->literals || !out)
+    return CSERDE_INVALID_ARGUMENT;
   count = vec_size(reader->literals);
-  position = reader->token_index;
-
   memset(out, 0, sizeof(*out));
-  if (position == 0u) {
+
+  if (reader->state == FLOW_PROVIDER_READER_OUTER_BEGIN) {
     out->kind = CSERDE_MAP_BEGIN;
-    ++reader->token_index;
+    reader->state = FLOW_PROVIDER_READER_FIELD_KEY;
     return CSERDE_OK;
   }
 
-  --position;
-  if (position < count * 2u) {
-    const size_t literal_index = position / 2u;
-    const flow_provider_config_literal_t *literal =
-        (const flow_provider_config_literal_t *)vec_at_const(
-            reader->literals, literal_index);
-    if (!literal || !literal->name) return CSERDE_INVALID_STATE;
+  if (reader->state == FLOW_PROVIDER_READER_DONE)
+    return CSERDE_DONE;
 
-    if ((position & 1u) == 0u) {
-      out->kind = CSERDE_STRING;
-      out->value.slice.data = (const unsigned char *)literal->name;
-      out->value.slice.size = tstr_len(literal->name);
-      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-    } else {
-      switch (literal->kind) {
-        case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
-          if (!literal->text) return CSERDE_INVALID_STATE;
-          out->kind = CSERDE_STRING;
-          out->value.slice.data = (const unsigned char *)literal->text;
-          out->value.slice.size = tstr_len(literal->text);
-          out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
-          out->kind = CSERDE_UINT;
-          out->value.uint = literal->uint_value;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
-          out->kind = CSERDE_BOOL;
-          out->value.boolean = literal->bool_value != 0;
-          break;
-        default:
-          return CSERDE_INVALID_STATE;
-      }
+  if (reader->state == FLOW_PROVIDER_READER_FIELD_KEY) {
+    if (reader->literal_index >= count) {
+      out->kind = CSERDE_MAP_END;
+      reader->state = FLOW_PROVIDER_READER_DONE;
+      return CSERDE_OK;
     }
-    ++reader->token_index;
+    literal =
+        (const flow_provider_config_literal_t *)vec_at_const(
+            reader->literals, reader->literal_index);
+    if (!literal || !literal->name) return CSERDE_INVALID_STATE;
+    out->kind = CSERDE_STRING;
+    out->value.slice.data =
+        (const unsigned char *)literal->name;
+    out->value.slice.size = tstr_len(literal->name);
+    out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+    reader->state = FLOW_PROVIDER_READER_FIELD_VALUE;
     return CSERDE_OK;
   }
 
-  if (position == count * 2u) {
-    out->kind = CSERDE_MAP_END;
-    ++reader->token_index;
+  if (reader->state != FLOW_PROVIDER_READER_FIELD_VALUE ||
+      reader->literal_index >= count)
+    return CSERDE_INVALID_STATE;
+
+  literal =
+      (const flow_provider_config_literal_t *)vec_at_const(
+          reader->literals, reader->literal_index);
+  if (!literal) return CSERDE_INVALID_STATE;
+
+  if (literal->kind == FLOW_PROVIDER_CONFIG_LITERAL_STRUCTURED) {
+    cserde_status status;
+    if (!literal->text ||
+        tstr_len(literal->text) == 0u ||
+        tstr_len(literal->text) >
+            FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_BYTES)
+      return CSERDE_INVALID_STATE;
+
+    if (!reader->structured_cursor) {
+      reader->structured_cursor = literal->text;
+      reader->structured_limit =
+          literal->text + tstr_len(literal->text);
+      reader->structured_tokens = 0u;
+      reader->structured_depth = 0u;
+      memset(reader->structured_kind, 0,
+             sizeof(reader->structured_kind));
+      memset(reader->structured_map_expect_key, 0,
+             sizeof(reader->structured_map_expect_key));
+    }
+
+    status = flow_provider_config_structured_next(reader, out);
+    if (status != CSERDE_OK) return status;
+
+    if (reader->structured_depth == 0u &&
+        reader->structured_cursor == reader->structured_limit) {
+      reader->structured_cursor = NULL;
+      reader->structured_limit = NULL;
+      reader->structured_tokens = 0u;
+      ++reader->literal_index;
+      reader->state = FLOW_PROVIDER_READER_FIELD_KEY;
+    }
     return CSERDE_OK;
   }
 
-  return CSERDE_DONE;
+  switch (literal->kind) {
+  case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
+    if (!literal->text) return CSERDE_INVALID_STATE;
+    out->kind = CSERDE_STRING;
+    out->value.slice.data =
+        (const unsigned char *)literal->text;
+    out->value.slice.size = tstr_len(literal->text);
+    out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+    break;
+  case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
+    out->kind = CSERDE_UINT;
+    out->value.uint = literal->uint_value;
+    break;
+  case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
+    out->kind = CSERDE_BOOL;
+    out->value.boolean = literal->bool_value != 0;
+    break;
+  default:
+    return CSERDE_INVALID_STATE;
+  }
+
+  ++reader->literal_index;
+  reader->state = FLOW_PROVIDER_READER_FIELD_KEY;
+  return CSERDE_OK;
 }
 
 static const cserde_reader_ops FLOW_PROVIDER_CONFIG_READER_OPS = {
