@@ -1119,26 +1119,40 @@ static int flow_adapter_schema_copy(flow_adapter_registration_t *adapter,
   return SALTS_OK;
 }
 
-int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
-                                   const turbo_flow_adapter_ops_t *ops, void *ctx,
-                                   const turbo_flow_adapter_schema_t *schema) {
+static int flow_register_adapter_impl(
+    turbo_flow_t *flow, const char *name,
+    const turbo_flow_adapter_ops_t *ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema,
+    int provider_scoped, uint32_t *index_out) {
   flow_adapter_registration_t adapter;
+  const size_t next_index = flow ? vec_size(&flow->adapters) : 0u;
   int rc;
 
+  if (index_out) *index_out = FLOW_PLAN_INDEX_NONE;
   if (!flow || !name || name[0] == '\0') return SALTS_EINVAL;
-  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED) {
-    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
-                                     "cannot register adapter after compile");
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0, "cannot register adapter after compile");
   }
-  if (flow_find_adapter(flow, name) >= 0) {
-    return flow_set_error_keep_state(flow, SALTS_EALREADY, 0, 0, "duplicate adapter");
+  if (!provider_scoped && flow_find_adapter(flow, name) >= 0) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EALREADY, 0, 0, "duplicate adapter");
+  }
+  if (next_index > UINT32_MAX) {
+    return flow_set_error_keep_state(
+        flow, SALTS_ERANGE, 0, 0, "adapter registry index exceeds uint32 range");
   }
 
   memset(&adapter, 0, sizeof(adapter));
-  if (turbo_flow_stl_error(vec_init_bytes(&adapter.operation_bindings, sizeof(flow_adapter_operation_binding_t), _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
+  if (turbo_flow_stl_error(vec_init_bytes(
+          &adapter.operation_bindings,
+          sizeof(flow_adapter_operation_binding_t),
+          _Alignof(turbo_flow_max_align_t), SIZE_MAX)) != SALTS_OK) {
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_NAME);
+  rc = flow_registration_commit_ready(
+      flow, FLOW_REGISTRATION_ALLOC_ADAPTER_NAME);
   if (rc != SALTS_OK) {
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error(flow, rc, 0, 0, "adapter name allocation failed");
@@ -1148,25 +1162,30 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
-  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_SCHEMA);
+  rc = flow_registration_commit_ready(
+      flow, FLOW_REGISTRATION_ALLOC_ADAPTER_SCHEMA);
   if (rc == SALTS_OK) rc = flow_adapter_schema_copy(&adapter, schema);
   if (rc != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error_keep_state(
-        flow, rc, 0, 0, rc == SALTS_ENOMEM ? "out of memory" : "invalid adapter option schema");
+        flow, rc, 0, 0,
+        rc == SALTS_ENOMEM ? "out of memory"
+                           : "invalid adapter option schema");
   }
   adapter.ctx = ctx;
-  if (ops) {
-    adapter.ops = *ops;
-  }
-  rc = flow_registration_commit_ready(flow, FLOW_REGISTRATION_ALLOC_ADAPTER_VECTOR);
+  adapter.provider_scoped = provider_scoped != 0;
+  if (ops) adapter.ops = *ops;
+
+  rc = flow_registration_commit_ready(
+      flow, FLOW_REGISTRATION_ALLOC_ADAPTER_VECTOR);
   if (rc != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
     tstr_freep(&adapter.name);
     vec_destroy(&adapter.operation_bindings);
-    return flow_set_error(flow, rc, 0, 0, "adapter registry allocation failed");
+    return flow_set_error(
+        flow, rc, 0, 0, "adapter registry allocation failed");
   }
   if (turbo_flow_stl_error(vec_push(&flow->adapters, &adapter)) != SALTS_OK) {
     flow_adapter_schema_destroy(&adapter);
@@ -1174,7 +1193,16 @@ int turbo_flow_register_adapter_ex(turbo_flow_t *flow, const char *name,
     vec_destroy(&adapter.operation_bindings);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
   }
+  if (index_out) *index_out = (uint32_t)next_index;
   return SALTS_OK;
+}
+
+int turbo_flow_register_adapter_ex(
+    turbo_flow_t *flow, const char *name,
+    const turbo_flow_adapter_ops_t *ops, void *ctx,
+    const turbo_flow_adapter_schema_t *schema) {
+  return flow_register_adapter_impl(
+      flow, name, ops, ctx, schema, 0, NULL);
 }
 
 int turbo_flow_register_async_terminal_adapter_ex(
