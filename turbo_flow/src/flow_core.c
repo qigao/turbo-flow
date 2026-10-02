@@ -1205,6 +1205,178 @@ int turbo_flow_register_adapter_ex(
       flow, name, ops, ctx, schema, 0, NULL);
 }
 
+int turbo_flow_provider_adapter_register(
+    turbo_flow_t *flow,
+    const turbo_flow_provider_adapter_registration_v1_t *registration) {
+  uint32_t *stage_indices = NULL;
+  uint32_t adapter_index = FLOW_PLAN_INDEX_NONE;
+  flow_adapter_registration_t *adapter = NULL;
+  const flow_resource_registration_t *resource = NULL;
+  turbo_flow_adapter_ops_t staged_ops = {0};
+  size_t adapters_before;
+  size_t resources_before;
+  uint32_t required_boundary_roles = 0u;
+  int rc = SALTS_OK;
+
+  if (!flow || !registration ||
+      registration->size != sizeof(*registration) ||
+      registration->version != TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_VERSION ||
+      !registration->provider_identity ||
+      registration->provider_identity[0] == '\0' ||
+      !registration->stage_names || registration->stage_count == 0u ||
+      (registration->async_terminal_ops && registration->async_emit_ops) ||
+      (!!registration->managed_owner_name != !!registration->managed_boundary_ops)) {
+    return SALTS_EINVAL;
+  }
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED ||
+      flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "provider adapter registration requires a mutable pre-compile flow");
+  }
+  if (registration->async_terminal_ops &&
+      (registration->async_terminal_ops->size <
+           sizeof(*registration->async_terminal_ops) ||
+       registration->async_terminal_ops->version !=
+           TURBO_FLOW_ASYNC_TERMINAL_API_VERSION ||
+       !registration->async_terminal_ops->submit ||
+       !registration->schema ||
+       (registration->schema->roles & TURBO_FLOW_ADAPTER_SINK) == 0u)) {
+    return SALTS_EINVAL;
+  }
+  if (registration->async_emit_ops &&
+      (registration->async_emit_ops->size <
+           sizeof(*registration->async_emit_ops) ||
+       registration->async_emit_ops->version !=
+           TURBO_FLOW_ASYNC_EMIT_API_VERSION ||
+       !registration->async_emit_ops->submit ||
+       !registration->schema ||
+       (registration->schema->roles & TURBO_FLOW_ADAPTER_TRANSFORM) == 0u)) {
+    return SALTS_EINVAL;
+  }
+  if (registration->managed_boundary_ops &&
+      (!registration->managed_owner_name ||
+       registration->managed_owner_name[0] == '\0')) {
+    return SALTS_EINVAL;
+  }
+
+  stage_indices = (uint32_t *)calloc(
+      registration->stage_count, sizeof(*stage_indices));
+  if (!stage_indices) return SALTS_ENOMEM;
+
+  for (size_t i = 0u; i < registration->stage_count; ++i) {
+    const char *stage_name = registration->stage_names[i];
+    flow_stage_plan_impl_t *stage;
+    int stage_index;
+    if (!stage_name || stage_name[0] == '\0') {
+      rc = SALTS_EINVAL;
+      goto fail;
+    }
+    stage_index = turbo_flow_find_stage(flow, stage_name);
+    if (stage_index < 0) {
+      rc = SALTS_ENOENT;
+      goto fail;
+    }
+    for (size_t j = 0u; j < i; ++j) {
+      if (stage_indices[j] == (uint32_t)stage_index) {
+        rc = SALTS_EALREADY;
+        goto fail;
+      }
+    }
+    stage = (flow_stage_plan_impl_t *)vec_at(
+        &flow->stages, (size_t)stage_index);
+    if (!stage || !stage->adapter_name ||
+        strcmp(stage->adapter_name, registration->provider_identity) != 0) {
+      rc = SALTS_EPROTO;
+      goto fail;
+    }
+    if (stage->provider_adapter_bound) {
+      rc = SALTS_EALREADY;
+      goto fail;
+    }
+    stage_indices[i] = (uint32_t)stage_index;
+  }
+
+  if (registration->schema) {
+    if (registration->schema->roles & TURBO_FLOW_ADAPTER_SOURCE)
+      required_boundary_roles |= TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+    if (registration->async_terminal_ops &&
+        (registration->schema->roles & TURBO_FLOW_ADAPTER_SINK))
+      required_boundary_roles |= TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  }
+
+  staged_ops = registration->adapter_ops
+                   ? *registration->adapter_ops
+                   : (turbo_flow_adapter_ops_t){0};
+  if (registration->managed_boundary_ops) staged_ops.shutdown = NULL;
+
+  adapters_before = vec_size(&flow->adapters);
+  resources_before = vec_size(&flow->resources);
+  rc = flow_register_adapter_impl(
+      flow, registration->provider_identity,
+      registration->adapter_ops ? &staged_ops : NULL,
+      registration->ctx, registration->schema, 1, &adapter_index);
+  if (rc != SALTS_OK) goto fail;
+
+  adapter = (flow_adapter_registration_t *)vec_at(
+      &flow->adapters, adapter_index);
+  if (!adapter || !adapter->provider_scoped) {
+    rc = SALTS_EPROTO;
+    goto rollback;
+  }
+
+  if (registration->async_terminal_ops) {
+    rc = flow_registration_commit_ready(
+        flow, FLOW_REGISTRATION_ASYNC_TERMINAL_BIND);
+    if (rc != SALTS_OK) goto rollback;
+    adapter->async_terminal_ops = *registration->async_terminal_ops;
+    adapter->async_terminal_ops.size = sizeof(adapter->async_terminal_ops);
+  } else if (registration->async_emit_ops) {
+    adapter->async_emit_ops = *registration->async_emit_ops;
+    adapter->async_emit_ops.size = sizeof(adapter->async_emit_ops);
+  }
+
+  if (registration->managed_boundary_ops) {
+    rc = turbo_flow_register_managed_boundary_provider(
+        flow, registration->managed_owner_name,
+        registration->managed_boundary_ops, registration->ctx);
+    if (rc != SALTS_OK) goto rollback;
+    resource = (const flow_resource_registration_t *)vec_at_const(
+        &flow->resources, resources_before);
+    if (!resource || !resource->has_managed_boundary ||
+        (resource->managed_boundary.role_flags & required_boundary_roles) !=
+            required_boundary_roles) {
+      rc = SALTS_EPROTO;
+      goto rollback;
+    }
+    if (registration->adapter_ops)
+      adapter->ops.shutdown = registration->adapter_ops->shutdown;
+  }
+
+  for (size_t i = 0u; i < registration->stage_count; ++i) {
+    flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(
+        &flow->stages, stage_indices[i]);
+    stage->provider_adapter_index = adapter_index;
+    stage->provider_adapter_bound = 1;
+  }
+
+  free(stage_indices);
+  return SALTS_OK;
+
+rollback:
+  flow_resource_registrations_rollback(flow, resources_before);
+  flow_adapter_registrations_rollback(flow, adapters_before);
+fail:
+  free(stage_indices);
+  if (rc != SALTS_OK) {
+    return flow_set_error_keep_state(
+        flow, rc, 0, 0, "provider stage adapter registration failed");
+  }
+  return rc;
+}
+
 int turbo_flow_register_async_terminal_adapter_ex(
     turbo_flow_t *flow, const char *name, const turbo_flow_adapter_ops_t *adapter_ops,
     const turbo_flow_async_terminal_adapter_ops_t *async_ops, void *ctx,
