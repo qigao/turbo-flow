@@ -17,6 +17,40 @@ add_dependencies(
 set_tests_properties(test_chttp_typed_contract PROPERTIES
   LABELS "chttp-plugin;provider;config;resource;databind")
 
+add_library(test_chttp_deployment_resource_fixture SHARED
+  chttp_deployment_resource_fixture.c)
+target_include_directories(test_chttp_deployment_resource_fixture PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_link_libraries(test_chttp_deployment_resource_fixture PRIVATE
+  Salts::Plugin)
+set_target_properties(test_chttp_deployment_resource_fixture PROPERTIES
+  FOLDER "io/chttp/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
+cmake_add_test(
+  test_chttp_provider_interface
+  SOURCES test_chttp_provider_interface.c
+  LIBS
+    TurboFlow::Product
+    TurboFlow::CHTTPAdapter
+    Salts::Plugin
+    Salts::TinyTest
+    ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${turbo_flow_chttp_provider_config_GENERATED_DIR}
+  DEFS
+    FLOW_CHTTP_PROVIDER_FIXTURE="$<TARGET_FILE:tf_chttp_plugin>"
+    FLOW_CHTTP_RESOURCE_FIXTURE="$<TARGET_FILE:test_chttp_deployment_resource_fixture>"
+  FOLDER "io/chttp/tests")
+add_dependencies(test_chttp_provider_interface
+  tf_chttp_plugin
+  test_chttp_deployment_resource_fixture
+  turbo_flow_chttp_provider_config_idl_codegen)
+set_tests_properties(test_chttp_provider_interface PROPERTIES
+  LABELS "chttp-plugin;provider;resource;lease;graph")
+
 cmake_add_test(
   test_chttp_adapter
   SOURCES test_chttp_adapter.c chttp_header_cpp.cpp
