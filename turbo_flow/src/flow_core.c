@@ -1,5 +1,6 @@
 #include "flow_internal.h"
 #include "flow_provider_config_internal.h"
+#include "turbo_flow_provider.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -329,7 +330,9 @@ int flow_find_adapter(const turbo_flow_t *flow, const char *name) {
   for (i = 0; i < vec_size(&flow->adapters); ++i) {
     const flow_adapter_registration_t *adapter =
         (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, i);
-    if (adapter && flow_name_eq_cstr(adapter->name, name)) return (int)i;
+    if (adapter && !adapter->provider_scoped &&
+        flow_name_eq_cstr(adapter->name, name))
+      return (int)i;
   }
   return -1;
 }
