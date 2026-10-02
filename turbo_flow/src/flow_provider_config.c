@@ -50,7 +50,11 @@ int flow_provider_config_literals_copy(vec_t *destination, const vec_t *source) 
     copy.bool_value = src->bool_value;
     copy.line = src->line;
     copy.column = src->column;
-    if (src->text) {
+    if (src->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT) {
+      if (!src->text) {
+        flow_provider_config_literals_destroy(destination);
+        return SALTS_EPROTO;
+      }
       copy.text = tstr_from_v(tstr_to_v(src->text));
       if (!copy.text) {
         flow_provider_config_literals_destroy(destination);
