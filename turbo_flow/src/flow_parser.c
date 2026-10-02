@@ -308,6 +308,32 @@ flow_token_t flow_parse_append_dotted_name(flow_parse_ctx_t *ctx, flow_token_t l
   return out;
 }
 
+flow_token_t flow_parse_provider_config_span(
+    flow_parse_ctx_t *ctx, flow_token_t first, flow_token_t last) {
+  flow_token_t out = first;
+  const char *end;
+
+  if (!first.value || !last.value || first.length == 0u ||
+      last.length == 0u || last.value < first.value) {
+    parse_fail(ctx, SALTS_EINVAL, first.line, first.column,
+               "structured provider config literal is invalid");
+    memset(&out, 0, sizeof(out));
+    return out;
+  }
+
+  end = last.value + last.length;
+  if (end < first.value ||
+      (size_t)(end - first.value) > FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_BYTES) {
+    parse_fail(ctx, SALTS_ENOSPC, first.line, first.column,
+               "structured provider config literal exceeds byte capacity");
+    memset(&out, 0, sizeof(out));
+    return out;
+  }
+  out.length = (size_t)(end - first.value);
+  return out;
+}
+
+
 int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *options,
                               flow_token_t token, int field) {
   uint32_t count = 0;
@@ -554,7 +580,8 @@ static int flow_parse_copy_provider_literals(
       flow_provider_config_literals_destroy(destination);
       return SALTS_ENOMEM;
     }
-    if (source->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT) {
+    if (source->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT ||
+        source->kind == FLOW_PROVIDER_CONFIG_LITERAL_STRUCTURED) {
       literal.text = tstr_from_v(source->text);
       if (!literal.text) {
         tstr_freep(&literal.name);
@@ -686,7 +713,10 @@ int flow_parse_add_provider_config_literal(
   literal.line = name.line;
   literal.column = name.column;
 
-  if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_UINT) {
+  if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_STRUCTURED) {
+    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_STRUCTURED;
+    literal.text = token_view(value.token);
+  } else if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_UINT) {
     uint64_t parsed = 0u;
     size_t offset;
     for (offset = 0u; offset < value.token.length; ++offset) {
