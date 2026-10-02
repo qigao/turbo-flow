@@ -357,11 +357,6 @@ elseif(CHTTP_TEST_LAYER STREQUAL "provider")
     message(FATAL_ERROR
             "CHTTP provider requires exactly one tf_chttp_adapter.dll import")
   endif()
-elseif(CHTTP_TEST_LAYER STREQUAL "gateway")
-  if(chttp_dependents MATCHES
-     "tf_chttp_adapter\\.dll|chttp_client\\.dll|chttp_server\\.dll|turbo_flow\\.dll")
-    message(FATAL_ERROR "Gateway must not link a concrete HTTP implementation")
-  endif()
 else()
   message(FATAL_ERROR "Unknown CHTTP dependency layer: ${CHTTP_TEST_LAYER}")
 endif()
