@@ -1310,7 +1310,9 @@ int turbo_flow_provider_adapter_register(
   staged_ops = registration->adapter_ops
                    ? *registration->adapter_ops
                    : (turbo_flow_adapter_ops_t){0};
-  if (registration->managed_boundary_ops) staged_ops.shutdown = NULL;
+  if (registration->managed_boundary_ops ||
+      registration->async_terminal_ops)
+    staged_ops.shutdown = NULL;
 
   adapters_before = vec_size(&flow->adapters);
   resources_before = vec_size(&flow->resources);
@@ -1351,9 +1353,10 @@ int turbo_flow_provider_adapter_register(
       rc = SALTS_EPROTO;
       goto rollback;
     }
-    if (registration->adapter_ops)
-      adapter->ops.shutdown = registration->adapter_ops->shutdown;
   }
+
+  if (registration->adapter_ops)
+    adapter->ops.shutdown = registration->adapter_ops->shutdown;
 
   for (size_t i = 0u; i < registration->stage_count; ++i) {
     flow_stage_plan_impl_t *stage = (flow_stage_plan_impl_t *)vec_at(
