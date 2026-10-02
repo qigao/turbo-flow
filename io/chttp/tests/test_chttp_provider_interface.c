@@ -608,6 +608,7 @@ spec("CHTTP canonical Salts provider") {
     check_equal(turbo_flow_adapter_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_managed_boundary_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_compile(acceptance.flow), SALTS_OK);
+  }
 
   it("materializes one WebSocket owner for an exact source and terminal pair") {
     static const char *src =
@@ -687,8 +688,6 @@ spec("CHTTP canonical Salts provider") {
     check_equal(turbo_flow_adapter_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_managed_boundary_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_compile(acceptance.flow), SALTS_OK);
-  }
-
   }
 }
 
