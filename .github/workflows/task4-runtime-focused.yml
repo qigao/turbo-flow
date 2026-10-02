@@ -147,6 +147,18 @@ jobs:
           fi
           printf '%s\n' "$adapter" > "$RUNNER_TEMP/task4-runtime-evidence/turbodb-adapter.txt"
 
+      - name: Verify CHTTP provider exports only the Salts Plugin entry
+        shell: bash
+        run: |
+          set -euxo pipefail
+          plugin="$(find build/task4-runtime -type f -name 'libtf_chttp_plugin.so*' | head -n1)"
+          test -n "$plugin"
+          exports="$(nm -D --defined-only "$plugin" | awk '$2 ~ /^[TW]$/ {print $3}' | sort -u)"
+          printf '%s\n' "$exports" | tee "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider-exports.txt"
+          test "$exports" = "salts_plugin_query"
+          ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
+          printf '%s\n' "$plugin" > "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider.txt"
+
       - name: Configure Release ThreadSanitizer concurrency build
         shell: bash
         run: |
