@@ -96,7 +96,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithTurboDB
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithTurboDB -WithCHttp
 
       - name: Verify published dependency boundary
         shell: bash
