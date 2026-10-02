@@ -223,7 +223,9 @@ static int stage_pair(
     turbo_flow_config_error_t *error) {
   const char *identity;
   const char *resource_name;
-  const turbo_flow_stage_plan_t *instance_stage = NULL;
+  const turbo_flow_stage_plan_t *instance_stage;
+  const char *terminal_name;
+  int instance_index;
   size_t sources = 0u;
   size_t terminals = 0u;
 
@@ -240,23 +242,23 @@ static int stage_pair(
         error, SALTS_EPROTO, instance->instance_name,
         "CHTTP provider requires an explicit deployment resource");
 
-  for (size_t i = 0u; i < turbo_flow_stage_count(flow); ++i) {
-    const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
-    if (!stage || !stage->name) return SALTS_EPROTO;
-    if (strcmp(stage->name, instance->instance_name) == 0)
-      instance_stage = stage;
-  }
-  if (!instance_stage || instance_stage->is_source ||
-      !instance_stage->adapter_name ||
+  instance_index = turbo_flow_find_stage(flow, instance->instance_name);
+  instance_stage =
+      instance_index >= 0
+          ? turbo_flow_stage_at(flow, (size_t)instance_index)
+          : NULL;
+  if (!instance_stage || !instance_stage->name ||
+      instance_stage->is_source || !instance_stage->adapter_name ||
       strcmp(instance_stage->adapter_name, identity) != 0 ||
       !instance_stage->resource_name ||
       strcmp(instance_stage->resource_name, resource_name) != 0)
     return provider_fail(
         error, SALTS_EPROTO, instance->instance_name,
         "CHTTP materialization instance must be an exact terminal stage");
+  terminal_name = instance_stage->name;
 
   if (slot->kind == CHTTP_PROVIDER_CLIENT) {
-    stage_names[0] = instance_stage->name;
+    stage_names[0] = terminal_name;
     *stage_count = 1u;
     return SALTS_OK;
   }
@@ -272,7 +274,7 @@ static int stage_pair(
       *source_name = stage->name;
     } else {
       ++terminals;
-      if (strcmp(stage->name, instance->instance_name) != 0)
+      if (strcmp(stage->name, terminal_name) != 0)
         return provider_fail(
             error, SALTS_EALREADY, instance->instance_name,
             "deployment resource already has another CHTTP terminal owner");
@@ -285,7 +287,7 @@ static int stage_pair(
         "CHTTP server resource requires exactly one source and one terminal stage");
 
   stage_names[0] = *source_name;
-  stage_names[1] = instance_stage->name;
+  stage_names[1] = terminal_name;
   *stage_count = 2u;
   return SALTS_OK;
 }
@@ -302,7 +304,8 @@ static int owner_idle(chttp_runtime_owner_t *owner) {
     if (rc != SALTS_OK) return rc;
     return (snapshot.state == TURBO_FLOW_CHTTP_CLIENT_REGISTERED ||
             snapshot.state == TURBO_FLOW_CHTTP_CLIENT_STOPPED ||
-            snapshot.state == TURBO_FLOW_CHTTP_CLIENT_DETACHED) &&
+            snapshot.state == TURBO_FLOW_CHTTP_CLIENT_DETACHED ||
+            snapshot.state == TURBO_FLOW_CHTTP_CLIENT_QUIESCED) &&
                    snapshot.active_requests == 0u &&
                    snapshot.queued_requests == 0u
                ? SALTS_OK
@@ -315,7 +318,8 @@ static int owner_idle(chttp_runtime_owner_t *owner) {
     if (rc != SALTS_OK) return rc;
     return (snapshot.state == TURBO_FLOW_CHTTP_SERVER_REGISTERED ||
             snapshot.state == TURBO_FLOW_CHTTP_SERVER_STOPPED ||
-            snapshot.state == TURBO_FLOW_CHTTP_SERVER_DETACHED) &&
+            snapshot.state == TURBO_FLOW_CHTTP_SERVER_DETACHED ||
+            snapshot.state == TURBO_FLOW_CHTTP_SERVER_QUIESCED) &&
                    snapshot.active_requests == 0u
                ? SALTS_OK
                : SALTS_EBUSY;
@@ -331,7 +335,9 @@ static int owner_idle(chttp_runtime_owner_t *owner) {
             snapshot.state ==
                 TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED ||
             snapshot.state ==
-                TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED) &&
+                TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED ||
+            snapshot.state ==
+                TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) &&
                    snapshot.active_sessions == 0u &&
                    snapshot.in_flight_frames == 0u
                ? SALTS_OK
