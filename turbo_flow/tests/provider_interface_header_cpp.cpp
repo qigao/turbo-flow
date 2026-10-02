@@ -6,6 +6,9 @@ static_assert(std::is_standard_layout_v<turbo_flow_provider_contract_v1_t>,
               "provider contract must remain a C ABI");
 static_assert(std::is_standard_layout_v<turbo_flow_provider_instance_v1_t>,
               "provider instance must remain a C ABI");
+static_assert(
+    std::is_standard_layout_v<turbo_flow_provider_adapter_registration_v1_t>,
+    "provider stage adapter registration must remain a C ABI");
 static_assert(std::is_standard_layout_v<turbo_flow_provider_config_view_v1_t>,
               "typed config view must remain a C ABI");
 static_assert(std::is_standard_layout_v<turbo_flow_provider_resource_view_v1_t>,
