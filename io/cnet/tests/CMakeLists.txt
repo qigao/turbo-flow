@@ -1,4 +1,21 @@
 cmake_add_test(
+  test_cnet_typed_contract
+  SOURCES test_cnet_typed_contract.c
+  LIBS
+    TurboFlow::Product
+    Salts::TinyTest
+    ${turbo_flow_cnet_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${turbo_flow_cnet_provider_config_GENERATED_DIR}
+  FOLDER "io/cnet/tests")
+add_dependencies(
+  test_cnet_typed_contract
+  turbo_flow_cnet_provider_config_idl_codegen)
+set_tests_properties(test_cnet_typed_contract PROPERTIES
+  LABELS "cnet-plugin;provider;config;resource;databind")
+
+cmake_add_test(
   test_cnet_stream_source
   SOURCES test_cnet_stream_source.c cnet_stream_source_header_cpp.cpp
           stream_source_pipe_fixture.h
