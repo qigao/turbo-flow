@@ -3,7 +3,8 @@ param(
   [ValidateSet("linux-x64", "windows-x64")]
   [string]$Rid,
   [switch]$WithRulesForge,
-  [switch]$WithTurboDB
+  [switch]$WithTurboDB,
+  [switch]$WithCHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +51,9 @@ if ($WithRulesForge) {
 }
 if ($WithTurboDB) {
   $refs += '    <PackageReference Include="TurboDB.Native" Version="*" />'
+}
+if ($WithCHttp) {
+  $refs += '    <PackageReference Include="CHttp.Native" Version="*" />'
 }
 
 $refText = $refs -join [Environment]::NewLine
@@ -128,6 +132,14 @@ if ($WithTurboDB) {
   $required += (Join-Path $turboDbRoot "lib/cmake/TurboDB/TurboDBConfig.cmake")
 }
 
+$cHttp = $null
+$cHttpRoot = $null
+if ($WithCHttp) {
+  $cHttp = Get-NativeSdk "CHttp.Native"
+  $cHttpRoot = $cHttp.Root
+  $required += (Join-Path $cHttpRoot "lib/cmake/Chttp/ChttpConfig.cmake")
+}
+
 foreach ($path in $required) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
     throw "published SDK is incomplete: $path"
@@ -153,6 +165,9 @@ if ($WithRulesForge) {
 if ($WithTurboDB) {
   "TURBODB_ROOT=$turboDbRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 }
+if ($WithCHttp) {
+  "HTTP_SERVICES_ROOT=$cHttpRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+}
 
 (Join-Path $saltsRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
 (Join-Path $saltsUtilsRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
@@ -162,11 +177,15 @@ if ($WithRulesForge) {
 if ($WithTurboDB) {
   (Join-Path $turboDbRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
 }
+if ($WithCHttp) {
+  (Join-Path $cHttpRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
+}
 
 if ($Rid -eq "linux-x64") {
   $entries = @((Join-Path $saltsRoot "lib"), (Join-Path $saltsUtilsRoot "lib"))
   if ($WithRulesForge) { $entries += (Join-Path $rulesForgeRoot "lib") }
   if ($WithTurboDB) { $entries += (Join-Path $turboDbRoot "lib") }
+  if ($WithCHttp) { $entries += (Join-Path $cHttpRoot "lib") }
   if (-not [string]::IsNullOrWhiteSpace($env:LD_LIBRARY_PATH)) {
     $entries += $env:LD_LIBRARY_PATH
   }
@@ -180,4 +199,7 @@ if ($WithRulesForge) {
 }
 if ($WithTurboDB) {
   Write-Host "Restored latest $($turboDb.Id) -> $($turboDb.Version) -> $turboDbRoot"
+}
+if ($WithCHttp) {
+  Write-Host "Restored latest $($cHttp.Id) -> $($cHttp.Version) -> $cHttpRoot"
 }
