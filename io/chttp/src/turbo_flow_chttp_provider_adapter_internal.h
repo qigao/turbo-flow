@@ -7,21 +7,21 @@
 extern "C" {
 #endif
 
-int turbo_flow_chttp_client_register_provider(
+TURBO_FLOW_C_API int turbo_flow_chttp_client_register_provider(
     const turbo_flow_chttp_client_config_t *config,
     const char *provider_identity,
     const char *const *stage_names,
     size_t stage_count,
     turbo_flow_chttp_client_t **out_client);
 
-int turbo_flow_chttp_server_register_provider(
+TURBO_FLOW_C_API int turbo_flow_chttp_server_register_provider(
     const turbo_flow_chttp_server_config_t *config,
     const char *provider_identity,
     const char *const *stage_names,
     size_t stage_count,
     turbo_flow_chttp_server_t **out_server);
 
-int turbo_flow_chttp_websocket_server_register_provider(
+TURBO_FLOW_C_API int turbo_flow_chttp_websocket_server_register_provider(
     const turbo_flow_chttp_websocket_server_config_t *config,
     const char *provider_identity,
     const char *const *stage_names,
