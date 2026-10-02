@@ -461,6 +461,51 @@ spec("provider-scoped adapter stage binding") {
     check_equal(owner.probe.shutdowns, 1);
   }
 
+  it("keeps provider deployment resources out of primitive resolution") {
+    static const char *provider_src =
+        "stage sink adapter fixture.provider {\n"
+        "  resource deployment_main\n"
+        "}\n";
+    static const char *legacy_src =
+        "stage sink adapter legacy.adapter {\n"
+        "  resource deployment_main\n"
+        "}\n";
+    const char *stages[] = {"sink"};
+    scoped_probe_t scoped = {0};
+    scoped_probe_t legacy = {0};
+    turbo_flow_adapter_ops_t ops = sink_ops();
+    turbo_flow_adapter_schema_t schema = sink_schema();
+    turbo_flow_t *provider_flow = turbo_flow_create();
+    turbo_flow_t *legacy_flow = turbo_flow_create();
+
+    check_not_null(provider_flow);
+    check_not_null(legacy_flow);
+
+    check_equal(
+        turbo_flow_parse_string(
+            provider_flow, provider_src, strlen(provider_src)),
+        SALTS_OK);
+    check_equal(
+        register_scoped(
+            provider_flow, "fixture.provider", stages, 1u,
+            &ops, &schema, &scoped),
+        SALTS_OK);
+    check_equal(turbo_flow_compile(provider_flow), SALTS_OK);
+
+    check_equal(
+        turbo_flow_register_adapter_ex(
+            legacy_flow, "legacy.adapter", &ops, &legacy, &schema),
+        SALTS_OK);
+    check_equal(
+        turbo_flow_parse_string(
+            legacy_flow, legacy_src, strlen(legacy_src)),
+        SALTS_OK);
+    check_equal(turbo_flow_compile(legacy_flow), SALTS_EINVAL);
+
+    turbo_flow_destroy(provider_flow);
+    turbo_flow_destroy(legacy_flow);
+  }
+
   it("preserves legacy global name-based registration") {
     static const char *src =
         "source input\n"
