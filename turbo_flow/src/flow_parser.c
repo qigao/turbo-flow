@@ -543,38 +543,32 @@ static int flow_parse_copy_provider_literals(
   int rc = flow_provider_config_literals_init(destination);
   if (rc != SALTS_OK) return rc;
 
-  for (i = 0; i < vec_size(&ctx->node_config_literals); ++i) {
+  for (i = 0u; i < vec_size(&ctx->node_config_literals); ++i) {
     const flow_provider_config_literal_spec_t *source =
         (const flow_provider_config_literal_spec_t *)vec_at_const(
             &ctx->node_config_literals, i);
-    flow_provider_config_literal_t literal;
-    if (!source || !source->name.data || source->name.len == 0u) {
+    flow_provider_config_literal_t event;
+    if (!source) {
       flow_provider_config_literals_destroy(destination);
       return SALTS_EPROTO;
     }
 
-    memset(&literal, 0, sizeof(literal));
-    literal.kind = source->kind;
-    literal.uint_value = source->uint_value;
-    literal.bool_value = source->bool_value;
-    literal.line = source->line;
-    literal.column = source->column;
-    literal.name = tstr_from_v(source->name);
-    if (!literal.name) {
-      flow_provider_config_literals_destroy(destination);
-      return SALTS_ENOMEM;
-    }
-    if (source->kind == FLOW_PROVIDER_CONFIG_LITERAL_TEXT) {
-      literal.text = tstr_from_v(source->text);
-      if (!literal.text) {
-        tstr_freep(&literal.name);
+    memset(&event, 0, sizeof(event));
+    event.kind = source->kind;
+    event.uint_value = source->uint_value;
+    event.bool_value = source->bool_value;
+    event.line = source->line;
+    event.column = source->column;
+    if (source->text.data && source->text.len != 0u) {
+      event.text = tstr_from_v(source->text);
+      if (!event.text) {
         flow_provider_config_literals_destroy(destination);
         return SALTS_ENOMEM;
       }
     }
-    if (turbo_flow_stl_error(vec_push(destination, &literal)) != SALTS_OK) {
-      tstr_freep(&literal.name);
-      tstr_freep(&literal.text);
+
+    if (turbo_flow_stl_error(vec_push(destination, &event)) != SALTS_OK) {
+      tstr_freep(&event.text);
       flow_provider_config_literals_destroy(destination);
       return SALTS_ENOMEM;
     }
@@ -656,72 +650,186 @@ static int stage_plan_add(flow_parse_ctx_t *ctx, vstr name, int is_source, int i
 
 int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
                                  flow_stage_spec_t spec, flow_node_config_kind_t kind) {
-  if (!ctx || kind == FLOW_NODE_CONFIG_NONE || ctx->node_config_kind != FLOW_NODE_CONFIG_NONE) {
+  if (!ctx || kind == FLOW_NODE_CONFIG_NONE ||
+      ctx->node_config_kind != FLOW_NODE_CONFIG_NONE) {
     return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
                       "node configuration block state is invalid");
   }
   turbo_flow_stl_error(vec_clear(&ctx->node_config_literals));
+  turbo_flow_stl_error(vec_clear(&ctx->node_config_top_keys));
+  ctx->node_config_value_depth = 0u;
   ctx->node_config_name = name;
   ctx->node_config_spec = spec;
   ctx->node_config_kind = kind;
   return SALTS_OK;
 }
 
-int flow_parse_add_provider_config_literal(
-    flow_parse_ctx_t *ctx, flow_token_t name,
-    flow_provider_config_value_spec_t value) {
-  flow_provider_config_literal_spec_t literal;
+static int flow_parse_push_provider_event(
+    flow_parse_ctx_t *ctx, flow_provider_config_literal_kind_t kind,
+    vstr text, uint64_t uint_value, int bool_value,
+    uint32_t line, uint32_t column) {
+  flow_provider_config_literal_spec_t event;
+
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE)
+    return parse_fail(ctx, SALTS_EINVAL, line, column,
+                      "provider config event is outside a node config block");
+  if (vec_size(&ctx->node_config_literals) >= FLOW_PROVIDER_CONFIG_MAX_EVENTS)
+    return parse_fail(ctx, SALTS_ENOSPC, line, column,
+                      "provider config event capacity exceeded");
+
+  memset(&event, 0, sizeof(event));
+  event.kind = kind;
+  event.text = text;
+  event.uint_value = uint_value;
+  event.bool_value = bool_value;
+  event.line = line;
+  event.column = column;
+  if (turbo_flow_stl_error(
+          vec_push(&ctx->node_config_literals, &event)) != SALTS_OK)
+    return parse_fail(ctx, SALTS_ENOSPC, line, column,
+                      "provider config event capacity exceeded");
+  return SALTS_OK;
+}
+
+int flow_parse_begin_provider_config_field(
+    flow_parse_ctx_t *ctx, flow_token_t name) {
   vstr key;
   size_t i;
+  int rc;
 
   if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
-      !name.value || name.length == 0u ||
-      !value.token.value || value.token.length == 0u)
+      ctx->node_config_value_depth != 0u ||
+      !name.value || name.length == 0u)
     return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
-                      "provider config literal is invalid");
+                      "provider config field is invalid");
 
   key = token_view(name);
-  for (i = 0; i < vec_size(&ctx->node_config_literals); ++i) {
-    const flow_provider_config_literal_spec_t *existing =
-        (const flow_provider_config_literal_spec_t *)vec_at_const(
-            &ctx->node_config_literals, i);
-    if (existing && existing->name.len == key.len &&
-        memcmp(existing->name.data, key.data, key.len) == 0)
+  for (i = 0u; i < vec_size(&ctx->node_config_top_keys); ++i) {
+    const vstr *existing =
+        (const vstr *)vec_at_const(&ctx->node_config_top_keys, i);
+    if (existing && existing->len == key.len &&
+        memcmp(existing->data, key.data, key.len) == 0)
       return parse_fail(ctx, SALTS_EALREADY, name.line, name.column,
                         "duplicate provider config field");
   }
+  if (vec_size(&ctx->node_config_top_keys) >= FLOW_PROVIDER_CONFIG_MAX_FIELDS)
+    return parse_fail(ctx, SALTS_ENOSPC, name.line, name.column,
+                      "provider config field capacity exceeded");
+  if (turbo_flow_stl_error(
+          vec_push(&ctx->node_config_top_keys, &key)) != SALTS_OK)
+    return parse_fail(ctx, SALTS_ENOSPC, name.line, name.column,
+                      "provider config field capacity exceeded");
 
-  memset(&literal, 0, sizeof(literal));
-  literal.name = key;
-  literal.line = name.line;
-  literal.column = name.column;
+  rc = flow_parse_push_provider_event(
+      ctx, FLOW_PROVIDER_CONFIG_LITERAL_TEXT, key, 0u, 0,
+      name.line, name.column);
+  return rc;
+}
+
+int flow_parse_add_provider_config_value(
+    flow_parse_ctx_t *ctx, flow_provider_config_value_spec_t value) {
+  flow_provider_config_literal_kind_t kind;
+  vstr text = {0};
+  uint64_t parsed = 0u;
+  int boolean = 0;
+
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
+      !value.token.value || value.token.length == 0u)
+    return parse_fail(
+        ctx, SALTS_EINVAL, value.token.line, value.token.column,
+        "provider config scalar is invalid");
 
   if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_UINT) {
-    uint64_t parsed = 0u;
     size_t offset;
     for (offset = 0u; offset < value.token.length; ++offset) {
-      const uint64_t digit = (uint64_t)(value.token.value[offset] - '0');
+      const uint64_t digit =
+          (uint64_t)(value.token.value[offset] - '0');
       if (parsed > (UINT64_MAX - digit) / UINT64_C(10))
-        return parse_fail(ctx, SALTS_ERANGE, value.token.line, value.token.column,
-                          "provider config integer is out of range");
+        return parse_fail(
+            ctx, SALTS_ERANGE, value.token.line, value.token.column,
+            "provider config integer is out of range");
       parsed = parsed * UINT64_C(10) + digit;
     }
-    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_UINT;
-    literal.uint_value = parsed;
+    kind = FLOW_PROVIDER_CONFIG_LITERAL_UINT;
   } else if (value.kind == FLOW_PROVIDER_CONFIG_VALUE_IDENT &&
              (token_eq_cstr(value.token, "true") ||
               token_eq_cstr(value.token, "false"))) {
-    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_BOOL;
-    literal.bool_value = token_eq_cstr(value.token, "true");
+    kind = FLOW_PROVIDER_CONFIG_LITERAL_BOOL;
+    boolean = token_eq_cstr(value.token, "true");
   } else {
-    literal.kind = FLOW_PROVIDER_CONFIG_LITERAL_TEXT;
-    literal.text = token_view(value.token);
+    kind = FLOW_PROVIDER_CONFIG_LITERAL_TEXT;
+    text = token_view(value.token);
   }
 
-  if (turbo_flow_stl_error(vec_push(&ctx->node_config_literals, &literal)) != SALTS_OK)
-    return parse_fail(ctx, SALTS_ENOSPC, name.line, name.column,
-                      "provider config field capacity exceeded");
-  return SALTS_OK;
+  return flow_parse_push_provider_event(
+      ctx, kind, text, parsed, boolean,
+      value.token.line, value.token.column);
+}
+
+static int flow_parse_begin_provider_container(
+    flow_parse_ctx_t *ctx, flow_token_t token,
+    flow_provider_config_literal_kind_t kind) {
+  int rc;
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE)
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column,
+                      "provider config container is invalid");
+  if (ctx->node_config_value_depth >= FLOW_PROVIDER_CONFIG_MAX_LITERAL_DEPTH)
+    return parse_fail(ctx, SALTS_ENOSPC, token.line, token.column,
+                      "provider config nesting depth exceeded");
+  rc = flow_parse_push_provider_event(
+      ctx, kind, (vstr){0}, 0u, 0, token.line, token.column);
+  if (rc == SALTS_OK) ++ctx->node_config_value_depth;
+  return rc;
+}
+
+static int flow_parse_end_provider_container(
+    flow_parse_ctx_t *ctx, flow_token_t token,
+    flow_provider_config_literal_kind_t kind) {
+  int rc;
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
+      ctx->node_config_value_depth == 0u)
+    return parse_fail(ctx, SALTS_EINVAL, token.line, token.column,
+                      "provider config container is unbalanced");
+  rc = flow_parse_push_provider_event(
+      ctx, kind, (vstr){0}, 0u, 0, token.line, token.column);
+  if (rc == SALTS_OK) --ctx->node_config_value_depth;
+  return rc;
+}
+
+int flow_parse_begin_provider_config_list(
+    flow_parse_ctx_t *ctx, flow_token_t token) {
+  return flow_parse_begin_provider_container(
+      ctx, token, FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN);
+}
+
+int flow_parse_end_provider_config_list(
+    flow_parse_ctx_t *ctx, flow_token_t token) {
+  return flow_parse_end_provider_container(
+      ctx, token, FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END);
+}
+
+int flow_parse_begin_provider_config_object(
+    flow_parse_ctx_t *ctx, flow_token_t token) {
+  return flow_parse_begin_provider_container(
+      ctx, token, FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN);
+}
+
+int flow_parse_end_provider_config_object(
+    flow_parse_ctx_t *ctx, flow_token_t token) {
+  return flow_parse_end_provider_container(
+      ctx, token, FLOW_PROVIDER_CONFIG_LITERAL_MAP_END);
+}
+
+int flow_parse_add_provider_config_object_key(
+    flow_parse_ctx_t *ctx, flow_token_t name) {
+  if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE ||
+      ctx->node_config_value_depth == 0u ||
+      !name.value || name.length == 0u)
+    return parse_fail(ctx, SALTS_EINVAL, name.line, name.column,
+                      "provider config object key is invalid");
+  return flow_parse_push_provider_event(
+      ctx, FLOW_PROVIDER_CONFIG_LITERAL_TEXT, token_view(name),
+      0u, 0, name.line, name.column);
 }
 
 int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
@@ -733,6 +841,12 @@ int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
   if (!ctx || ctx->node_config_kind == FLOW_NODE_CONFIG_NONE) {
     return parse_fail(ctx, SALTS_EINVAL, 0u, 0u,
                       "node configuration block state is invalid");
+  }
+  if (ctx->node_config_value_depth != 0u) {
+    return parse_fail(
+        ctx, SALTS_EINVAL, ctx->node_config_name.line,
+        ctx->node_config_name.column,
+        "provider config structured value is unbalanced");
   }
 
   name = ctx->node_config_name;
@@ -753,6 +867,8 @@ int flow_parse_finish_node_config(flow_parse_ctx_t *ctx) {
                     "unknown node configuration block kind");
   }
   turbo_flow_stl_error(vec_clear(&ctx->node_config_literals));
+  turbo_flow_stl_error(vec_clear(&ctx->node_config_top_keys));
+  ctx->node_config_value_depth = 0u;
   return rc;
 }
 
