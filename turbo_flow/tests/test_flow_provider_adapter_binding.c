@@ -414,6 +414,15 @@ spec("provider-scoped adapter stage binding") {
     registration.managed_boundary_ops = &boundary_ops;
     registration.ctx = &owner;
 
+    owner.boundary.descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+    check_equal(
+        turbo_flow_provider_adapter_register(flow, &registration),
+        SALTS_EPROTO);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
+    check_equal(owner.probe.shutdowns, 0);
+
+    owner.boundary.descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
     check_equal(
         turbo_flow_provider_adapter_register(flow, &registration),
         SALTS_OK);
