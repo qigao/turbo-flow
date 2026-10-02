@@ -532,7 +532,7 @@ spec("CHTTP canonical Salts provider") {
     instance.instance_name = "request";
     check_equal(
         bind_config_view(
-            CHttpClientConfig_native_artifact(),
+            contract.config.message_artifact,
             &acceptance.typed.client,
             sizeof(acceptance.typed.client),
             &instance.config),
@@ -613,7 +613,7 @@ spec("CHTTP canonical Salts provider") {
     instance.instance_name = "response";
     check_equal(
         bind_config_view(
-            CHttpServerConfig_native_artifact(),
+            contract.config.message_artifact,
             &acceptance.typed.server,
             sizeof(acceptance.typed.server),
             &instance.config),
@@ -693,7 +693,7 @@ spec("CHTTP canonical Salts provider") {
     instance.instance_name = "ws_out";
     check_equal(
         bind_config_view(
-            CHttpWebSocketServerConfig_native_artifact(),
+            contract.config.message_artifact,
             &acceptance.typed.websocket,
             sizeof(acceptance.typed.websocket),
             &instance.config),
