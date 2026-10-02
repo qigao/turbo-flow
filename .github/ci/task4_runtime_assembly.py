@@ -173,6 +173,8 @@ elif args.materializer:
         "  ARTIFACT_NAME tf_service\n"
         "  ARTIFACTS NATIVE\n"
         "  TRANSPORTS HTTP RPC)\n"
+        "target_sources(${turbo_flow_databind_service_fixture_NATIVE_TARGET}\n"
+        "  PRIVATE ${CMAKE_SOURCE_DIR}/turbo_flow/tests/databind_service_business.c)\n"
         "cmake_add_test(\n"
         "  test_flow_databind_service_plan\n"
         "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_databind_service_plan.c\n"
