@@ -15,8 +15,10 @@ static cserde_status flow_provider_config_reader_next(
       (flow_provider_config_reader_t *)context;
   size_t count;
   size_t position;
+  const flow_provider_config_literal_t *event;
 
-  if (!reader || !reader->literals || !out) return CSERDE_INVALID_ARGUMENT;
+  if (!reader || !reader->literals || !out)
+    return CSERDE_INVALID_ARGUMENT;
   count = vec_size(reader->literals);
   position = reader->token_index;
 
@@ -28,44 +30,48 @@ static cserde_status flow_provider_config_reader_next(
   }
 
   --position;
-  if (position < count * 2u) {
-    const size_t literal_index = position / 2u;
-    const flow_provider_config_literal_t *literal =
-        (const flow_provider_config_literal_t *)vec_at_const(
-            reader->literals, literal_index);
-    if (!literal || !literal->name) return CSERDE_INVALID_STATE;
+  if (position < count) {
+    event = (const flow_provider_config_literal_t *)vec_at_const(
+        reader->literals, position);
+    if (!event) return CSERDE_INVALID_STATE;
 
-    if ((position & 1u) == 0u) {
-      out->kind = CSERDE_STRING;
-      out->value.slice.data = (const unsigned char *)literal->name;
-      out->value.slice.size = tstr_len(literal->name);
-      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-    } else {
-      switch (literal->kind) {
-        case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
-          if (!literal->text) return CSERDE_INVALID_STATE;
-          out->kind = CSERDE_STRING;
-          out->value.slice.data = (const unsigned char *)literal->text;
-          out->value.slice.size = tstr_len(literal->text);
-          out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
-          out->kind = CSERDE_UINT;
-          out->value.uint = literal->uint_value;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
-          out->kind = CSERDE_BOOL;
-          out->value.boolean = literal->bool_value != 0;
-          break;
-        default:
-          return CSERDE_INVALID_STATE;
-      }
+    switch (event->kind) {
+      case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
+        if (!event->text) return CSERDE_INVALID_STATE;
+        out->kind = CSERDE_STRING;
+        out->value.slice.data = (const unsigned char *)event->text;
+        out->value.slice.size = tstr_len(event->text);
+        out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
+        out->kind = CSERDE_UINT;
+        out->value.uint = event->uint_value;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
+        out->kind = CSERDE_BOOL;
+        out->value.boolean = event->bool_value != 0;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN:
+        out->kind = CSERDE_MAP_BEGIN;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_MAP_END:
+        out->kind = CSERDE_MAP_END;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN:
+        out->kind = CSERDE_ARRAY_BEGIN;
+        break;
+      case FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END:
+        out->kind = CSERDE_ARRAY_END;
+        break;
+      default:
+        return CSERDE_INVALID_STATE;
     }
+
     ++reader->token_index;
     return CSERDE_OK;
   }
 
-  if (position == count * 2u) {
+  if (position == count) {
     out->kind = CSERDE_MAP_END;
     ++reader->token_index;
     return CSERDE_OK;
