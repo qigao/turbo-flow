@@ -63,6 +63,11 @@ typedef struct scoped_boundary_s {
   turbo_flow_managed_boundary_snapshot_t snapshot;
 } scoped_boundary_t;
 
+typedef struct scoped_managed_owner_s {
+  scoped_probe_t probe;
+  scoped_boundary_t boundary;
+} scoped_managed_owner_t;
+
 static void scoped_boundary_init(scoped_boundary_t *boundary) {
   memset(boundary, 0, sizeof(*boundary));
   boundary->metadata =
@@ -109,26 +114,31 @@ static void scoped_boundary_init(scoped_boundary_t *boundary) {
 
 static int scoped_boundary_metadata(
     void *ctx, turbo_flow_resource_metadata_t *out) {
-  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
-  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  *out = boundary->metadata;
+  scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
+  if (!owner || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = owner->boundary.metadata;
   return SALTS_OK;
 }
 
 static int scoped_boundary_descriptor(
     void *ctx, turbo_flow_managed_boundary_descriptor_t *out) {
-  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
-  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  *out = boundary->descriptor;
+  scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
+  if (!owner || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = owner->boundary.descriptor;
   return SALTS_OK;
 }
 
 static int scoped_boundary_snapshot(
     void *ctx, turbo_flow_managed_boundary_snapshot_t *out) {
-  scoped_boundary_t *boundary = (scoped_boundary_t *)ctx;
-  if (!boundary || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  *out = boundary->snapshot;
+  scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
+  if (!owner || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
+  *out = owner->boundary.snapshot;
   return SALTS_OK;
+}
+
+static void scoped_managed_owner_shutdown(void *ctx) {
+  scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
+  if (owner) ++owner->probe.shutdowns;
 }
 
 static turbo_flow_adapter_schema_t sink_schema(void) {
@@ -334,7 +344,7 @@ spec("provider-scoped adapter stage binding") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    ops.shutdown = scoped_shutdown;
+    ops.shutdown = scoped_managed_owner_shutdown;
     async_ops.submit = scoped_terminal_submit;
     registration.provider_identity = "fixture.async";
     registration.stage_names = stages;
@@ -376,8 +386,8 @@ spec("provider-scoped adapter stage binding") {
     static const char *src =
         "stage sink adapter fixture.managed\n";
     const char *stages[] = {"sink"};
-    scoped_probe_t probe = {0};
-    scoped_boundary_t boundary;
+    scoped_managed_owner_t owner;
+
     turbo_flow_adapter_ops_t ops = sink_ops();
     turbo_flow_adapter_schema_t schema = sink_schema();
     turbo_flow_managed_boundary_provider_ops_t boundary_ops =
@@ -387,7 +397,8 @@ spec("provider-scoped adapter stage binding") {
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
-    scoped_boundary_init(&boundary);
+    memset(&owner, 0, sizeof(owner));
+    scoped_boundary_init(&owner.boundary);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     ops.shutdown = scoped_shutdown;
     boundary_ops.resource.metadata = scoped_boundary_metadata;
@@ -399,24 +410,24 @@ spec("provider-scoped adapter stage binding") {
     registration.stage_count = 1u;
     registration.adapter_ops = &ops;
     registration.schema = &schema;
-    registration.managed_owner_name = boundary.metadata.owner_name;
+    registration.managed_owner_name = owner.boundary.metadata.owner_name;
     registration.managed_boundary_ops = &boundary_ops;
-    registration.ctx = &probe;
+    registration.ctx = &owner;
 
     check_equal(
         turbo_flow_provider_adapter_register(flow, &registration),
         SALTS_OK);
     check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
     check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
-    check_equal(probe.shutdowns, 0);
+    check_equal(owner.probe.shutdowns, 0);
 
     check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
     check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
     check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
-    check_equal(probe.shutdowns, 1);
+    check_equal(owner.probe.shutdowns, 1);
 
     turbo_flow_destroy(flow);
-    check_equal(probe.shutdowns, 1);
+    check_equal(owner.probe.shutdowns, 1);
   }
 
   it("preserves legacy global name-based registration") {
