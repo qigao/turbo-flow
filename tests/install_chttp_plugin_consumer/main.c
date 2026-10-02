@@ -53,7 +53,8 @@ static int check_provider(
       contract.resource.contract_version !=
           TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION ||
       contract.resource.required_capabilities !=
-          TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT ||
+          (TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+           TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT) ||
       !cmeta_interface_desc_equal(
           contract.resource.expected_interface,
           turbo_flow_chttp_deployment_resource_interface()))
