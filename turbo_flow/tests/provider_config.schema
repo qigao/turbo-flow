@@ -12,4 +12,15 @@ message BatchConfig {
   @Min(1) @Max(64) uint32 concurrency;
 }
 
+message HeaderItem {
+  @Size(min = 1, max = 32) @Pattern("^[a-z-]+$")
+  string name;
+  @Size(max = 64)
+  string value;
+}
+
+message HeaderListConfig {
+  @Size(max = 4)
+  list<HeaderItem> headers;
+}
 
