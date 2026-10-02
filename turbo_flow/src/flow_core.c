@@ -212,21 +212,18 @@ static void flow_clear_provider_scoped_registrations(turbo_flow_t *flow) {
         &flow->adapters, adapter_index);
     if (!adapter || !adapter->provider_scoped) continue;
 
-    if (adapter->provider_managed_owner_name) {
-      size_t resource_index = vec_size(&flow->resources);
-      while (resource_index > 0u) {
-        flow_resource_registration_t *resource;
-        --resource_index;
-        resource = (flow_resource_registration_t *)vec_at(
-            &flow->resources, resource_index);
-        if (!resource || !resource->owner_name ||
-            strcmp(resource->owner_name,
-                   adapter->provider_managed_owner_name) != 0)
-          continue;
+    if (adapter->provider_managed_resource_bound) {
+      flow_resource_registration_t *resource =
+          (flow_resource_registration_t *)vec_at(
+              &flow->resources, adapter->provider_managed_resource_index);
+      if (resource && resource->owner_name &&
+          adapter->provider_managed_owner_name &&
+          strcmp(resource->owner_name,
+                 adapter->provider_managed_owner_name) == 0) {
         flow_resource_registration_destroy(resource);
         (void)turbo_flow_stl_error(
-            vec_erase(&flow->resources, resource_index, NULL));
-        break;
+            vec_erase(&flow->resources,
+                      adapter->provider_managed_resource_index, NULL));
       }
     }
 
@@ -1403,6 +1400,8 @@ int turbo_flow_provider_adapter_register(
       rc = SALTS_EPROTO;
       goto rollback;
     }
+    adapter->provider_managed_resource_index = resources_before;
+    adapter->provider_managed_resource_bound = 1;
   }
 
   if (registration->adapter_ops)
