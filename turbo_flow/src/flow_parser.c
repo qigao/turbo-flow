@@ -53,7 +53,16 @@ int flow_parse_ctx_init(flow_parse_ctx_t *ctx, turbo_flow_t *flow) {
           &ctx->node_config_literals,
           sizeof(flow_provider_config_literal_spec_t),
           _Alignof(turbo_flow_max_align_t),
+          FLOW_PROVIDER_CONFIG_MAX_EVENTS)) != SALTS_OK) {
+    vec_destroy(&ctx->stage_templates);
+    vec_destroy(&ctx->node_refs);
+    return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
+  }
+  if (turbo_flow_stl_error(vec_init_bytes(
+          &ctx->node_config_top_keys, sizeof(vstr),
+          _Alignof(turbo_flow_max_align_t),
           FLOW_PROVIDER_CONFIG_MAX_FIELDS)) != SALTS_OK) {
+    vec_destroy(&ctx->node_config_literals);
     vec_destroy(&ctx->stage_templates);
     vec_destroy(&ctx->node_refs);
     return flow_set_error(flow, SALTS_ENOMEM, 0, 0, "out of memory");
@@ -74,6 +83,7 @@ void flow_parse_ctx_destroy(flow_parse_ctx_t *ctx) {
     tstr_freep(&stage_template->first_output);
   }
   tstr_freep(&ctx->root_stage_name);
+  vec_destroy(&ctx->node_config_top_keys);
   vec_destroy(&ctx->node_config_literals);
   vec_destroy(&ctx->stage_templates);
   vec_destroy(&ctx->node_refs);
