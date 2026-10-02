@@ -1,5 +1,6 @@
 #include "turbo_flow_chttp_resource.h"
 
+#include <salts/error_codes.h>
 #include <salts/plugin.h>
 #include <salts/thread.h>
 
