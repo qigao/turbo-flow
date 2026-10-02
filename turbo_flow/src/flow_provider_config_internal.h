@@ -15,7 +15,15 @@ extern "C" {
 typedef struct flow_provider_config_reader_s {
   cserde_reader reader;
   const vec_t *literals;
-  size_t token_index;
+  size_t literal_index;
+  unsigned state;
+
+  const char *structured_cursor;
+  const char *structured_limit;
+  size_t structured_tokens;
+  uint32_t structured_depth;
+  uint8_t structured_kind[FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_DEPTH];
+  uint8_t structured_map_expect_key[FLOW_PROVIDER_CONFIG_MAX_STRUCTURED_DEPTH];
 } flow_provider_config_reader_t;
 
 enum {
