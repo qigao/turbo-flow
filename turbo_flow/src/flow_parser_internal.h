@@ -65,7 +65,6 @@ typedef struct flow_provider_config_value_spec_s {
 } flow_provider_config_value_spec_t;
 
 typedef struct flow_provider_config_literal_spec_s {
-  vstr name;
   flow_provider_config_literal_kind_t kind;
   vstr text;
   uint64_t uint_value;
@@ -115,6 +114,8 @@ typedef struct flow_parse_ctx_s {
   flow_stage_spec_t node_config_spec;
   flow_node_config_kind_t node_config_kind;
   vec_t node_config_literals; /* flow_provider_config_literal_spec_t */
+  vec_t node_config_top_keys; /* vstr, parse-source borrowed */
+  uint32_t node_config_value_depth;
   int has_root_stage;
   int in_root_stage;
   int in_stage_template;
@@ -153,9 +154,20 @@ int flow_parse_set_exec_count(flow_parse_ctx_t *ctx, flow_exec_options_t *option
 
 int flow_parse_begin_node_config(flow_parse_ctx_t *ctx, flow_token_t name,
                                  flow_stage_spec_t spec, flow_node_config_kind_t kind);
-int flow_parse_add_provider_config_literal(
-    flow_parse_ctx_t *ctx, flow_token_t name,
-    flow_provider_config_value_spec_t value);
+int flow_parse_begin_provider_config_field(
+    flow_parse_ctx_t *ctx, flow_token_t name);
+int flow_parse_add_provider_config_value(
+    flow_parse_ctx_t *ctx, flow_provider_config_value_spec_t value);
+int flow_parse_begin_provider_config_list(
+    flow_parse_ctx_t *ctx, flow_token_t token);
+int flow_parse_end_provider_config_list(
+    flow_parse_ctx_t *ctx, flow_token_t token);
+int flow_parse_begin_provider_config_object(
+    flow_parse_ctx_t *ctx, flow_token_t token);
+int flow_parse_end_provider_config_object(
+    flow_parse_ctx_t *ctx, flow_token_t token);
+int flow_parse_add_provider_config_object_key(
+    flow_parse_ctx_t *ctx, flow_token_t name);
 int flow_parse_finish_node_config(flow_parse_ctx_t *ctx);
 int flow_parse_add_source(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
 int flow_parse_add_buffer(flow_parse_ctx_t *ctx, flow_token_t name, flow_stage_spec_t spec);
