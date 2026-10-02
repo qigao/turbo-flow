@@ -43,6 +43,7 @@ typedef struct provider_acceptance_s {
   union {
     CHttpClientConfig_t client;
     CHttpServerConfig_t server;
+    CHttpWebSocketServerConfig_t websocket;
   } typed;
   resolver_fixture_t resolver;
 } provider_acceptance_t;
@@ -51,7 +52,8 @@ static provider_acceptance_t acceptance;
 
 enum {
   ACCEPTANCE_CLIENT = 1u,
-  ACCEPTANCE_SERVER = 2u
+  ACCEPTANCE_SERVER = 2u,
+  ACCEPTANCE_WEBSOCKET = 3u
 };
 
 static CHttpBackend_t supported_backend(void) {
@@ -152,6 +154,47 @@ static void fill_server(CHttpServerConfig_t *config) {
   config->stop_timeout_ms = 1000u;
   config->response_content_type = tstr_dup("application/json");
   config->error_content_type = tstr_dup("application/json");
+}
+
+static void fill_websocket(CHttpWebSocketServerConfig_t *config) {
+  CHttpWebSocketServerConfig_init(config);
+  config->schema_version = 2u;
+  config->poll_budget_ms = 10u;
+  config->tls_enabled = 0u;
+  FILL_NETWORK(config);
+  config->protocol = CHttpServerProtocol_H1;
+  config->tls_client_auth = CHttpTlsClientAuth_None;
+  config->backlog = 16u;
+  config->route_capacity = 8u;
+  config->max_target_bytes = 1024u;
+  config->max_header_count = 16u;
+  config->max_header_bytes = 4096u;
+  config->max_request_body_bytes = 8192u;
+  config->max_response_header_count = 16u;
+  config->max_response_header_bytes = 4096u;
+  config->max_response_body_bytes = 16384u;
+  config->stream_chunk_bytes = 4096u;
+  config->max_buffered_response_body_bytes = 8192u;
+  config->buffer_capacity_bytes = 131072u;
+  config->middleware_capacity = 0u;
+  config->max_route_middleware_count = 0u;
+  config->max_route_param_count = 2u;
+  config->max_route_param_bytes = 64u;
+  config->h2_stream_capacity = 0u;
+  config->h2_input_buffer_bytes = 0u;
+  config->h2_output_buffer_bytes = 0u;
+  config->h2_hpack_dynamic_table_bytes = 0u;
+  config->h2_max_settings_count = 0u;
+  config->poll_slice_ms = 10u;
+  config->path = tstr_dup("/ws");
+  config->subprotocol = tstr_dup("");
+  config->session_capacity = 4u;
+  config->frame_capacity = 16u;
+  config->max_frame_bytes = 4096u;
+  config->max_message_bytes = 8192u;
+  config->max_buffered_input_bytes = 8192u;
+  config->first_message_id = 1u;
+  config->stop_timeout_ms = 1000u;
 }
 
 static int output(turbo_flow_msg_t *message, void *ctx) {
@@ -279,6 +322,8 @@ static void acceptance_cleanup(void) {
     CHttpClientConfig_clear(&acceptance.typed.client);
   } else if (acceptance.typed_kind == ACCEPTANCE_SERVER) {
     CHttpServerConfig_clear(&acceptance.typed.server);
+  } else if (acceptance.typed_kind == ACCEPTANCE_WEBSOCKET) {
+    CHttpWebSocketServerConfig_clear(&acceptance.typed.websocket);
   }
   acceptance.typed_kind = 0u;
 
@@ -563,6 +608,87 @@ spec("CHTTP canonical Salts provider") {
     check_equal(turbo_flow_adapter_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_managed_boundary_count(acceptance.flow), (size_t)1u);
     check_equal(turbo_flow_compile(acceptance.flow), SALTS_OK);
+
+  it("materializes one WebSocket owner for an exact source and terminal pair") {
+    static const char *src =
+        "source ws_in adapter chttp.websocket_server {\n"
+        "  resource server_net\n"
+        "}\n"
+        "stage ws_out adapter chttp.websocket_server {\n"
+        "  resource server_net\n"
+        "}\n"
+        "stage main {\n"
+        "  ws_in -> ws_out\n"
+        "}\n";
+    turbo_flow_provider_contract_v1_t contract =
+        TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
+    turbo_flow_provider_resource_view_v1_t resource_view =
+        TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT;
+    turbo_flow_provider_instance_v1_t instance =
+        TURBO_FLOW_PROVIDER_INSTANCE_V1_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    int rc;
+
+    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    acceptance.flow = turbo_flow_create();
+    check_not_null(acceptance.flow);
+    check_equal(
+        turbo_flow_parse_string(
+            acceptance.flow, src, strlen(src)),
+        SALTS_OK);
+
+    acceptance.typed_kind = ACCEPTANCE_WEBSOCKET;
+    fill_websocket(&acceptance.typed.websocket);
+    check_not_null(acceptance.typed.websocket.path);
+
+    check_equal(
+        acquire_instance_bindings(
+            "chttp.websocket_server", "server_net",
+            &contract, &resource_view, &error),
+        SALTS_OK);
+    check_equal(
+        contract.config.message_artifact,
+        CHttpWebSocketServerConfig_native_artifact());
+    check_equal(
+        contract.resource.contract_id,
+        TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID);
+    check_equal(
+        contract.resource.required_capabilities,
+        (uint64_t)(TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+                   TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND));
+    check_equal(resource_view.reference_name, "server_net");
+    check_equal(
+        resource_view.identity,
+        "deployment.chttp.server.primary");
+
+    instance.instance_name = "ws_out";
+    check_equal(
+        bind_config_view(
+            CHttpWebSocketServerConfig_native_artifact(),
+            &acceptance.typed.websocket,
+            sizeof(acceptance.typed.websocket),
+            &instance.config),
+        SALTS_OK);
+    instance.resource = &resource_view;
+
+    check_equal(
+        turbo_flow_provider_binding_preflight(
+            acceptance.provider_binding, &instance, &error),
+        SALTS_OK);
+    rc = turbo_flow_provider_binding_materialize(
+        acceptance.provider_binding, acceptance.flow,
+        &instance, &acceptance.owner, &error);
+    info("CHTTP WebSocket materialize status=%d path=%s reason=%s",
+         rc, error.path, error.message);
+    check_equal(rc, SALTS_OK);
+    acceptance.owner_live = rc == SALTS_OK;
+    check_true(
+        turbo_flow_runtime_owner_contract_valid(&acceptance.owner));
+    check_equal(turbo_flow_adapter_count(acceptance.flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_count(acceptance.flow), (size_t)1u);
+    check_equal(turbo_flow_compile(acceptance.flow), SALTS_OK);
+  }
+
   }
 }
 
