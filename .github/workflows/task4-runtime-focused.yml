@@ -13,6 +13,19 @@ on:
       - 'ingress/protocol/inbox/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
+  # Staging-only trigger. Remove before promoting #251 to a PR.
+  push:
+    branches: [feat/251-chttp-typed-contracts]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'turbo_flow/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
+      - 'io/chttp/**'
+      - 'tests/install_chttp_plugin_consumer/**'
+      - '.github/ci/task4_runtime_assembly.py'
+      - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
 
 permissions:
