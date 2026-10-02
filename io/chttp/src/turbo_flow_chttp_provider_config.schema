@@ -45,8 +45,8 @@ message CHttpClientConfig {
   @Max(1) uint32 tls_enabled;
   @Max(1) uint32 idempotent;
 
-  CHttpBackend backend;
-  CHttpClientProtocol protocol;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
 
   @Min(1) uint32 network_connection_capacity;
   @Min(1) uint32 network_command_capacity;
@@ -79,7 +79,7 @@ message CHttpClientConfig {
   uint32 retry_delay_ms;
   @Min(1) uint32 max_attempts;
   @Min(1) uint32 stop_timeout_ms;
-  CHttpMethod method;
+  @Max(6) uint32 method;
 
   @Size(max = 64)
   list<CHttpHeader> headers;
@@ -95,9 +95,9 @@ message CHttpServerConfig {
   @Min(1) uint32 poll_budget_ms;
   @Max(1) uint32 tls_enabled;
 
-  CHttpBackend backend;
-  CHttpServerProtocol protocol;
-  CHttpTlsClientAuth tls_client_auth;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
+  @Max(1) uint32 tls_client_auth;
 
   @Min(1) uint32 network_connection_capacity;
   @Min(1) uint32 network_command_capacity;
@@ -136,7 +136,7 @@ message CHttpServerConfig {
   uint32 h2_hpack_dynamic_table_bytes;
   uint32 h2_max_settings_count;
   @Min(1) uint32 poll_slice_ms;
-  CHttpMethod method;
+  @Max(6) uint32 method;
   @Min(1) uint32 max_request_message_bytes;
   @Min(200) @Max(599) uint32 success_status;
   @Min(200) @Max(599) uint32 overload_status;
@@ -160,9 +160,9 @@ message CHttpWebSocketServerConfig {
   @Min(1) uint32 poll_budget_ms;
   @Max(1) uint32 tls_enabled;
 
-  CHttpBackend backend;
-  CHttpServerProtocol protocol;
-  CHttpTlsClientAuth tls_client_auth;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
+  @Max(1) uint32 tls_client_auth;
 
   @Min(1) uint32 network_connection_capacity;
   @Min(1) uint32 network_command_capacity;
