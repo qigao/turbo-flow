@@ -7,6 +7,7 @@
 typedef struct scoped_probe_s {
   int starts;
   int consumes;
+  int shutdowns;
   const char *last_stage;
 } scoped_probe_t;
 
@@ -29,6 +30,31 @@ static int scoped_consume(
   ++probe->consumes;
   probe->last_stage = stage->name;
   return SALTS_OK;
+}
+
+static void scoped_shutdown(void *ctx) {
+  scoped_probe_t *probe = (scoped_probe_t *)ctx;
+  if (probe) ++probe->shutdowns;
+}
+
+static int scoped_terminal_submit(
+    void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
+    const turbo_flow_msg_t *message,
+    turbo_flow_async_terminal_claim_t *claim) {
+  (void)ctx;
+  (void)flow;
+  (void)stage;
+  (void)message;
+  (void)claim;
+  return SALTS_OK;
+}
+
+static int fail_async_terminal_bind(
+    void *ctx, flow_registration_checkpoint_t checkpoint) {
+  (void)ctx;
+  return checkpoint == FLOW_REGISTRATION_ASYNC_TERMINAL_BIND
+             ? SALTS_EIO
+             : SALTS_OK;
 }
 
 static turbo_flow_adapter_schema_t sink_schema(void) {
@@ -214,6 +240,61 @@ spec("provider-scoped adapter stage binding") {
     check_equal(turbo_flow_adapter_count(flow), adapter_count);
 
     turbo_flow_destroy(flow);
+  }
+
+  it("rolls back async-terminal registration without taking ctx ownership") {
+    static const char *src =
+        "stage sink adapter fixture.async\n";
+    const char *stages[] = {"sink"};
+    scoped_probe_t probe = {0};
+    turbo_flow_adapter_ops_t ops = sink_ops();
+    turbo_flow_adapter_schema_t schema = sink_schema();
+    turbo_flow_async_terminal_adapter_ops_t async_ops =
+        TURBO_FLOW_ASYNC_TERMINAL_ADAPTER_OPS_INIT;
+    turbo_flow_provider_adapter_registration_v1_t registration =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    flow_stage_plan_impl_t *stage;
+    int stage_index;
+
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    ops.shutdown = scoped_shutdown;
+    async_ops.submit = scoped_terminal_submit;
+    registration.provider_identity = "fixture.async";
+    registration.stage_names = stages;
+    registration.stage_count = 1u;
+    registration.adapter_ops = &ops;
+    registration.async_terminal_ops = &async_ops;
+    registration.schema = &schema;
+    registration.ctx = &probe;
+
+    flow->registration_fault.before_commit = fail_async_terminal_bind;
+    check_equal(
+        turbo_flow_provider_adapter_register(flow, &registration),
+        SALTS_EIO);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
+    check_equal(probe.shutdowns, 0);
+
+    stage_index = turbo_flow_find_stage(flow, "sink");
+    check_true(stage_index >= 0);
+    stage = stage_index >= 0
+                ? (flow_stage_plan_impl_t *)vec_at(
+                      &flow->stages, (size_t)stage_index)
+                : NULL;
+    check_not_null(stage);
+    if (stage) check_false(stage->provider_adapter_bound);
+
+    flow->registration_fault.before_commit = NULL;
+    check_equal(
+        turbo_flow_provider_adapter_register(flow, &registration),
+        SALTS_OK);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
+    if (stage) check_true(stage->provider_adapter_bound);
+    check_equal(probe.shutdowns, 0);
+
+    turbo_flow_destroy(flow);
+    check_equal(probe.shutdowns, 1);
   }
 
   it("preserves legacy global name-based registration") {
