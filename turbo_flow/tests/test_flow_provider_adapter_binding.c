@@ -344,7 +344,7 @@ spec("provider-scoped adapter stage binding") {
 
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    ops.shutdown = scoped_managed_owner_shutdown;
+    ops.shutdown = scoped_shutdown;
     async_ops.submit = scoped_terminal_submit;
     registration.provider_identity = "fixture.async";
     registration.stage_names = stages;
@@ -400,7 +400,7 @@ spec("provider-scoped adapter stage binding") {
     memset(&owner, 0, sizeof(owner));
     scoped_boundary_init(&owner.boundary);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
-    ops.shutdown = scoped_shutdown;
+    ops.shutdown = scoped_managed_owner_shutdown;
     boundary_ops.resource.metadata = scoped_boundary_metadata;
     boundary_ops.descriptor = scoped_boundary_descriptor;
     boundary_ops.snapshot = scoped_boundary_snapshot;
