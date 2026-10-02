@@ -25,7 +25,14 @@ enum {
    * share one resolved resource identity. CHTTP client deployments admit this;
    * server/WebSocket bind deployments intentionally do not.
    */
-  TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT = UINT64_C(1) << 1
+  TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT = UINT64_C(1) << 1,
+  /*
+   * One resolved server/WebSocket deployment identity admits exactly one
+   * native bind owner in a generation. Source + terminal stages may share that
+   * owner, but a second independent server owner must resolve a different
+   * deployment resource identity.
+   */
+  TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND = UINT64_C(1) << 2
 };
 
 typedef enum turbo_flow_chttp_deployment_kind_e {
