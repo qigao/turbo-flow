@@ -2,6 +2,7 @@ add_library(tf_chttp_adapter SHARED
   src/turbo_flow_chttp.c
   src/turbo_flow_chttp_server.c
   src/turbo_flow_chttp_websocket_server.c
+  src/turbo_flow_chttp_provider_adapter_internal.h
   include/turbo_flow_chttp.h)
 cmake_config_target(
   tf_chttp_adapter
@@ -49,17 +50,22 @@ install(FILES
   include/turbo_flow_chttp_resource.h
   DESTINATION include)
 
-add_library(tf_chttp_plugin SHARED src/turbo_flow_chttp_plugin.c
-  src/turbo_flow_chttp_plugin_config.c src/turbo_flow_chttp_plugin_internal.h)
+add_library(tf_chttp_plugin SHARED
+  src/turbo_flow_chttp_plugin.c)
 cmake_config_target(tf_chttp_plugin FOLDER "io/chttp")
 target_compile_definitions(tf_chttp_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
-target_include_directories(tf_chttp_plugin PRIVATE include src)
+target_include_directories(tf_chttp_plugin PRIVATE
+  include
+  src
+  "${turbo_flow_chttp_provider_config_GENERATED_DIR}")
 target_link_libraries(tf_chttp_plugin PRIVATE
   tf_chttp_adapter
   tf_chttp_provider_support
   TurboFlow::Product
-  Salts::CSTL
-  Salts::UriParser)
+  Salts::Plugin
+  ${turbo_flow_chttp_provider_config_NATIVE_TARGET})
+add_dependencies(tf_chttp_plugin
+  turbo_flow_chttp_provider_config_idl_codegen)
 set_target_properties(tf_chttp_plugin PROPERTIES C_VISIBILITY_PRESET hidden
                                                VISIBILITY_INLINES_HIDDEN YES)
 install(TARGETS tf_chttp_plugin RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
