@@ -1017,8 +1017,6 @@ void flow_close_managed_source_runs(turbo_flow_t *flow);
 int flow_stop_non_source_adapters(turbo_flow_t *flow);
 int flow_stop_source_adapters(turbo_flow_t *flow);
 int flow_stop_adapters(turbo_flow_t *flow);
-const flow_adapter_registration_t *flow_adapter_for_stage(const turbo_flow_t *flow,
-                                                          const flow_stage_plan_impl_t *stage);
 TURBO_FLOW_C_API const flow_adapter_registration_t *
 flow_adapter_for_compiled_stage(const turbo_flow_t *flow, uint32_t stage_index);
 int flow_adapter_consume_stage(turbo_flow_t *flow, const flow_stage_plan_impl_t *stage,
