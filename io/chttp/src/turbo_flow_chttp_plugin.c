@@ -463,7 +463,7 @@ static int provider_contract(
       TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
       (slot->kind == CHTTP_PROVIDER_CLIENT
            ? TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT
-           : 0u);
+           : TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND);
   out->resource.expected_interface =
       turbo_flow_chttp_deployment_resource_interface();
   return SALTS_OK;
