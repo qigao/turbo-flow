@@ -17,14 +17,18 @@ if(DEFINED TurboFlow_DIR AND NOT "${TurboFlow_DIR}" STREQUAL "")
     message(FATAL_ERROR "TurboFlow_DIR is outside TURBO_FLOW_ROOT: ${TurboFlow_DIR}")
   endif()
 endif()
-find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS PluginHost Product Graph
+
+find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS Product
              PATHS "$ENV{TURBO_FLOW_ROOT}" NO_DEFAULT_PATH)
+
 add_executable(turbo_flow_chttp_plugin_consumer main.c)
 target_link_libraries(turbo_flow_chttp_plugin_consumer PRIVATE
-  TurboFlow::PluginHost TurboFlow::Product TurboFlow::Graph)
+  TurboFlow::Product Salts::Plugin)
+
 if(NOT DEFINED TURBO_FLOW_CHTTP_PLUGIN_PATH OR TURBO_FLOW_CHTTP_PLUGIN_PATH STREQUAL "")
   message(FATAL_ERROR "TURBO_FLOW_CHTTP_PLUGIN_PATH is required")
 endif()
+
 enable_testing()
 add_test(NAME turbo_flow_chttp_plugin_consumer_runs
   COMMAND turbo_flow_chttp_plugin_consumer "${TURBO_FLOW_CHTTP_PLUGIN_PATH}")
