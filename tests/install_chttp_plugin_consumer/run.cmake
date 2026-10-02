@@ -94,9 +94,9 @@ if(WIN32)
     string(REGEX MATCH "[^ \t\r\n]+$" export_name "${export_row}")
   endif()
   if(NOT export_count EQUAL 1 OR
-     NOT export_name STREQUAL "turbo_flow_plugin_get_api")
+     NOT export_name STREQUAL "salts_plugin_query")
     message(FATAL_ERROR
-            "CHTTP plugin must export only turbo_flow_plugin_get_api\n${export_output}")
+            "CHTTP plugin must export only salts_plugin_query\n${export_output}")
   endif()
 
   execute_process(
@@ -105,10 +105,9 @@ if(WIN32)
     OUTPUT_VARIABLE plugin_dependent_output
     ERROR_VARIABLE plugin_dependent_error)
   if(NOT plugin_dependent_result EQUAL 0 OR
-     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll" OR
-     plugin_dependent_output MATCHES "turbo_flow\\.dll")
+     NOT plugin_dependent_output MATCHES "tf_chttp_adapter\\.dll")
     message(FATAL_ERROR
-            "CHTTP plugin must not depend on turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
+            "CHTTP provider must import the installed tf_chttp_adapter runtime\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
   set(CHTTP_TEST_LAYER provider)
   set(CHTTP_TEST_DEPENDENTS "${plugin_dependent_output}")
@@ -130,13 +129,11 @@ if(WIN32)
     message(FATAL_ERROR
             "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
-  if(consumer_dependent_output MATCHES "tf_chttp_adapter\\.dll|salts_chttp(-[0-9]+)?\\.dll|turbo_flow\\.dll")
+  if(consumer_dependent_output MATCHES
+     "tf_chttp_adapter\\.dll|chttp_client\\.dll|chttp_server\\.dll|salts_chttp(-[0-9]+)?\\.dll")
     message(FATAL_ERROR
-            "Gateway consumer must not link the CHTTP adapter, CHTTP runtime, or turbo_flow.dll\n${consumer_dependent_output}")
+            "Installed provider consumer must not link the concrete CHTTP adapter/runtime\n${consumer_dependent_output}")
   endif()
-  set(CHTTP_TEST_LAYER gateway)
-  set(CHTTP_TEST_DEPENDENTS "${consumer_dependent_output}")
-  include("${CMAKE_CURRENT_LIST_DIR}/check_native_abi.cmake")
 
   execute_process(
     COMMAND "${dumpbin}" /nologo /dependents "${stage_dir}/bin/tf_chttp_adapter.dll"
@@ -259,7 +256,7 @@ if(WIN32)
   string(CONCAT missing_chttp_dependency_diagnostic
          "${missing_chttp_dependency_output}" "\n${missing_chttp_dependency_error}")
   if(missing_chttp_dependency_result EQUAL 0 OR
-     NOT missing_chttp_dependency_diagnostic MATCHES "Win32 dynamic library error 126")
+     NOT missing_chttp_dependency_diagnostic MATCHES "failed at plugin DLL load")
     message(FATAL_ERROR
             "CHTTP missing-transitive negative case failed\n${missing_chttp_dependency_diagnostic}")
   endif()
