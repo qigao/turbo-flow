@@ -20,9 +20,10 @@ enum {
   TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT = UINT64_C(1) << 0,
   /*
    * snapshot() returns immutable borrowed deployment facts that remain stable
-   * for every concurrent Salts Plugin lease. Multiple provider instances may
-   * therefore share one resolved resource identity without sharing a native
-   * socket/connection owner.
+   * for every concurrent Salts Plugin lease. Providers may require this bit
+   * only when the endpoint semantics themselves permit independent owners to
+   * share one resolved resource identity. CHTTP client deployments admit this;
+   * server/WebSocket bind deployments intentionally do not.
    */
   TURBO_FLOW_CHTTP_RESOURCE_SHAREABLE_SNAPSHOT = UINT64_C(1) << 1
 };
