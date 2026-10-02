@@ -2,6 +2,7 @@
 #include "tinytest.h"
 #include "turbo_flow_inbox_source.h"
 #include "turbo_flow_turbodb.h"
+#include "turbodb_test_runtime.h"
 
 #include <salts_error.h>
 
@@ -16,6 +17,7 @@
 
 typedef struct inbox_source_db_fixture_s {
   char *path;
+  orm_runtime_t *runtime;
   orm_option_t filename;
   orm_config_t database;
 } inbox_source_db_fixture_t;
@@ -27,7 +29,7 @@ typedef struct inbox_source_db_probe_s {
 } inbox_source_db_probe_t;
 
 static const char INBOX_SOURCE_META_DDL[] =
-    "CREATE TABLE orders_inbox_meta_v2 ("
+    "CREATE TABLE orders_inbox_meta_v3 ("
     "singleton_id integer primary key not null, schema_magic text not null, "
     "schema_version integer not null, generation bigint not null, owner_state integer not null, "
     "next_record_id bigint not null, next_claim_token bigint not null, max_records bigint not "
@@ -38,12 +40,13 @@ static const char INBOX_SOURCE_META_DDL[] =
     "null, retried bigint not null, discarded bigint not null)";
 
 static const char INBOX_SOURCE_RECORDS_DDL[] =
-    "CREATE TABLE orders_inbox_records_v2 ("
+    "CREATE TABLE orders_inbox_records_v3 ("
     "record_id bigint primary key not null, phase integer not null, claim_generation bigint not "
     "null, claim_token bigint not null, failure_status integer not null, failure_kind integer not "
     "null, terminal_kind integer not null, envelope_schema text not null, "
-    "envelope_schema_version integer not null, source_id bytea not null, admission_id bytea not "
-    "null, source_sequence_be bytea not null, timestamp_ns_be bytea not null, message_type bigint "
+    "envelope_schema_version integer not null, source_id bytea not null, partition_key bytea not "
+    "null, admission_id bytea not null, source_sequence_be bytea not null, "
+    "timestamp_ns_be bytea not null, message_type bigint "
     "not null, message_flags bigint not null, content_domain integer not null, content_profile "
     "integer not null, content_encoding integer not null, content_flags bigint not null, "
     "content_schema_version bigint not null, content_media_type text not null, "
@@ -51,15 +54,15 @@ static const char INBOX_SOURCE_RECORDS_DDL[] =
     "null, correlation bytea not null, payload bytea not null, retained_bytes bigint not null)";
 
 static const char INBOX_SOURCE_DEDUPE_INDEX_DDL[] =
-    "CREATE UNIQUE INDEX orders_inbox_records_v2_admission ON "
-    "orders_inbox_records_v2(source_id, admission_id)";
+    "CREATE UNIQUE INDEX orders_inbox_records_v3_admission ON "
+    "orders_inbox_records_v3(source_id, admission_id)";
 
 static const char INBOX_SOURCE_PHASE_INDEX_DDL[] =
-    "CREATE INDEX orders_inbox_records_v2_phase ON orders_inbox_records_v2(phase, record_id)";
+    "CREATE INDEX orders_inbox_records_v3_phase ON orders_inbox_records_v3(phase, record_id)";
 
 static const char INBOX_SOURCE_META_ROW[] =
-    "INSERT INTO orders_inbox_meta_v2 VALUES "
-    "(1, 'turbo-flow.turbodb.inbox', 2, 0, 0, 1, 1, 4, 256, 128, 1, "
+    "INSERT INTO orders_inbox_meta_v3 VALUES "
+    "(1, 'turbo-flow.turbodb.inbox', 3, 0, 0, 1, 1, 4, 256, 128, 1, "
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 static void inbox_source_db_execute(orm_connection_t *connection, const char *sql,
@@ -77,6 +80,11 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
   orm_error_t error;
 
   memset(fixture, 0, sizeof(*fixture));
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_sqlite_runtime_open(&fixture->runtime, &error),
+      ORM_STATUS_OK);
+  check_not_null(fixture->runtime);
   fixture->path = tt_make_temp_file("turbo-flow-turbodb-inbox-source", ".sqlite3");
   check_not_null(fixture->path);
   orm_config(&fixture->database);
@@ -86,8 +94,10 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
   fixture->database.options = &fixture->filename;
   fixture->database.option_count = 1u;
 
-  orm_error_init(&error);
-  check_equal(orm_connect(&fixture->database, &connection, &error), ORM_STATUS_OK);
+  check_equal(
+      orm_runtime_connect(
+          fixture->runtime, &fixture->database, &connection, &error),
+      ORM_STATUS_OK);
   check_not_null(connection);
   inbox_source_db_execute(connection, INBOX_SOURCE_META_DDL, &error);
   inbox_source_db_execute(connection, INBOX_SOURCE_RECORDS_DDL, &error);
@@ -98,7 +108,12 @@ static void inbox_source_db_fixture_init(inbox_source_db_fixture_t *fixture) {
 }
 
 static void inbox_source_db_fixture_destroy(inbox_source_db_fixture_t *fixture) {
+  orm_error_t error;
   check_not_null(fixture);
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_runtime_close(&fixture->runtime, &error),
+      ORM_STATUS_OK);
   check_not_null(fixture->path);
   check_equal(tt_remove_file(fixture->path), 0);
   free(fixture->path);
@@ -108,6 +123,7 @@ static void inbox_source_db_fixture_destroy(inbox_source_db_fixture_t *fixture) 
 static turbo_flow_turbodb_inbox_config_t
 inbox_source_db_config(const inbox_source_db_fixture_t *fixture) {
   turbo_flow_turbodb_inbox_config_t config = turbo_flow_turbodb_inbox_config_default();
+  config.database_runtime = fixture->runtime;
   config.database = &fixture->database;
   config.namespace_name = "orders";
   config.max_records = INBOX_SOURCE_TEST_MAX_RECORDS;
@@ -126,6 +142,7 @@ static turbo_flow_inbox_record_t inbox_source_db_record(void) {
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf(source_id, sizeof(source_id) - 1u);
+  record.partition_key = record.source_id;
   record.admission_id = vstr_from_buf(admission_id, sizeof(admission_id) - 1u);
   record.source_sequence = 41u;
   record.timestamp_ns = 42u;

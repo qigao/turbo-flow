@@ -116,7 +116,8 @@ spec("Salts Plugin provider/resource binding") {
             contract.resource.expected_interface),
         SALTS_PLUGIN_OK);
 
-    resource_view.identity = FLOW_TEST_RESOURCE_IDENTITY;
+    resource_view.reference_name = FLOW_TEST_RESOURCE_IDENTITY;
+    resource_view.identity = "deployment.db_main";
     resource_view.export_id = resource_entry->export_id;
     resource_view.interface_desc = resource_entry->value.interface.desc;
     resource_view.interface_value = resource_entry->value.interface.value;

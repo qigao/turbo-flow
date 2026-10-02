@@ -5,6 +5,7 @@
 #include <string.h>
 
 struct turbo_flow_resource_binding_s {
+  char *reference_name;
   char *identity;
   char *export_id;
   salts_plugin_registry *registry;
@@ -101,6 +102,7 @@ static int resource_binding_cleanup_failed_acquire(
     const char *message) {
   salts_plugin_status released;
   if (!binding || !salts_plugin_lease_valid(binding->lease)) {
+    free(binding ? binding->reference_name : NULL);
     free(binding ? binding->identity : NULL);
     free(binding ? binding->export_id : NULL);
     free(binding);
@@ -114,6 +116,7 @@ static int resource_binding_cleanup_failed_acquire(
                           "resource lease cleanup failed after binding rejection");
   }
 
+  free(binding->reference_name);
   free(binding->identity);
   free(binding->export_id);
   free(binding);
@@ -160,10 +163,12 @@ int turbo_flow_resource_binding_acquire(
   if (!binding)
     return resource_error(error, SALTS_ENOMEM, resource_name,
                           "resource binding allocation failed");
+  binding->reference_name = resource_copy_text(resource_name);
   binding->identity = resource_copy_text(candidate.identity);
   binding->export_id = resource_copy_text(candidate.export_id);
   binding->registry = candidate.registry;
-  if (!binding->identity || !binding->export_id) {
+  if (!binding->reference_name || !binding->identity || !binding->export_id) {
+    free(binding->reference_name);
     free(binding->identity);
     free(binding->export_id);
     free(binding);
@@ -175,6 +180,7 @@ int turbo_flow_resource_binding_acquire(
       binding->registry, candidate.plugin, &binding->lease, &manifest);
   if (plugin_status != SALTS_PLUGIN_OK) {
     status = resource_plugin_status(plugin_status);
+    free(binding->reference_name);
     free(binding->identity);
     free(binding->export_id);
     free(binding);
@@ -211,7 +217,7 @@ int turbo_flow_resource_binding_view(
     const turbo_flow_resource_binding_t *binding,
     turbo_flow_provider_resource_view_v1_t *out) {
   if (!binding || !out || out->size != sizeof(*out) ||
-      !binding->identity || !binding->export_id ||
+      !binding->reference_name || !binding->identity || !binding->export_id ||
       !salts_plugin_lease_valid(binding->lease) ||
       !cmeta_interface_desc_valid(binding->interface_desc) ||
       !binding->interface_value)
@@ -219,6 +225,7 @@ int turbo_flow_resource_binding_view(
 
   *out = (turbo_flow_provider_resource_view_v1_t)
       TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT;
+  out->reference_name = binding->reference_name;
   out->identity = binding->identity;
   out->export_id = binding->export_id;
   out->interface_desc = binding->interface_desc;
@@ -239,6 +246,7 @@ int turbo_flow_resource_binding_release(
   status = salts_plugin_registry_release(binding->registry, &binding->lease);
   if (status != SALTS_PLUGIN_OK) return resource_plugin_status(status);
 
+  free(binding->reference_name);
   free(binding->identity);
   free(binding->export_id);
   free(binding);

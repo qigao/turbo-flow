@@ -3,6 +3,7 @@
 #include "turbo_flow_protocol_envelope.h"
 #include "turbo_flow_protocol_inbox_envelope.h"
 #include "turbo_flow_turbodb.h"
+#include "turbodb_test_runtime.h"
 
 #include <salts_error.h>
 #include <salts_thread.h>
@@ -23,6 +24,7 @@
 
 typedef struct inbox_db_fixture_s {
   char *path;
+  orm_runtime_t *runtime;
   orm_option_t filename;
   orm_config_t database;
 } inbox_db_fixture_t;
@@ -97,7 +99,13 @@ static const char INBOX_META_OLD_ROW[] =
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 static void inbox_db_fixture_init(inbox_db_fixture_t *fixture) {
+  orm_error_t error;
   memset(fixture, 0, sizeof(*fixture));
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_sqlite_runtime_open(&fixture->runtime, &error),
+      ORM_STATUS_OK);
+  check_not_null(fixture->runtime);
   fixture->path = tt_make_temp_file("turbo-flow-turbodb-inbox", ".sqlite3");
   check_not_null(fixture->path);
   orm_config(&fixture->database);
@@ -109,16 +117,26 @@ static void inbox_db_fixture_init(inbox_db_fixture_t *fixture) {
 }
 
 static void inbox_db_fixture_destroy(inbox_db_fixture_t *fixture) {
-  if (!fixture || !fixture->path) return;
-  check_equal(tt_remove_file(fixture->path), 0);
-  free(fixture->path);
+  orm_error_t error;
+  if (!fixture) return;
+  orm_error_init(&error);
+  check_equal(
+      turbodb_test_runtime_close(&fixture->runtime, &error),
+      ORM_STATUS_OK);
+  if (fixture->path) {
+    check_equal(tt_remove_file(fixture->path), 0);
+    free(fixture->path);
+  }
   memset(fixture, 0, sizeof(*fixture));
 }
 
 static orm_connection_t *inbox_db_connect(inbox_db_fixture_t *fixture, orm_error_t *error) {
   orm_connection_t *connection = NULL;
   orm_error_init(error);
-  check_equal(orm_connect(&fixture->database, &connection, error), ORM_STATUS_OK);
+  check_equal(
+      orm_runtime_connect(
+          fixture->runtime, &fixture->database, &connection, error),
+      ORM_STATUS_OK);
   check_not_null(connection);
   return connection;
 }
@@ -184,6 +202,7 @@ static void inbox_db_provision(inbox_db_fixture_t *fixture, int old_schema) {
 
 static turbo_flow_turbodb_inbox_config_t inbox_test_config(const inbox_db_fixture_t *fixture) {
   turbo_flow_turbodb_inbox_config_t config = turbo_flow_turbodb_inbox_config_default();
+  config.database_runtime = fixture->runtime;
   config.database = &fixture->database;
   config.namespace_name = "orders";
   config.max_records = INBOX_TEST_MAX_RECORDS;
@@ -275,6 +294,7 @@ spec("TurboDB durable inbox v3") {
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     orm_config_t database;
     orm_option_t filename;
+    orm_runtime_t *runtime = NULL;
     orm_error_t error;
 
     check_equal(config.size, sizeof(config));
@@ -283,11 +303,18 @@ spec("TurboDB durable inbox v3") {
     check_equal(config.expected_generation, (uint64_t)0u);
     check_equal(config.connection_count, TURBO_FLOW_TURBODB_INBOX_DEFAULT_CONNECTIONS);
 
+    orm_error_init(&error);
+    check_equal(
+        turbodb_test_sqlite_runtime_open(&runtime, &error),
+        ORM_STATUS_OK);
+    check_not_null(runtime);
+
     orm_config(&database);
     filename = (orm_option_t){orm_view("filename"), orm_view(":memory:")};
     database.driver = orm_view("sqlite");
     database.options = &filename;
     database.option_count = 1u;
+    config.database_runtime = runtime;
     config.database = &database;
     config.namespace_name = "orders";
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_ENOTSUP);
@@ -296,6 +323,9 @@ spec("TurboDB durable inbox v3") {
     database.driver = orm_view("postgresql");
     check_equal(turbo_flow_turbodb_inbox_create(&config, &inbox, &error), SALTS_ENOTSUP);
     check_null(inbox.ops);
+    check_equal(
+        turbodb_test_runtime_close(&runtime, &error),
+        ORM_STATUS_OK);
   }
 
   it("rejects a nested ORM configuration ABI mismatch before using its fields") {

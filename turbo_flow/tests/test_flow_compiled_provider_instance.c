@@ -70,7 +70,7 @@ static int resolve_resource(
     }
     return SALTS_ENOENT;
   }
-  out->identity = FLOW_TEST_RESOURCE_IDENTITY;
+  out->identity = "deployment.db_main";
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -95,7 +95,7 @@ static void stop_and_unload(
 spec("compiled provider instance") {
   it("binds provider config and resource before provider preflight") {
     static const char *src =
-        "stage provider_stage adapter fixture.provider {\n"
+        "buffer provider_stage provider fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 7\n"
         "  concurrency 2\n"
@@ -164,7 +164,8 @@ spec("compiled provider instance") {
     check_not_null(view->config.value);
     check_true(view->config.value_bytes > 0u);
     check_not_null(view->resource);
-    check_equal(view->resource->identity, FLOW_TEST_RESOURCE_IDENTITY);
+    check_equal(view->resource->reference_name, FLOW_TEST_RESOURCE_IDENTITY);
+    check_equal(view->resource->identity, "deployment.db_main");
     check_equal(view->resource->export_id, "fixture.resource");
 
     check_equal(

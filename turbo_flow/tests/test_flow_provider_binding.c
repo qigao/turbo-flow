@@ -46,7 +46,7 @@ static int resolve_resource(
     }
     return SALTS_ENOENT;
   }
-  out->identity = FLOW_TEST_RESOURCE_IDENTITY;
+  out->identity = "deployment.db_main";
   out->registry = fixture->registry;
   out->plugin = fixture->plugin;
   out->export_id = "fixture.resource";
@@ -147,6 +147,8 @@ spec("TurboFlow Salts provider binding") {
     check_equal(turbo_flow_resource_binding_view(
                     resource_binding, &resource_view),
                 SALTS_OK);
+    check_equal(resource_view.reference_name, FLOW_TEST_RESOURCE_IDENTITY);
+    check_equal(resource_view.identity, "deployment.db_main");
 
     artifact = contract.config.message_artifact;
     check_not_null(artifact);

@@ -1,3 +1,12 @@
+set(TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB
+  "${CMAKE_CURRENT_BINARY_DIR}/turbodb-provider-resource.sqlite3")
+set(TURBO_FLOW_TURBODB_SQLITE_DRIVER
+  "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_MODULE_SUFFIX}")
+if(NOT EXISTS "${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
+  message(FATAL_ERROR
+    "TurboDB packaged SQLite driver is required: ${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
+endif()
+
 cmake_add_test(
   test_turbodb_adapter
   SOURCES test_turbodb_adapter.c turbodb_adapter_header_cpp.cpp
@@ -22,6 +31,8 @@ add_executable(test_turbodb_inbox_crash_helper turbodb_inbox_crash_helper.c)
 target_link_libraries(test_turbodb_inbox_crash_helper PRIVATE TurboFlow::TurboDbAdapter)
 target_include_directories(test_turbodb_inbox_crash_helper
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(test_turbodb_inbox_crash_helper PRIVATE
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_target_properties(test_turbodb_inbox_crash_helper
                       PROPERTIES FOLDER "io/turbodb/tests/helpers")
 
@@ -35,8 +46,9 @@ cmake_add_test(
   FOLDER "io/turbodb/tests")
 add_dependencies(test_turbodb_inbox test_turbodb_inbox_crash_helper)
 target_compile_definitions(
-  test_turbodb_inbox
-  PRIVATE TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER="$<TARGET_FILE:test_turbodb_inbox_crash_helper>")
+  test_turbodb_inbox PRIVATE
+  TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER="$<TARGET_FILE:test_turbodb_inbox_crash_helper>"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 
 set_tests_properties(test_turbodb_inbox
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
@@ -48,22 +60,52 @@ cmake_add_test(
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
   FOLDER "io/turbodb/tests")
 
+target_compile_definitions(test_turbodb_inbox_source PRIVATE
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 set_tests_properties(test_turbodb_inbox_source
                      PROPERTIES LABELS "turbodb-adapter;graph;inbox")
 
-cmake_add_test(test_turbodb_durable_buffer_plugin
-  SOURCES test_turbodb_durable_buffer_plugin.c
-  LIBS TurboFlow::PluginHost TurboFlow::TurboDbAdapter Salts::TinyTest
-  FOLDER "io/turbodb/tests")
-add_dependencies(test_turbodb_durable_buffer_plugin tf_turbodb_plugin)
-set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
-  LABELS "turbodb-adapter;graph;durable;plugin"
-  ENVIRONMENT "TURBO_FLOW_TURBODB_PLUGIN_PATH=$<TARGET_FILE:tf_turbodb_plugin>")
+add_library(test_turbodb_database_resource_fixture SHARED
+  turbodb_database_resource_fixture.c)
+target_link_libraries(test_turbodb_database_resource_fixture
+  PRIVATE TurboFlow::TurboDbAdapter Salts::Plugin)
+target_include_directories(test_turbodb_database_resource_fixture
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(test_turbodb_database_resource_fixture PRIVATE
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
+set_target_properties(test_turbodb_database_resource_fixture PROPERTIES
+  FOLDER "io/turbodb/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
 
+cmake_add_test(test_turbodb_durable_buffer_plugin
+  SOURCES test_turbodb_provider_interface.c
+  LIBS TurboFlow::Product TurboFlow::TurboDbAdapter
+       Salts::Plugin Salts::TinyTest
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${PROJECT_SOURCE_DIR}/turbo_flow/src
+  FOLDER "io/turbodb/tests")
+add_dependencies(test_turbodb_durable_buffer_plugin
+  tf_turbodb_plugin
+  test_turbodb_database_resource_fixture)
+target_compile_definitions(test_turbodb_durable_buffer_plugin PRIVATE
+  FLOW_TURBODB_PROVIDER_FIXTURE="$<TARGET_FILE:tf_turbodb_plugin>"
+  FLOW_TURBODB_RESOURCE_FIXTURE="$<TARGET_FILE:test_turbodb_database_resource_fixture>"
+  FLOW_TURBODB_RESOURCE_FIXTURE_DB="${TURBO_FLOW_TURBODB_RESOURCE_FIXTURE_DB}"
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
+set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
+  LABELS "turbodb-adapter;graph;durable;plugin;provider;resource;config")
+
+# Keep the canonical provider gate self-contained while compiling the installed
+# TurboDB/resource headers under C++17; the broader adapter runtime suite has
+# additional CBind dependencies outside this focused package contract.
 cmake_add_test(
   test_turbodb_typed_config
   SOURCES
     test_turbodb_typed_config.c
+    turbodb_adapter_header_cpp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/turbo_flow_turbodb_durable_config.c
   LIBS
     TurboFlow::Product
@@ -77,6 +119,9 @@ cmake_add_test(
 add_dependencies(
   test_turbodb_typed_config
   turbo_flow_turbodb_provider_config_idl_codegen)
+set_target_properties(test_turbodb_typed_config PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 set_tests_properties(test_turbodb_typed_config PROPERTIES
   LABELS "turbodb-adapter;graph;config;databind" TIMEOUT 30)
 

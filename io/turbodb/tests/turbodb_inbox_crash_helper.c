@@ -1,4 +1,5 @@
 #include "turbo_flow_turbodb.h"
+#include "turbodb_test_runtime.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -42,10 +43,15 @@ int main(int argc, char **argv) {
   turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
   orm_option_t filename;
   orm_config_t database;
+  orm_runtime_t *runtime = NULL;
   orm_error_t error;
   int rc;
 
   if (argc != 2 || !argv[1] || !argv[1][0]) return 2;
+
+  orm_error_init(&error);
+  if (turbodb_test_sqlite_runtime_open(&runtime, &error) != ORM_STATUS_OK)
+    return 3;
 
   orm_config(&database);
   filename.keyword = orm_view("filename");
@@ -54,6 +60,7 @@ int main(int argc, char **argv) {
   database.options = &filename;
   database.option_count = 1u;
 
+  config.database_runtime = runtime;
   config.database = &database;
   config.namespace_name = "orders";
   config.max_records = CRASH_MAX_RECORDS;
