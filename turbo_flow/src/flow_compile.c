@@ -942,7 +942,9 @@ static int compile_validate_operation_bindings(turbo_flow_t *flow) {
         return flow_set_error(flow, SALTS_EPROTO, stage->line, stage->column,
                               "resource primitive version is incompatible with operation contract");
       }
-    } else if (stage->resource_name && !stage->is_buffer && provider_index < 0) {
+    } else if (stage->resource_name && !stage->is_buffer &&
+               provider_index < 0 &&
+               (!adapter || !adapter->provider_scoped)) {
       return flow_set_error(flow, SALTS_EINVAL, stage->line, stage->column,
                             "stateless operation cannot bind a resource primitive");
     }
