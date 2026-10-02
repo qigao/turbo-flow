@@ -387,6 +387,11 @@ spec("provider-scoped adapter stage binding") {
         "stage sink adapter fixture.managed\n";
     const char *stages[] = {"sink"};
     scoped_managed_owner_t owner;
+    scoped_managed_owner_t ordinary;
+    turbo_flow_resource_provider_ops_t ordinary_ops =
+        TURBO_FLOW_RESOURCE_PROVIDER_OPS_INIT;
+    turbo_flow_resource_metadata_t remaining =
+        TURBO_FLOW_RESOURCE_METADATA_INIT;
 
     turbo_flow_adapter_ops_t ops = sink_ops();
     turbo_flow_adapter_schema_t schema = sink_schema();
@@ -398,7 +403,11 @@ spec("provider-scoped adapter stage binding") {
 
     check_not_null(flow);
     memset(&owner, 0, sizeof(owner));
+    memset(&ordinary, 0, sizeof(ordinary));
     scoped_boundary_init(&owner.boundary);
+    scoped_boundary_init(&ordinary.boundary);
+    memcpy(ordinary.boundary.metadata.uid, "connection:ordinary",
+           sizeof("connection:ordinary"));
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     ops.shutdown = scoped_managed_owner_shutdown;
     boundary_ops.resource.metadata = scoped_boundary_metadata;
@@ -426,13 +435,26 @@ spec("provider-scoped adapter stage binding") {
     check_equal(
         turbo_flow_provider_adapter_register(flow, &registration),
         SALTS_OK);
+
+    ordinary_ops.metadata = scoped_boundary_metadata;
+    check_equal(
+        turbo_flow_register_resource_provider(
+            flow, ordinary.boundary.metadata.owner_name,
+            &ordinary_ops, &ordinary),
+        SALTS_OK);
+
     check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
     check_equal(turbo_flow_managed_boundary_count(flow), (size_t)1u);
+    check_equal(turbo_flow_resource_metadata_count(flow), (size_t)2u);
     check_equal(owner.probe.shutdowns, 0);
 
     check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
     check_equal(turbo_flow_adapter_count(flow), (size_t)0u);
     check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
+    check_equal(turbo_flow_resource_metadata_count(flow), (size_t)1u);
+    check_equal(turbo_flow_resource_metadata_at(flow, 0u, &remaining), SALTS_OK);
+    check_equal(remaining.uid, "connection:ordinary");
+    check_equal(remaining.owner_name, "scoped.owner");
     check_equal(owner.probe.shutdowns, 1);
 
     turbo_flow_destroy(flow);
