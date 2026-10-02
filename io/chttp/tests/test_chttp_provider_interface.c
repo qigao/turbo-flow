@@ -271,6 +271,34 @@ static int resolve_resource(
   return SALTS_OK;
 }
 
+static void check_artifact_semantics(
+    const DataBindMessageNativeArtifact *actual,
+    const DataBindMessageNativeArtifact *expected) {
+  DataBindNativeTypeBinding actual_binding =
+      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+  DataBindNativeTypeBinding expected_binding =
+      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+  DataBindError actual_error = DATA_BIND_ERROR_INIT;
+  DataBindError expected_error = DATA_BIND_ERROR_INIT;
+
+  check_true(data_bind_message_native_artifact_valid(actual));
+  check_true(data_bind_message_native_artifact_valid(expected));
+  if (!actual || !expected) return;
+
+  check_equal(actual->type_name, expected->type_name);
+  check_equal(
+      actual->native_binding(&actual_binding, &actual_error),
+      DATA_BIND_OK);
+  check_equal(
+      expected->native_binding(&expected_binding, &expected_error),
+      DATA_BIND_OK);
+  check_not_null(actual_binding.data);
+  check_not_null(expected_binding.data);
+  if (actual_binding.data && expected_binding.data)
+    check_true(cmeta_data_desc_equal(
+        actual_binding.data, expected_binding.data));
+}
+
 static int bind_config_view(
     const DataBindMessageNativeArtifact *artifact,
     const void *value, size_t value_bytes,
@@ -486,7 +514,7 @@ spec("CHTTP canonical Salts provider") {
             "chttp.client", "client_net",
             &contract, &resource_view, &error),
         SALTS_OK);
-    check_equal(
+    check_artifact_semantics(
         contract.config.message_artifact,
         CHttpClientConfig_native_artifact());
     check_equal(
@@ -567,7 +595,7 @@ spec("CHTTP canonical Salts provider") {
             "chttp.server", "server_net",
             &contract, &resource_view, &error),
         SALTS_OK);
-    check_equal(
+    check_artifact_semantics(
         contract.config.message_artifact,
         CHttpServerConfig_native_artifact());
     check_equal(
@@ -647,7 +675,7 @@ spec("CHTTP canonical Salts provider") {
             "chttp.websocket_server", "server_net",
             &contract, &resource_view, &error),
         SALTS_OK);
-    check_equal(
+    check_artifact_semantics(
         contract.config.message_artifact,
         CHttpWebSocketServerConfig_native_artifact());
     check_equal(
