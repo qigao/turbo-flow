@@ -144,6 +144,8 @@ typedef struct flow_adapter_registration_s {
   int managed_source;
   /** Hidden from legacy global name lookup; selected only by exact stage binding. */
   int provider_scoped;
+  /** Optional managed resource owner created atomically with this scoped adapter. */
+  tstr provider_managed_owner_name;
 } flow_adapter_registration_t;
 
 typedef struct flow_resource_registration_s {
