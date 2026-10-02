@@ -449,6 +449,12 @@ spec("provider-scoped adapter stage binding") {
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
 
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
+    check_not_null(turbo_flow_find_adapter_schema(flow, "legacy.adapter"));
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+
     turbo_flow_destroy(flow);
   }
 }
