@@ -1,4 +1,6 @@
 #include "turbo_flow_chttp.h"
+#include "turbo_flow_chttp_provider_adapter_internal.h"
+#include "turbo_flow_provider.h"
 
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -487,8 +489,12 @@ static int chttp_adapter_config_valid(const turbo_flow_chttp_client_config_t *co
   return chttp_adapter_uri_valid(config);
 }
 
-int turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *config,
-                                     turbo_flow_chttp_client_t **out_client) {
+static int chttp_client_register_impl(
+    const turbo_flow_chttp_client_config_t *config,
+    const char *provider_identity,
+    const char *const *stage_names,
+    size_t stage_count,
+    turbo_flow_chttp_client_t **out_client) {
   turbo_flow_adapter_ops_t adapter_ops = {0};
   turbo_flow_async_emit_adapter_ops_t async_ops = TURBO_FLOW_ASYNC_EMIT_ADAPTER_OPS_INIT;
   turbo_flow_adapter_schema_t schema = {0};
@@ -496,7 +502,10 @@ int turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *con
   size_t index;
   int status;
   if (out_client) *out_client = NULL;
-  if (!out_client || !chttp_adapter_config_valid(config)) return SALTS_EINVAL;
+  if (!out_client || !chttp_adapter_config_valid(config) ||
+      ((stage_count != 0u) &&
+       (!provider_identity || !provider_identity[0] || !stage_names)))
+    return SALTS_EINVAL;
   client = (turbo_flow_chttp_client_t *)calloc(1u, sizeof(*client));
   if (!client) return SALTS_ENOMEM;
   salts_mutex_init(&client->mutex);
@@ -538,8 +547,23 @@ int turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *con
   schema.kind = TURBO_FLOW_ADAPTER_KIND_HTTP;
   schema.roles = TURBO_FLOW_ADAPTER_TRANSFORM;
   schema.direction = TURBO_FLOW_ADAPTER_BIDIRECTIONAL;
-  status = turbo_flow_register_async_emit_adapter_ex(config->flow, config->adapter_name,
-                                                     &adapter_ops, &async_ops, client, &schema);
+  if (stage_count == 0u) {
+    status = turbo_flow_register_async_emit_adapter_ex(
+        config->flow, config->adapter_name, &adapter_ops, &async_ops,
+        client, &schema);
+  } else {
+    turbo_flow_provider_adapter_registration_v1_t registration =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    registration.provider_identity = provider_identity;
+    registration.stage_names = stage_names;
+    registration.stage_count = stage_count;
+    registration.adapter_ops = &adapter_ops;
+    registration.async_emit_ops = &async_ops;
+    registration.schema = &schema;
+    registration.ctx = client;
+    status = turbo_flow_provider_adapter_register(
+        config->flow, &registration);
+  }
   if (status != SALTS_OK) goto fail;
   *out_client = client;
   return SALTS_OK;
@@ -550,6 +574,24 @@ fail:
   salts_mutex_destroy(&client->mutex);
   free(client);
   return status;
+}
+
+int turbo_flow_chttp_client_register(
+    const turbo_flow_chttp_client_config_t *config,
+    turbo_flow_chttp_client_t **out_client) {
+  return chttp_client_register_impl(
+      config, NULL, NULL, 0u, out_client);
+}
+
+int turbo_flow_chttp_client_register_provider(
+    const turbo_flow_chttp_client_config_t *config,
+    const char *provider_identity,
+    const char *const *stage_names,
+    size_t stage_count,
+    turbo_flow_chttp_client_t **out_client) {
+  if (stage_count == 0u) return SALTS_EINVAL;
+  return chttp_client_register_impl(
+      config, provider_identity, stage_names, stage_count, out_client);
 }
 
 static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) {
