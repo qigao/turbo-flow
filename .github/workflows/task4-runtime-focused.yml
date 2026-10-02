@@ -9,7 +9,21 @@ on:
       - 'turbo_flow/**'
       - 'io/durable/**'
       - 'io/turbodb/**'
+      - 'io/chttp/**'
       - 'ingress/protocol/inbox/**'
+      - '.github/ci/task4_runtime_assembly.py'
+      - '.github/workflows/task4-runtime-focused.yml'
+  # Staging-only trigger. Remove before promoting #251 to a PR.
+  push:
+    branches: [feat/251-chttp-typed-contracts]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'turbo_flow/**'
+      - 'io/durable/**'
+      - 'io/turbodb/**'
+      - 'io/chttp/**'
+      - 'tests/install_chttp_plugin_consumer/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
   workflow_dispatch:
@@ -30,7 +44,7 @@ env:
 
 jobs:
   focused-runtime:
-    name: Published TurboDB SDK + durable Graph contract
+    name: Published TurboDB/CHTTP SDK + provider Graph contract
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -61,6 +75,7 @@ jobs:
             turbo_flow/tests/
             io/durable/
             io/turbodb/
+            io/chttp/
 
       - name: Use empty vcpkg L1 cache
         shell: bash
@@ -94,7 +109,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithTurboDB
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithTurboDB -WithCHttp
 
       - name: Verify published dependency boundary
         shell: bash
@@ -111,26 +126,26 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py --turbodb
+          python3 .github/ci/task4_runtime_assembly.py --turbodb --chttp
           git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt ingress/protocol/inbox/CMakeLists.txt             | tee "$RUNNER_TEMP/task4-runtime-evidence/focused-cmake.patch"
 
       - name: Configure focused exact-source Graph build
         shell: bash
         run: |
           set -euxo pipefail
-          cmake -S . -B build/task4-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
+          cmake -S . -B build/task4-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=ON             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/configure.log"
 
       - name: Build durable Graph tests and TurboDB adapter
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_typed_config test_turbodb_durable_buffer_plugin test_turbodb_inbox test_turbodb_inbox_source                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_provider_adapter_binding test_flow_salts_provider_binding test_flow_provider_binding test_flow_resource_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
+          cmake --build build/task4-runtime             --target tf_turbodb_adapter tf_turbodb_plugin                      test_turbodb_typed_config test_turbodb_durable_buffer_plugin test_turbodb_inbox test_turbodb_inbox_source                      tf_chttp_plugin test_chttp_typed_contract test_chttp_provider_interface                      test_flow_durable_buffer test_flow_durable_admission                      test_flow_durable_lifecycle test_flow_durable_memory_plugin                      test_flow_plugin_generation test_flow_provider_interface test_flow_provider_adapter_binding test_flow_salts_provider_binding test_flow_provider_binding test_flow_resource_binding                      test_flow_compiled_provider_instance test_flow_durable_identity                      test_flow_inbox test_flow_inbox_source test_flow_inbox_driver                      test_flow_async_terminal test_flow_run test_flow_operation_result                      test_flow_projection_owner test_flow_projection_owner_fault             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build.log"
 
       - name: Run provider-neutral durable Graph tests
         shell: bash
         run: |
           set -euxo pipefail
-          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|provider_adapter_binding|salts_provider_binding|provider_binding|resource_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin|inbox|inbox_source))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
+          ctest --test-dir build/task4-runtime             -R '^(test_flow_(durable_buffer|durable_admission|durable_lifecycle|durable_memory_plugin|plugin_generation|provider_interface|provider_adapter_binding|salts_provider_binding|provider_binding|resource_binding|compiled_provider_instance|durable_identity|inbox|inbox_source|inbox_driver|async_terminal|run|operation_result|projection_owner|projection_owner_fault)|test_turbodb_(typed_config|durable_buffer_plugin|inbox|inbox_source)|test_chttp_(typed_contract|provider_interface))$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest.log"
 
       - name: Verify TurboDB adapter does not absorb native database drivers
         shell: bash
@@ -142,6 +157,18 @@ jobs:
             ! readelf -d "$adapter" | grep -Ei 'sqlite|tidesdb|pq|mysql|mongo'
           fi
           printf '%s\n' "$adapter" > "$RUNNER_TEMP/task4-runtime-evidence/turbodb-adapter.txt"
+
+      - name: Verify CHTTP provider exports only the Salts Plugin entry
+        shell: bash
+        run: |
+          set -euxo pipefail
+          plugin="$(find build/task4-runtime -type f -name 'libtf_chttp_plugin.so*' | head -n1)"
+          test -n "$plugin"
+          exports="$(nm -D --defined-only "$plugin" | awk '$2 ~ /^[TW]$/ {print $3}' | sort -u)"
+          printf '%s\n' "$exports" | tee "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider-exports.txt"
+          test "$exports" = "salts_plugin_query"
+          ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
+          printf '%s\n' "$plugin" > "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider.txt"
 
       - name: Configure Release ThreadSanitizer concurrency build
         shell: bash
@@ -173,7 +200,7 @@ jobs:
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git diff --name-only | grep -Ev '^(CMakeLists\.txt|turbo_flow/CMakeLists\.txt|ingress/protocol/inbox/CMakeLists\.txt)$' || true)"
-          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb
+          git diff --exit-code -- turbo_flow/include turbo_flow/src turbo_flow/tests io/durable io/turbodb io/chttp
 
       - name: Upload Task 4 evidence
         if: always()

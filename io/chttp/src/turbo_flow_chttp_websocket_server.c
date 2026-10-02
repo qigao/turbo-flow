@@ -1,4 +1,6 @@
 #include "turbo_flow_chttp.h"
+#include "turbo_flow_chttp_provider_adapter_internal.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <salts/thread.h>
 
@@ -948,8 +950,11 @@ static void websocket_cleanup(turbo_flow_chttp_websocket_server_t *server) {
   tstr_free(server->session_cookie_name);
 }
 
-int turbo_flow_chttp_websocket_server_register(
+static int websocket_server_register_impl(
     const turbo_flow_chttp_websocket_server_config_t *config,
+    const char *provider_identity,
+    const char *const *stage_names,
+    size_t stage_count,
     turbo_flow_chttp_websocket_server_t **out_server) {
   turbo_flow_chttp_websocket_server_t *server;
   turbo_flow_adapter_ops_t adapter_ops = {0};
@@ -962,7 +967,10 @@ int turbo_flow_chttp_websocket_server_register(
   size_t index;
   int status;
   if (out_server) *out_server = NULL;
-  if (!out_server || !websocket_config_valid(config)) return SALTS_EINVAL;
+  if (!out_server || !websocket_config_valid(config) ||
+      ((stage_count != 0u) &&
+       (!provider_identity || !provider_identity[0] || !stage_names)))
+    return SALTS_EINVAL;
   server = (turbo_flow_chttp_websocket_server_t *)calloc(1u, sizeof(*server));
   if (!server) return SALTS_ENOMEM;
   salts_mutex_init(&server->mutex);
@@ -1033,7 +1041,23 @@ int turbo_flow_chttp_websocket_server_register(
   registration.owner_name = server->managed_owner;
   registration.boundary_ops = &boundary_ops;
   registration.ctx = server;
-  status = turbo_flow_register_managed_async_terminal_adapter(config->flow, &registration);
+  if (stage_count == 0u) {
+    status = turbo_flow_register_managed_async_terminal_adapter(
+        config->flow, &registration);
+  } else {
+    turbo_flow_provider_adapter_registration_v1_t scoped =
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    scoped.provider_identity = provider_identity;
+    scoped.stage_names = stage_names;
+    scoped.stage_count = stage_count;
+    scoped.adapter_ops = &adapter_ops;
+    scoped.async_terminal_ops = &async_ops;
+    scoped.schema = &schema;
+    scoped.managed_owner_name = server->managed_owner;
+    scoped.managed_boundary_ops = &boundary_ops;
+    scoped.ctx = server;
+    status = turbo_flow_provider_adapter_register(config->flow, &scoped);
+  }
   if (status != SALTS_OK) {
     websocket_cleanup(server);
     salts_mutex_destroy(&server->mutex);
@@ -1042,6 +1066,24 @@ int turbo_flow_chttp_websocket_server_register(
   }
   *out_server = server;
   return SALTS_OK;
+}
+
+int turbo_flow_chttp_websocket_server_register(
+    const turbo_flow_chttp_websocket_server_config_t *config,
+    turbo_flow_chttp_websocket_server_t **out_server) {
+  return websocket_server_register_impl(
+      config, NULL, NULL, 0u, out_server);
+}
+
+int turbo_flow_chttp_websocket_server_register_provider(
+    const turbo_flow_chttp_websocket_server_config_t *config,
+    const char *provider_identity,
+    const char *const *stage_names,
+    size_t stage_count,
+    turbo_flow_chttp_websocket_server_t **out_server) {
+  if (stage_count == 0u) return SALTS_EINVAL;
+  return websocket_server_register_impl(
+      config, provider_identity, stage_names, stage_count, out_server);
 }
 
 int turbo_flow_chttp_websocket_server_snapshot(

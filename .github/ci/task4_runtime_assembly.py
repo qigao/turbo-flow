@@ -3,22 +3,25 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--turbodb", action="store_true")
+parser.add_argument("--chttp", action="store_true")
 parser.add_argument("--rulesforge", action="store_true")
 parser.add_argument("--rulesforge-e2e", action="store_true")
 parser.add_argument("--materializer", action="store_true")
 parser.add_argument("--protocol-intake", action="store_true")
 parser.add_argument("--benchmark", action="store_true")
 args = parser.parse_args()
-if sum((args.turbodb, args.rulesforge, args.rulesforge_e2e, args.materializer,
-        args.protocol_intake, args.benchmark)) > 1:
-    parser.error("--turbodb, --rulesforge, --rulesforge-e2e, --materializer, --protocol-intake and --benchmark are mutually exclusive")
+exclusive = sum((args.rulesforge, args.rulesforge_e2e, args.materializer,
+                 args.protocol_intake, args.benchmark))
+if exclusive > 1 or (exclusive and (args.turbodb or args.chttp)):
+    parser.error("--rulesforge, --rulesforge-e2e, --materializer, --protocol-intake and --benchmark are mutually exclusive with each other and with --turbodb/--chttp")
 
 root = Path("CMakeLists.txt")
 text = root.read_text()
 assert "set(_turbo_flow_required_dependency_roots\n    SALTS_ROOT SALTS_UTILS_ROOT)" in text
 assert "DATABIND_ROOT" not in text
 assert "include(TurboFlowRequireCHTTP)" in text
-text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
+if not args.chttp:
+    text = text.replace("include(TurboFlowRequireCHTTP)\n", "", 1)
 start = text.index("add_subdirectory(turbo_flow)\n")
 end = text.index("set(TURBO_FLOW_EXPORT_TARGETS)", start)
 if args.benchmark:
@@ -170,6 +173,8 @@ elif args.materializer:
         "  ARTIFACT_NAME tf_service\n"
         "  ARTIFACTS NATIVE\n"
         "  TRANSPORTS HTTP RPC)\n"
+        "target_sources(${turbo_flow_databind_service_fixture_NATIVE_TARGET}\n"
+        "  PRIVATE ${CMAKE_SOURCE_DIR}/turbo_flow/tests/databind_service_business.c)\n"
         "cmake_add_test(\n"
         "  test_flow_databind_service_plan\n"
         "  SOURCES ${CMAKE_SOURCE_DIR}/turbo_flow/tests/test_flow_databind_service_plan.c\n"
@@ -284,6 +289,8 @@ else:
         # The real Inbox tests use the protocol envelope and its generated schema.
         children += "add_subdirectory(ingress/protocol/inbox)\n"
         children += "add_subdirectory(io/turbodb)\n"
+    if args.chttp:
+        children += "add_subdirectory(io/chttp)\n"
 text = text[:start] + children + "\n" + text[end:]
 root.write_text(text)
 

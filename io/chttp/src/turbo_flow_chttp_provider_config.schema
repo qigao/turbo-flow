@@ -1,0 +1,216 @@
+schema TurboFlowCHttpProviderConfig [version(1)];
+
+enum CHttpBackend <uint8> {
+  Iocp = 0;
+  Epoll = 1;
+  Kqueue = 2;
+  IoUring = 3;
+}
+
+enum CHttpClientProtocol <uint8> {
+  H1 = 0;
+  H2 = 1;
+}
+
+enum CHttpServerProtocol <uint8> {
+  H1 = 0;
+  H1H2 = 1;
+}
+
+enum CHttpMethod <uint8> {
+  Get = 0;
+  Post = 1;
+  Put = 2;
+  Delete = 3;
+  Patch = 4;
+  Head = 5;
+  Options = 6;
+}
+
+enum CHttpTlsClientAuth <uint8> {
+  None = 0;
+  Required = 1;
+}
+
+message CHttpHeader {
+  @Size(min = 1, max = 511)
+  string name;
+  @Size(max = 511)
+  string value;
+}
+
+message CHttpClientConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Min(1) uint32 poll_budget_ms;
+  @Max(1) uint32 tls_enabled;
+  @Max(1) uint32 idempotent;
+
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
+
+  @Min(1) uint32 network_connection_capacity;
+  @Min(1) uint32 network_command_capacity;
+  @Min(1) uint32 network_request_capacity;
+  @Min(1) uint32 network_completion_batch_capacity;
+  @Min(1) uint32 network_event_capacity;
+  @Min(1) uint32 network_max_send_bytes;
+  @Min(1) uint32 network_receive_buffer_bytes;
+  @Min(1) uint32 network_command_buffer_bytes;
+  @Min(1) uint32 network_event_buffer_bytes;
+  uint32 network_connect_timeout_ms;
+  uint32 network_read_timeout_ms;
+  uint32 network_write_timeout_ms;
+  uint32 network_tls_handshake_timeout_ms;
+  uint32 network_tls_io_buffer_bytes;
+
+  @Min(1) uint32 request_capacity;
+  @Min(1) uint32 max_start_line_bytes;
+  @Min(1) uint32 max_header_count;
+  @Min(1) uint32 max_header_bytes;
+  @Min(1) uint32 max_request_body_bytes;
+  @Min(1) uint32 max_response_body_bytes;
+  @Min(1) uint32 max_informational_responses;
+  @Min(1) uint32 stream_chunk_bytes;
+  @Min(1) uint32 h2_input_buffer_bytes;
+  @Min(1) uint32 h2_hpack_dynamic_table_bytes;
+  @Min(1) uint32 h2_max_settings_count;
+
+  uint32 overall_timeout_ms;
+  uint32 retry_delay_ms;
+  @Min(1) uint32 max_attempts;
+  @Min(1) uint32 stop_timeout_ms;
+  @Max(6) uint32 method;
+
+  @Size(max = 64)
+  list<CHttpHeader> headers;
+
+  @Size(min = 1, max = 511)
+  string authority;
+  @Size(min = 1, max = 511)
+  string target;
+}
+
+message CHttpServerConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Min(1) uint32 poll_budget_ms;
+  @Max(1) uint32 tls_enabled;
+
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
+  @Max(1) uint32 tls_client_auth;
+
+  @Min(1) uint32 network_connection_capacity;
+  @Min(1) uint32 network_command_capacity;
+  @Min(1) uint32 network_request_capacity;
+  @Min(1) uint32 network_completion_batch_capacity;
+  @Min(1) uint32 network_event_capacity;
+  @Min(1) uint32 network_max_send_bytes;
+  @Min(1) uint32 network_receive_buffer_bytes;
+  @Min(1) uint32 network_command_buffer_bytes;
+  @Min(1) uint32 network_event_buffer_bytes;
+  uint32 network_connect_timeout_ms;
+  uint32 network_read_timeout_ms;
+  uint32 network_write_timeout_ms;
+  uint32 network_tls_handshake_timeout_ms;
+  uint32 network_tls_io_buffer_bytes;
+
+  @Min(1) uint32 backlog;
+  @Min(1) uint32 route_capacity;
+  @Min(1) uint32 max_target_bytes;
+  @Min(1) uint32 max_header_count;
+  @Min(1) uint32 max_header_bytes;
+  @Min(1) uint32 max_request_body_bytes;
+  @Min(1) uint32 max_response_header_count;
+  @Min(1) uint32 max_response_header_bytes;
+  @Min(1) uint32 max_response_body_bytes;
+  @Min(1) uint32 stream_chunk_bytes;
+  @Min(1) uint32 max_buffered_response_body_bytes;
+  @Min(1) uint32 buffer_capacity_bytes;
+  uint32 middleware_capacity;
+  uint32 max_route_middleware_count;
+  uint32 max_route_param_count;
+  uint32 max_route_param_bytes;
+  uint32 h2_stream_capacity;
+  uint32 h2_input_buffer_bytes;
+  uint32 h2_output_buffer_bytes;
+  uint32 h2_hpack_dynamic_table_bytes;
+  uint32 h2_max_settings_count;
+  @Min(1) uint32 poll_slice_ms;
+  @Max(6) uint32 method;
+  @Min(1) uint32 max_request_message_bytes;
+  @Min(200) @Max(599) uint32 success_status;
+  @Min(200) @Max(599) uint32 overload_status;
+  @Min(200) @Max(599) uint32 unavailable_status;
+  @Min(200) @Max(599) uint32 graph_error_status;
+  @Min(1) uint64 first_message_id;
+  @Min(1) uint32 stop_timeout_ms;
+
+  @Size(min = 1, max = 511)
+  string path;
+  @Size(min = 1, max = 511)
+  string response_content_type;
+  @Size(min = 1, max = 511)
+  string error_content_type;
+  @Size(max = 511)
+  string graph_error_body;
+}
+
+message CHttpWebSocketServerConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Min(1) uint32 poll_budget_ms;
+  @Max(1) uint32 tls_enabled;
+
+  @Max(3) uint32 backend;
+  @Max(1) uint32 protocol;
+  @Max(1) uint32 tls_client_auth;
+
+  @Min(1) uint32 network_connection_capacity;
+  @Min(1) uint32 network_command_capacity;
+  @Min(1) uint32 network_request_capacity;
+  @Min(1) uint32 network_completion_batch_capacity;
+  @Min(1) uint32 network_event_capacity;
+  @Min(1) uint32 network_max_send_bytes;
+  @Min(1) uint32 network_receive_buffer_bytes;
+  @Min(1) uint32 network_command_buffer_bytes;
+  @Min(1) uint32 network_event_buffer_bytes;
+  uint32 network_connect_timeout_ms;
+  uint32 network_read_timeout_ms;
+  uint32 network_write_timeout_ms;
+  uint32 network_tls_handshake_timeout_ms;
+  uint32 network_tls_io_buffer_bytes;
+
+  @Min(1) uint32 backlog;
+  @Min(1) uint32 route_capacity;
+  @Min(1) uint32 max_target_bytes;
+  @Min(1) uint32 max_header_count;
+  @Min(1) uint32 max_header_bytes;
+  @Min(1) uint32 max_request_body_bytes;
+  @Min(1) uint32 max_response_header_count;
+  @Min(1) uint32 max_response_header_bytes;
+  @Min(1) uint32 max_response_body_bytes;
+  @Min(1) uint32 stream_chunk_bytes;
+  @Min(1) uint32 max_buffered_response_body_bytes;
+  @Min(1) uint32 buffer_capacity_bytes;
+  uint32 middleware_capacity;
+  uint32 max_route_middleware_count;
+  uint32 max_route_param_count;
+  uint32 max_route_param_bytes;
+  uint32 h2_stream_capacity;
+  uint32 h2_input_buffer_bytes;
+  uint32 h2_output_buffer_bytes;
+  uint32 h2_hpack_dynamic_table_bytes;
+  uint32 h2_max_settings_count;
+  @Min(1) uint32 poll_slice_ms;
+  @Min(1) uint32 session_capacity;
+  @Min(1) uint32 frame_capacity;
+  @Min(2) uint32 max_frame_bytes;
+  @Min(2) uint32 max_message_bytes;
+  @Min(1) uint32 max_buffered_input_bytes;
+  @Min(1) uint64 first_message_id;
+  @Min(1) uint32 stop_timeout_ms;
+
+  @Size(min = 1, max = 511)
+  string path;
+  @Size(max = 511)
+  string subprotocol;
+}

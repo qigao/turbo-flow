@@ -1,36 +1,56 @@
-cmake_add_test(test_chttp_plugin
-  SOURCES test_chttp_plugin.c
-  LIBS TurboFlow::PluginHost CHttp::Client CHttp::Server Salts::TinyTest
-  DEFS TURBO_FLOW_CHTTP_PLUGIN_PATH="$<TARGET_FILE:tf_chttp_plugin>"
+cmake_add_test(
+  test_chttp_typed_contract
+  SOURCES test_chttp_typed_contract.c
+  LIBS
+    TurboFlow::Product
+    TurboFlow::CHTTPAdapter
+    tf_chttp_provider_support
+    Salts::TinyTest
+    ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${turbo_flow_chttp_provider_config_GENERATED_DIR}
   FOLDER "io/chttp/tests")
-set_tests_properties(test_chttp_plugin PROPERTIES LABELS "chttp-plugin;plugin;graph")
-add_dependencies(test_chttp_plugin tf_chttp_plugin)
+add_dependencies(
+  test_chttp_typed_contract
+  turbo_flow_chttp_provider_config_idl_codegen)
+set_tests_properties(test_chttp_typed_contract PROPERTIES
+  LABELS "chttp-plugin;provider;config;resource;databind")
 
-cmake_add_test(test_chttp_plugin_abi
-  SOURCES ../../../tests/plugin_host_abi_test.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest tf_chttp_plugin
+add_library(test_chttp_deployment_resource_fixture SHARED
+  chttp_deployment_resource_fixture.c)
+target_include_directories(test_chttp_deployment_resource_fixture PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_link_libraries(test_chttp_deployment_resource_fixture PRIVATE
+  Salts::Plugin)
+set_target_properties(test_chttp_deployment_resource_fixture PROPERTIES
+  FOLDER "io/chttp/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
+cmake_add_test(
+  test_chttp_provider_interface
+  SOURCES test_chttp_provider_interface.c
+  LIBS
+    TurboFlow::Product
+    TurboFlow::CHTTPAdapter
+    Salts::Plugin
+    Salts::TinyTest
+    ${turbo_flow_chttp_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${turbo_flow_chttp_provider_config_GENERATED_DIR}
+  DEFS
+    FLOW_CHTTP_PROVIDER_FIXTURE="$<TARGET_FILE:tf_chttp_plugin>"
+    FLOW_CHTTP_RESOURCE_FIXTURE="$<TARGET_FILE:test_chttp_deployment_resource_fixture>"
   FOLDER "io/chttp/tests")
-
-foreach(mode RANGE 0 5)
-  add_library(tf_chttp_delivery_fixture_${mode} SHARED
-    chttp_plugin_delivery_fixture.c ../src/turbo_flow_chttp_plugin_config.c)
-  target_compile_definitions(tf_chttp_delivery_fixture_${mode} PRIVATE
-    TURBO_FLOW_PLUGIN_BUILD CHTTP_DELIVERY_MODE=${mode})
-  target_include_directories(tf_chttp_delivery_fixture_${mode} PRIVATE ../include ../src)
-  target_link_libraries(tf_chttp_delivery_fixture_${mode} PRIVATE
-    tf_chttp_adapter TurboFlow::Product Salts::CSTL Salts::UriParser)
-  if(mode EQUAL 5)
-    target_sources(tf_chttp_delivery_fixture_${mode} PRIVATE chttp_client_init_fault_support.c)
-    target_link_libraries(tf_chttp_delivery_fixture_${mode} PRIVATE CHttp::Client)
-  endif()
-  if(WIN32)
-    target_link_libraries(tf_chttp_delivery_fixture_${mode} PRIVATE ws2_32)
-  endif()
-  cmake_config_target(tf_chttp_delivery_fixture_${mode} NO_INSTALL FOLDER "io/chttp/tests")
-  target_compile_definitions(test_chttp_plugin PRIVATE
-    CHTTP_DELIVERY_FIXTURE_${mode}="$<TARGET_FILE:tf_chttp_delivery_fixture_${mode}>")
-  add_dependencies(test_chttp_plugin tf_chttp_delivery_fixture_${mode})
-endforeach()
+add_dependencies(test_chttp_provider_interface
+  tf_chttp_plugin
+  test_chttp_deployment_resource_fixture
+  turbo_flow_chttp_provider_config_idl_codegen)
+set_tests_properties(test_chttp_provider_interface PROPERTIES
+  LABELS "chttp-plugin;provider;resource;lease;graph")
 
 cmake_add_test(
   test_chttp_adapter
