@@ -126,13 +126,15 @@ int main(int argc, char **argv) {
   rc = check_provider(
       manifest, "chttp.server", "CHttpServerConfig",
       TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
-      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT);
+      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+          TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND);
   if (rc != 0) goto cleanup;
   rc = check_provider(
       manifest, "chttp.websocket_server",
       "CHttpWebSocketServerConfig",
       TURBO_FLOW_CHTTP_SERVER_RESOURCE_CONTRACT_ID,
-      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT);
+      TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
+          TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND);
   if (rc != 0) goto cleanup;
 
   if (salts_plugin_registry_request_stop(&registry, plugin) !=
