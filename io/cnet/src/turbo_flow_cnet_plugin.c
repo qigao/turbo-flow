@@ -94,7 +94,7 @@ static int cnet_plugin_error(turbo_flow_config_error_t *error, int status, const
   if (error && error->size >= sizeof(*error)) {
     *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     error->status = status;
-    (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.%s", name ? name : "unknown",
+    (void)snprintf(error->path, sizeof(error->path), "$.stages.%s.%s", name ? name : "unknown",
                    phase ? phase : "provider");
     (void)snprintf(error->message, sizeof(error->message), "%s", message ? message : "error");
   }
@@ -120,22 +120,33 @@ static void cnet_plugin_root_remove_owner(cnet_plugin_root_t *root,
   }
 }
 
-static int cnet_plugin_reference_validate(const turbo_flow_t *flow, const char *name,
-                                          turbo_flow_cnet_plugin_kind_t kind,
-                                          turbo_flow_config_error_t *error) {
+static int cnet_plugin_reference_validate(
+    const turbo_flow_t *flow, const char *instance_name, unsigned kind,
+    turbo_flow_config_error_t *error) {
+  const turbo_flow_stage_plan_t *stage;
+  const char *identity;
+  int stage_index;
   const int expected_source = kind <= CNET_TYPED_PACKET_SOURCE;
-  size_t count = 0u;
-  for (size_t i = 0u; i < turbo_flow_stage_count(flow); ++i) {
-    const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
-    if (!stage || !stage->adapter_name || strcmp(stage->adapter_name, name) != 0) continue;
-    if ((stage->is_source != 0) != expected_source)
-      return cnet_plugin_error(error, SALTS_EINVAL, name, "role",
-                               "CNet provider kind does not match the Graph stage role");
-    ++count;
-  }
-  if (count != 1u)
-    return cnet_plugin_error(error, SALTS_EINVAL, name, "references",
-                             "each CNet adapter instance must bind exactly one Graph stage");
+
+  if (!flow || !instance_name || !instance_name[0])
+    return SALTS_EINVAL;
+  identity = provider_identity(kind);
+  if (!identity) return SALTS_EINVAL;
+  stage_index = turbo_flow_find_stage(flow, instance_name);
+  if (stage_index < 0)
+    return cnet_plugin_error(
+        error, SALTS_ENOENT, instance_name, "instance",
+        "CNet provider stage instance is missing");
+  stage = turbo_flow_stage_at(flow, (size_t)stage_index);
+  if (!stage || !stage->adapter_name ||
+      strcmp(stage->adapter_name, identity) != 0)
+    return cnet_plugin_error(
+        error, SALTS_EPROTO, instance_name, "provider",
+        "CNet stage provider identity does not match factory export");
+  if ((stage->is_source != 0) != expected_source)
+    return cnet_plugin_error(
+        error, SALTS_EINVAL, instance_name, "role",
+        "CNet provider kind does not match the Graph stage role");
   return SALTS_OK;
 }
 
