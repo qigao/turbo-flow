@@ -7,12 +7,6 @@
 static const char listener_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  tcp.input:\n"
-    "    kind: cnet.listener_source\n"
-    "    config:\n"
-    "      max_connections: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -29,13 +23,6 @@ static const char listener_yaml[] =
 static const char packet_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  udp.input:\n"
-    "    kind: cnet.packet_source\n"
-    "    config:\n"
-    "      packet_mode: udp\n"
-    "      session_capacity: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -52,13 +39,6 @@ static const char packet_yaml[] =
 static const char packet_v3_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  udp.input:\n"
-    "    kind: cnet.packet_source\n"
-    "    config:\n"
-    "      packet_mode: udp\n"
-    "      session_capacity: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -81,14 +61,14 @@ static const char packet_v3_yaml[] =
     "      mapper_max_output_bytes: 2048\n";
 
 static const char listener_graph[] =
-    "source wire adapter tcp.input\n"
+    "source wire adapter cnet.listener_source\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> decode\n"
     "}\n";
 
 static const char packet_graph[] =
-    "source wire adapter udp.input\n"
+    "source wire adapter cnet.packet_source\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> decode\n"
@@ -131,13 +111,28 @@ static turbo_flow_resolved_config_t *resolved_yaml(const char *yaml) {
   return resolved;
 }
 
+static cnet_typed_source_contract_t source_contract(const char *source_name) {
+  cnet_typed_source_contract_t contract = CNET_TYPED_SOURCE_CONTRACT_INIT;
+  contract.transport_capacity = 4u;
+  contract.max_message_bytes = 1024u;
+  contract.scheduler_max_steps_per_poll = 32u;
+  if (source_name && strcmp(source_name, "tcp.input") == 0) {
+    contract.kind = CNET_TYPED_SOURCE_LISTENER;
+  } else {
+    contract.kind = CNET_TYPED_SOURCE_PACKET;
+    contract.packet_mode = 0u;
+  }
+  return contract;
+}
+
 static int run_preflight(const char *yaml, const char *graph, const char *source_name,
                          flow_protocol_network_intake_settings_t *settings,
                          turbo_flow_config_error_t *error) {
   turbo_flow_resolved_config_t *resolved = resolved_yaml(yaml);
   turbo_flow_t *flow = parsed_flow(graph);
-  int rc = flow_protocol_network_intake_preflight(resolved, flow, source_name, "protocol.decode",
-                                                  settings, error);
+  cnet_typed_source_contract_t contract = source_contract(source_name);
+  int rc = flow_protocol_network_intake_preflight(
+      resolved, flow, "wire", &contract, "protocol.decode", settings, error);
   turbo_flow_destroy(flow);
   turbo_flow_resolved_config_destroy(resolved);
   return rc;
@@ -236,9 +231,19 @@ spec("protocol network intake configuration") {
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ENOTSUP);
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(replace_once(packet_yaml, "      packet_mode: udp\n", "      packet_mode: kcp\n",
-                             yaml, sizeof(yaml)), SALTS_OK);
-    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_ENOTSUP);
+    {
+      turbo_flow_resolved_config_t *resolved = resolved_yaml(packet_yaml);
+      turbo_flow_t *flow = parsed_flow(packet_graph);
+      cnet_typed_source_contract_t contract = source_contract("udp.input");
+      contract.packet_mode = 1u;
+      check_equal(
+          flow_protocol_network_intake_preflight(
+              resolved, flow, "wire", &contract, "protocol.decode",
+              &settings, &error),
+          SALTS_ENOTSUP);
+      turbo_flow_destroy(flow);
+      turbo_flow_resolved_config_destroy(resolved);
+    }
   }
 
   it("rejects zero mismatched and insufficient bounds") {
@@ -288,17 +293,32 @@ spec("protocol network intake configuration") {
     turbo_flow_t *extra = parsed_flow(extra_graph);
     turbo_flow_t *unparsed = turbo_flow_create();
 
-    check_equal(flow_protocol_network_intake_preflight(resolved, flow, "missing", "protocol.decode",
-                                                       &settings, &error),
-                SALTS_EINVAL);
+    {
+      cnet_typed_source_contract_t contract = source_contract("tcp.input");
+      check_equal(
+          flow_protocol_network_intake_preflight(
+              resolved, flow, "missing", &contract, "protocol.decode",
+              &settings, &error),
+          SALTS_EINVAL);
+    }
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(flow_protocol_network_intake_preflight(resolved, extra, "tcp.input",
-                                                       "protocol.decode", &settings, &error),
-                SALTS_EINVAL);
+    {
+      cnet_typed_source_contract_t contract = source_contract("tcp.input");
+      check_equal(
+          flow_protocol_network_intake_preflight(
+              resolved, extra, "wire", &contract, "protocol.decode",
+              &settings, &error),
+          SALTS_EINVAL);
+    }
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(flow_protocol_network_intake_preflight(resolved, unparsed, "tcp.input",
-                                                       "protocol.decode", &settings, &error),
-                SALTS_EINVAL);
+    {
+      cnet_typed_source_contract_t contract = source_contract("tcp.input");
+      check_equal(
+          flow_protocol_network_intake_preflight(
+              resolved, unparsed, "wire", &contract, "protocol.decode",
+              &settings, &error),
+          SALTS_EINVAL);
+    }
 
     turbo_flow_destroy(unparsed);
     turbo_flow_destroy(extra);
