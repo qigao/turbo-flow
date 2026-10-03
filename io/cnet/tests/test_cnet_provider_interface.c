@@ -5,6 +5,7 @@
 #include "turbo_flow_provider_binding.h"
 #include "turbo_flow_resource.h"
 
+#include <salts/native_io.h>
 #include <salts/plugin.h>
 
 #include <string.h>
