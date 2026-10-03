@@ -197,13 +197,13 @@ spec("canonical provider-backed Graph generation") {
   it("creates, compiles, polls and retires through canonical provider instances") {
     static const char graph[] =
         "source input\n"
-        "stage worker adapter fixture.provider {\n"
+        "stage provider_stage adapter fixture.provider {\n"
         "  resource " FLOW_TEST_RESOURCE_IDENTITY "\n"
         "  batch 7\n"
         "  concurrency 2\n"
         "}\n"
         "stage main {\n"
-        "  input -> worker\n"
+        "  input -> provider_stage\n"
         "}\n";
     generation_test_t test;
     turbo_flow_plugin_generation_config_t config =
