@@ -2,6 +2,7 @@
 #include "tinytest.h"
 #include "turbo_flow_cnet_resource.h"
 
+#include <cnet/cnet.h>
 #include <cmeta/data.h>
 #include <data_bind_message_plan.h>
 #include <data_bind_native_binding.h>
