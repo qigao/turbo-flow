@@ -1,5 +1,6 @@
 #include "flow_plugin_operation_internal.h"
 #include "flow_projection_owner_internal.h"
+#include "flow_provider_generation_internal.h"
 #include "flow_internal.h"
 #include "turbo_flow_plugin_generation.h"
 
@@ -10,20 +11,6 @@
 #include <string.h>
 
 enum { FLOW_PLUGIN_MATERIALIZER_MAX_RETAINED_BYTES = 67108864u };
-
-typedef enum flow_plugin_generation_owner_state_e {
-  FLOW_PLUGIN_GENERATION_OWNER_ACTIVE = 1,
-  FLOW_PLUGIN_GENERATION_OWNER_QUIESCED,
-  FLOW_PLUGIN_GENERATION_OWNER_DRAINED,
-  FLOW_PLUGIN_GENERATION_OWNER_SHUTDOWN
-} flow_plugin_generation_owner_state_t;
-
-typedef struct flow_plugin_generation_owner_s {
-  turbo_flow_plugin_product_owner_v1_t owner;
-  flow_plugin_generation_owner_state_t state;
-  const char *name;
-  int resource;
-} flow_plugin_generation_owner_t;
 
 typedef struct flow_plugin_materializer_projection_context_s {
   size_t native_bytes;
@@ -42,16 +29,13 @@ struct turbo_flow_plugin_materializer_binding_s {
 struct turbo_flow_plugin_generation_s {
   turbo_flow_t *flow;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
-  vec_t owners;
+  flow_provider_generation_t *providers;
   vec_t bindings;
   vec_t materializers;
   turbo_flow_plugin_result_domain_t *domain;
   turbo_flow_config_error_t cleanup_error;
-  const char *unretirable_owner;
-  int unretirable_resource;
   int failed;
   size_t leases;
-  size_t poll_cursor;
   int poll_closed;
   turbo_flow_plugin_generation_state_t state;
 };
@@ -66,261 +50,6 @@ static int flow_plugin_generation_error(turbo_flow_config_error_t *error, int st
   }
   return status;
 }
-
-static int flow_plugin_generation_provider_error(turbo_flow_config_error_t *error, int status,
-                                                 const char *scope, const char *name,
-                                                 const char *message) {
-  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
-  if (error && error->size >= sizeof(*error) && error->status != SALTS_OK) return status;
-  (void)snprintf(path, sizeof(path), "$.%s.%s", scope, name);
-  return flow_plugin_generation_error(error, status, path, message);
-}
-
-static int flow_plugin_generation_owner_error(turbo_flow_config_error_t *error, int status,
-                                              const flow_plugin_generation_owner_t *owner,
-                                              const char *phase) {
-  char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
-  (void)snprintf(path, sizeof(path), "$.%s.%s.owner.%s",
-                 owner && owner->resource ? "channels" : "adapters",
-                 owner && owner->name ? owner->name : "unknown", phase);
-  return flow_plugin_generation_error(error, status, path, "Product owner callback failed");
-}
-
-static const char *flow_plugin_generation_product_reference(
-    const turbo_flow_stage_plan_t *stage, int resource) {
-  if (!stage) return NULL;
-  /* Buffer adapter_name now carries the canonical .flow provider identity.
-     The legacy resolved-config generation path must not reinterpret that
-     identity as a YAML adapter-table key while the coordinated #253 cutover
-     is in progress. */
-  if (!resource && stage->is_buffer) return NULL;
-  if (!resource) return stage->adapter_name;
-  /* A resource attached to an operation stage belongs to the ABI3 operation
-     binding. Product resource providers own Graph resources such as buffers,
-     not operation-private business-engine resources. */
-  if (stage->operation_name && stage->operation_name[0]) return NULL;
-  return stage->resource_name;
-}
-
-static int flow_plugin_generation_reference_seen(const turbo_flow_t *flow, size_t stage_index,
-                                                 int resource, const char *name) {
-  if (!name) return 1;
-  for (size_t i = 0u; i < stage_index; ++i) {
-    const turbo_flow_stage_plan_t *previous = turbo_flow_stage_at(flow, i);
-    const char *previous_name =
-        flow_plugin_generation_product_reference(previous, resource);
-    if (previous_name && strcmp(previous_name, name) == 0) return 1;
-  }
-  return 0;
-}
-
-static const turbo_flow_plugin_transactional_adapter_provider_v1_t *
-flow_plugin_generation_adapter_provider(
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog, const char *kind) {
-  if (!catalog || !kind) return NULL;
-  for (size_t i = 0u; i < catalog->adapter_provider_count; ++i) {
-    const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider =
-        &catalog->adapter_providers[i];
-    if (provider->kind && strcmp(provider->kind, kind) == 0) return provider;
-  }
-  return NULL;
-}
-
-static const turbo_flow_plugin_transactional_resource_provider_v1_t *
-flow_plugin_generation_resource_provider(
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog, const char *kind) {
-  if (!catalog || !kind) return NULL;
-  for (size_t i = 0u; i < catalog->resource_provider_count; ++i) {
-    const turbo_flow_plugin_transactional_resource_provider_v1_t *provider =
-        &catalog->resource_providers[i];
-    if (provider->kind && strcmp(provider->kind, kind) == 0) return provider;
-  }
-  return NULL;
-}
-
-static int flow_plugin_generation_catalog_validate(
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    turbo_flow_config_error_t *error) {
-  if (!catalog || catalog->size != sizeof(*catalog) ||
-      catalog->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      catalog->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      (catalog->adapter_provider_count > 0u && !catalog->adapter_providers) ||
-      (catalog->resource_provider_count > 0u && !catalog->resource_providers))
-    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.providers",
-                                        "invalid transactional provider catalog");
-  for (size_t i = 0u; i < catalog->adapter_provider_count; ++i) {
-    const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider =
-        &catalog->adapter_providers[i];
-    if (provider->size != sizeof(*provider) ||
-        provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-        provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !provider->kind ||
-        !provider->kind[0] || !provider->preflight || !provider->materialize)
-      return flow_plugin_generation_error(error, SALTS_EINVAL, "$.providers.adapters",
-                                          "invalid transactional adapter provider");
-    for (size_t previous = 0u; previous < i; ++previous) {
-      if (strcmp(provider->kind, catalog->adapter_providers[previous].kind) == 0)
-        return flow_plugin_generation_error(error, SALTS_EALREADY, "$.providers.adapters",
-                                            "duplicate transactional adapter provider kind");
-    }
-  }
-  for (size_t i = 0u; i < catalog->resource_provider_count; ++i) {
-    const turbo_flow_plugin_transactional_resource_provider_v1_t *provider =
-        &catalog->resource_providers[i];
-    if (provider->size != sizeof(*provider) ||
-        provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-        provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !provider->kind ||
-        !provider->kind[0] || !provider->preflight || !provider->materialize)
-      return flow_plugin_generation_error(error, SALTS_EINVAL, "$.providers.resources",
-                                          "invalid transactional resource provider");
-    for (size_t previous = 0u; previous < i; ++previous) {
-      if (strcmp(provider->kind, catalog->resource_providers[previous].kind) == 0)
-        return flow_plugin_generation_error(error, SALTS_EALREADY, "$.providers.resources",
-                                            "duplicate transactional resource provider kind");
-    }
-  }
-  return SALTS_OK;
-}
-
-static int flow_plugin_generation_resolve_reference(
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    const turbo_flow_resolved_config_t *resolved, const char *name, int resource,
-    const void **provider_out, turbo_flow_config_error_t *error) {
-  int rc;
-  if (provider_out) *provider_out = NULL;
-  if (!catalog || !resolved || !name || !name[0] || !provider_out) return SALTS_EINVAL;
-  if (resource) {
-    turbo_flow_resolved_channel_view_t view = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
-    rc = turbo_flow_resolved_config_channel(resolved, name, &view);
-    if (rc != SALTS_OK)
-      return flow_plugin_generation_provider_error(error, rc, "channels", name,
-                                                   "Graph resource has no configured channel");
-    *provider_out = flow_plugin_generation_resource_provider(catalog, view.kind);
-    if (!*provider_out)
-      return flow_plugin_generation_provider_error(
-          error, SALTS_ENOTSUP, "channels", name,
-          "Graph resource kind has no transactional provider");
-  } else {
-    turbo_flow_resolved_adapter_view_t view = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
-    rc = turbo_flow_resolved_config_adapter(resolved, name, &view);
-    if (rc != SALTS_OK)
-      return flow_plugin_generation_provider_error(error, rc, "adapters", name,
-                                                   "Graph adapter has no resolved configuration");
-    *provider_out = flow_plugin_generation_adapter_provider(catalog, view.kind);
-    if (!*provider_out)
-      return flow_plugin_generation_provider_error(
-          error, SALTS_ENOTSUP, "adapters", name,
-          "Graph adapter kind has no transactional provider");
-  }
-  return SALTS_OK;
-}
-
-static int flow_plugin_generation_plan_validate(
-    const turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved,
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog, size_t owner_capacity,
-    size_t *required_out, turbo_flow_config_error_t *error) {
-  const size_t stage_count = turbo_flow_stage_count(flow);
-  size_t required = 0u;
-  for (size_t i = 0u; i < stage_count; ++i) {
-    const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
-    /* stage_at reuses one thread-local view; the names remain Graph-owned across nested lookups. */
-    const char *resource_name =
-        flow_plugin_generation_product_reference(stage, 1);
-    const char *adapter_name =
-        flow_plugin_generation_product_reference(stage, 0);
-    const void *provider;
-    int rc;
-    if (!stage)
-      return flow_plugin_generation_error(error, SALTS_EPROTO, "$.graph",
-                                          "Graph contains an invalid stage plan");
-    if (resource_name && !flow_plugin_generation_reference_seen(flow, i, 1, resource_name)) {
-      rc = flow_plugin_generation_resolve_reference(catalog, resolved, resource_name, 1, &provider,
-                                                    error);
-      if (rc != SALTS_OK) {
-        if (error->status == SALTS_OK)
-          flow_plugin_generation_provider_error(error, rc, "channels", resource_name,
-                                                "resource reference validation failed");
-        return rc;
-      }
-      if (required == SIZE_MAX) return SALTS_ERANGE;
-      ++required;
-    }
-    if (adapter_name && !flow_plugin_generation_reference_seen(flow, i, 0, adapter_name)) {
-      rc = flow_plugin_generation_resolve_reference(catalog, resolved, adapter_name, 0, &provider,
-                                                    error);
-      if (rc != SALTS_OK) {
-        if (error->status == SALTS_OK)
-          flow_plugin_generation_provider_error(error, rc, "adapters", adapter_name,
-                                                "adapter reference validation failed");
-        return rc;
-      }
-      if (required == SIZE_MAX) return SALTS_ERANGE;
-      ++required;
-    }
-  }
-  if (required > owner_capacity)
-    return flow_plugin_generation_error(error, SALTS_ENOSPC, "$.generation.owner_capacity",
-                                        "Graph generation owner capacity is exhausted");
-  *required_out = required;
-  return SALTS_OK;
-}
-
-static int flow_plugin_generation_preflight(
-    const turbo_flow_t *flow, const turbo_flow_resolved_config_t *resolved,
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    turbo_flow_config_error_t *error) {
-  const size_t stage_count = turbo_flow_stage_count(flow);
-  for (int resource = 1; resource >= 0; --resource) {
-    for (size_t i = 0u; i < stage_count; ++i) {
-      const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
-      const char *name = flow_plugin_generation_product_reference(stage, resource);
-      const void *untyped_provider = NULL;
-      int rc;
-      if (!name || flow_plugin_generation_reference_seen(flow, i, resource, name)) continue;
-      rc = flow_plugin_generation_resolve_reference(catalog, resolved, name, resource,
-                                                    &untyped_provider, error);
-      if (rc != SALTS_OK) return rc;
-      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-      if (resource) {
-        const turbo_flow_plugin_transactional_resource_provider_v1_t *provider =
-            (const turbo_flow_plugin_transactional_resource_provider_v1_t *)untyped_provider;
-        rc = provider->preflight(provider->ctx, resolved, name, error);
-        if (rc != SALTS_OK)
-          return flow_plugin_generation_provider_error(error, rc, "channels", name,
-                                                       "resource provider preflight failed");
-      } else {
-        const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider =
-            (const turbo_flow_plugin_transactional_adapter_provider_v1_t *)untyped_provider;
-        rc = provider->preflight(provider->ctx, resolved, name, error);
-        if (rc != SALTS_OK)
-          return flow_plugin_generation_provider_error(error, rc, "adapters", name,
-                                                       "adapter provider preflight failed");
-      }
-    }
-  }
-  return SALTS_OK;
-}
-
-static int
-flow_plugin_generation_owner_abi_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
-  return owner && owner->size == sizeof(*owner) &&
-         owner->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR &&
-         owner->abi_minor == TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
-}
-
-static int flow_plugin_generation_owner_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
-  const turbo_flow_plugin_product_owner_flags_t known =
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE |
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-  int external_poll;
-  if (!flow_plugin_generation_owner_abi_valid(owner)) return 0;
-  external_poll = (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u;
-  return owner->ctx && (owner->flags & ~known) == 0u &&
-         ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) !=
-             ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u) &&
-         owner->quiesce && owner->drain && owner->shutdown && owner->destroy &&
-         (!external_poll || owner->poll) && (external_poll || !owner->poll);
-}
-
 
 static int flow_plugin_materializer_projection_clone(const void *value, void *ctx,
                                                      void **out) {
