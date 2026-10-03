@@ -101,25 +101,6 @@ static int cnet_plugin_error(turbo_flow_config_error_t *error, int status, const
   return status;
 }
 
-static int cnet_plugin_root_add_owner(cnet_plugin_root_t *root, cnet_plugin_owner_t *owner) {
-  if (!root || !owner || root->quiesced) return SALTS_ESHUTDOWN;
-  if (vec_size(&root->owners) >= CNET_PROVIDER_MAX_OWNERS) return SALTS_ENOSPC;
-  return cnet_plugin_stl_status(vec_push(&root->owners, &owner));
-}
-
-static void cnet_plugin_root_remove_owner(cnet_plugin_root_t *root,
-                                          const cnet_plugin_owner_t *owner) {
-  if (!root || !owner) return;
-  for (size_t i = 0u; i < vec_size(&root->owners); ++i) {
-    cnet_plugin_owner_t *const *entry =
-        (cnet_plugin_owner_t *const *)vec_at_const(&root->owners, i);
-    if (entry && *entry == owner) {
-      (void)vec_erase(&root->owners, i, NULL);
-      return;
-    }
-  }
-}
-
 static int cnet_plugin_reference_validate(
     const turbo_flow_t *flow, const char *instance_name, unsigned kind,
     turbo_flow_config_error_t *error) {
