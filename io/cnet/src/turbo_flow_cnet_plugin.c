@@ -865,186 +865,427 @@ CMETA_IMPLEMENTS(
     .poll = cnet_plugin_owner_poll,
     .destroy = cnet_plugin_owner_destroy);
 
-static int cnet_plugin_preflight(void *ctx, const turbo_flow_resolved_config_t *resolved,
-                                 const char *name, turbo_flow_config_error_t *error) {
-  const cnet_plugin_provider_t *provider = (const cnet_plugin_provider_t *)ctx;
-  turbo_flow_cnet_plugin_config_t config;
-  if (!provider || !provider->root || provider->root->quiesced)
-    return cnet_plugin_error(error, SALTS_ESHUTDOWN, name, "preflight",
-                             "CNet provider is quiesced");
-  return turbo_flow_cnet_plugin_config_read(resolved, name, provider->kind, &config, error);
+static const DataBindMessageNativeArtifact *provider_artifact(
+    unsigned kind) {
+  switch (kind) {
+    case CNET_TYPED_STREAM_SOURCE:
+      return CNetStreamSourceConfig_native_artifact();
+    case CNET_TYPED_LISTENER_SOURCE:
+      return CNetListenerSourceConfig_native_artifact();
+    case CNET_TYPED_PACKET_SOURCE:
+      return CNetPacketSourceConfig_native_artifact();
+    case CNET_TYPED_STREAM_SINK:
+      return CNetStreamSinkConfig_native_artifact();
+    case CNET_TYPED_DATAGRAM_SINK:
+      return CNetDatagramSinkConfig_native_artifact();
+    case CNET_TYPED_PACKET_SINK:
+      return CNetPacketSinkConfig_native_artifact();
+    default:
+      return NULL;
+  }
 }
 
-static int cnet_plugin_materialize(void *ctx, turbo_flow_t *flow,
-                                   const turbo_flow_resolved_config_t *resolved, const char *name,
-                                   turbo_flow_plugin_product_owner_v1_t *owner_out,
-                                   turbo_flow_config_error_t *error) {
-  cnet_plugin_provider_t *provider = (cnet_plugin_provider_t *)ctx;
-  cnet_plugin_owner_t *owner;
-  turbo_flow_plugin_product_owner_v1_t descriptor = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+static size_t provider_value_bytes(unsigned kind) {
+  switch (kind) {
+    case CNET_TYPED_STREAM_SOURCE: return sizeof(CNetStreamSourceConfig_t);
+    case CNET_TYPED_LISTENER_SOURCE: return sizeof(CNetListenerSourceConfig_t);
+    case CNET_TYPED_PACKET_SOURCE: return sizeof(CNetPacketSourceConfig_t);
+    case CNET_TYPED_STREAM_SINK: return sizeof(CNetStreamSinkConfig_t);
+    case CNET_TYPED_DATAGRAM_SINK: return sizeof(CNetDatagramSinkConfig_t);
+    case CNET_TYPED_PACKET_SINK: return sizeof(CNetPacketSinkConfig_t);
+    default: return 0u;
+  }
+}
+
+static uint64_t provider_resource_capabilities(unsigned kind) {
+  switch (kind) {
+    case CNET_TYPED_STREAM_SOURCE:
+    case CNET_TYPED_STREAM_SINK:
+      return TURBO_FLOW_CNET_RESOURCE_CLIENT_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_TLS_MATERIAL |
+             TURBO_FLOW_CNET_RESOURCE_SHAREABLE_SNAPSHOT;
+    case CNET_TYPED_LISTENER_SOURCE:
+      return TURBO_FLOW_CNET_RESOURCE_BIND_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_TLS_MATERIAL |
+             TURBO_FLOW_CNET_RESOURCE_EXCLUSIVE_BIND;
+    case CNET_TYPED_PACKET_SOURCE:
+      return TURBO_FLOW_CNET_RESOURCE_BIND_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_PSK_MATERIAL |
+             TURBO_FLOW_CNET_RESOURCE_EXCLUSIVE_BIND;
+    case CNET_TYPED_DATAGRAM_SINK:
+      return TURBO_FLOW_CNET_RESOURCE_BIND_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_PEER_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_EXCLUSIVE_BIND;
+    case CNET_TYPED_PACKET_SINK:
+      return TURBO_FLOW_CNET_RESOURCE_BIND_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_PEER_ENDPOINT |
+             TURBO_FLOW_CNET_RESOURCE_PSK_MATERIAL |
+             TURBO_FLOW_CNET_RESOURCE_EXCLUSIVE_BIND;
+    default:
+      return 0u;
+  }
+}
+
+static int instance_deployment(
+    const turbo_flow_provider_instance_v1_t *instance,
+    turbo_flow_cnet_deployment_view_t *deployment,
+    turbo_flow_config_error_t *error) {
+  turbo_flow_cnet_deployment_resource *resource;
   int rc;
-  if (!provider || !provider->root || !flow || !resolved || !name || !name[0] || !owner_out ||
-      owner_out->size < sizeof(*owner_out))
-    return cnet_plugin_error(error, SALTS_EINVAL, name, "materialize",
-                             "invalid CNet materialization arguments");
-  rc = cnet_plugin_reference_validate(flow, name, provider->kind, error);
+
+  if (!instance || !deployment || !instance->resource ||
+      instance->resource->size != sizeof(*instance->resource) ||
+      !instance->resource->reference_name ||
+      !instance->resource->reference_name[0] ||
+      !instance->resource->identity ||
+      !instance->resource->identity[0] ||
+      !instance->resource->interface_desc ||
+      !instance->resource->interface_value ||
+      !cmeta_interface_desc_equal(
+          instance->resource->interface_desc,
+          turbo_flow_cnet_deployment_resource_interface()))
+    return cnet_plugin_error(
+        error, SALTS_EPROTO,
+        instance ? instance->instance_name : NULL, "resource",
+        "CNet provider requires an exact deployment resource Interface");
+
+  resource = (turbo_flow_cnet_deployment_resource *)
+      instance->resource->interface_value;
+  if (!turbo_flow_cnet_deployment_resource_valid(resource))
+    return cnet_plugin_error(
+        error, SALTS_EPROTO, instance->instance_name, "resource",
+        "CNet deployment resource handle is invalid");
+
+  *deployment =
+      (turbo_flow_cnet_deployment_view_t)
+          TURBO_FLOW_CNET_DEPLOYMENT_VIEW_INIT;
+  rc = turbo_flow_cnet_deployment_resource_snapshot(resource, deployment);
+  if (rc != SALTS_OK)
+    return cnet_plugin_error(
+        error, rc, instance->instance_name, "resource",
+        "CNet deployment resource snapshot failed");
+  if (!turbo_flow_cnet_deployment_view_valid(deployment))
+    return cnet_plugin_error(
+        error, SALTS_EPROTO, instance->instance_name, "resource",
+        "CNet deployment resource returned an invalid view");
+  return SALTS_OK;
+}
+
+static int instance_runtime_config(
+    const cnet_provider_slot_t *slot,
+    const turbo_flow_provider_instance_v1_t *instance,
+    cnet_typed_runtime_config_t *runtime,
+    turbo_flow_config_error_t *error) {
+  const DataBindMessageNativeArtifact *artifact;
+  DataBindNativeTypeBinding native =
+      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+  DataBindError databind_error = DATA_BIND_ERROR_INIT;
+  turbo_flow_cnet_deployment_view_t deployment =
+      TURBO_FLOW_CNET_DEPLOYMENT_VIEW_INIT;
+  size_t value_bytes;
+  int rc;
+
+  if (!slot || !instance || !runtime ||
+      instance->size != sizeof(*instance) ||
+      !instance->instance_name || !instance->instance_name[0] ||
+      instance->config.size != sizeof(instance->config) ||
+      !instance->config.type_name || !instance->config.data ||
+      !instance->config.value)
+    return cnet_plugin_error(
+        error, SALTS_EINVAL,
+        instance ? instance->instance_name : NULL, "config",
+        "invalid CNet provider instance");
+
+  artifact = provider_artifact(slot->kind);
+  value_bytes = provider_value_bytes(slot->kind);
+  if (!artifact || value_bytes == 0u ||
+      instance->config.value_bytes != value_bytes ||
+      strcmp(instance->config.type_name, artifact->type_name) != 0 ||
+      artifact->native_binding(&native, &databind_error) != DATA_BIND_OK ||
+      instance->config.data != native.data)
+    return cnet_plugin_error(
+        error, SALTS_EPROTO, instance->instance_name, "config",
+        "CNet typed config does not match the provider contract");
+
+  rc = instance_deployment(instance, &deployment, error);
   if (rc != SALTS_OK) return rc;
-  if (strlen(name) >= CNET_PROVIDER_NAME_CAPACITY)
-    return cnet_plugin_error(error, SALTS_ERANGE, name, "name", "CNet adapter name is too long");
-  if (vec_size(&provider->root->owners) >= CNET_PROVIDER_MAX_OWNERS)
-    return cnet_plugin_error(error, SALTS_ENOSPC, name, "capacity",
-                             "CNet plugin owner capacity is exhausted");
-  owner = (cnet_plugin_owner_t *)provider->root->host->allocate(provider->root->host->ctx,
-                                                                sizeof(*owner));
+
+  switch (slot->kind) {
+    case CNET_TYPED_STREAM_SOURCE:
+      return cnet_typed_stream_source_config(
+          (const CNetStreamSourceConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    case CNET_TYPED_LISTENER_SOURCE:
+      return cnet_typed_listener_source_config(
+          (const CNetListenerSourceConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    case CNET_TYPED_PACKET_SOURCE:
+      return cnet_typed_packet_source_config(
+          (const CNetPacketSourceConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    case CNET_TYPED_STREAM_SINK:
+      return cnet_typed_stream_sink_config(
+          (const CNetStreamSinkConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    case CNET_TYPED_DATAGRAM_SINK:
+      return cnet_typed_datagram_sink_config(
+          (const CNetDatagramSinkConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    case CNET_TYPED_PACKET_SINK:
+      return cnet_typed_packet_sink_config(
+          (const CNetPacketSinkConfig_t *)instance->config.value,
+          &deployment, instance->instance_name, runtime, error);
+    default:
+      return cnet_plugin_error(
+          error, SALTS_EINVAL, instance->instance_name, "provider",
+          "unknown CNet provider identity");
+  }
+}
+
+static int provider_contract(
+    void *self, turbo_flow_provider_contract_v1_t *out) {
+  cnet_provider_slot_t *slot = (cnet_provider_slot_t *)self;
+  if (!slot || !slot->root || !out || out->size != sizeof(*out) ||
+      !provider_artifact(slot->kind) ||
+      provider_resource_capabilities(slot->kind) == 0u)
+    return SALTS_EINVAL;
+
+  *out =
+      (turbo_flow_provider_contract_v1_t)
+          TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
+  out->config.codec_factory = TurboFlowCNetProviderConfig_codec_create;
+  out->config.message_artifact = provider_artifact(slot->kind);
+  out->resource.contract_id =
+      TURBO_FLOW_CNET_DEPLOYMENT_RESOURCE_CONTRACT_ID;
+  out->resource.contract_version =
+      TURBO_FLOW_CNET_RESOURCE_CONTRACT_VERSION;
+  out->resource.required_capabilities =
+      provider_resource_capabilities(slot->kind);
+  out->resource.expected_interface =
+      turbo_flow_cnet_deployment_resource_interface();
+  return SALTS_OK;
+}
+
+static int provider_preflight(
+    void *self, const turbo_flow_provider_instance_v1_t *instance,
+    turbo_flow_config_error_t *error) {
+  cnet_provider_slot_t *slot = (cnet_provider_slot_t *)self;
+  cnet_typed_runtime_config_t runtime;
+  if (!slot || !slot->root || !slot->root->started ||
+      slot->root->stopping)
+    return SALTS_ESHUTDOWN;
+  return instance_runtime_config(slot, instance, &runtime, error);
+}
+
+static int provider_materialize(
+    void *self, turbo_flow_t *flow,
+    const turbo_flow_provider_instance_v1_t *instance,
+    turbo_flow_runtime_owner *owner_out,
+    turbo_flow_config_error_t *error) {
+  cnet_provider_slot_t *slot = (cnet_provider_slot_t *)self;
+  cnet_plugin_owner_t *owner;
+  const char *identity;
+  int rc;
+
+  if (!slot || !slot->root || !slot->root->started ||
+      slot->root->stopping || !flow || !instance || !owner_out ||
+      turbo_flow_runtime_owner_valid(owner_out))
+    return SALTS_EINVAL;
+
+  identity = provider_identity(slot->kind);
+  if (!identity)
+    return cnet_plugin_error(
+        error, SALTS_EINVAL, instance->instance_name, "provider",
+        "unknown CNet provider identity");
+  rc = cnet_plugin_reference_validate(
+      flow, instance->instance_name, slot->kind, error);
+  if (rc != SALTS_OK) return rc;
+  if (strlen(instance->instance_name) >= CNET_PROVIDER_NAME_CAPACITY)
+    return cnet_plugin_error(
+        error, SALTS_ERANGE, instance->instance_name, "name",
+        "CNet stage instance name is too long");
+  if (slot->root->owners >= CNET_PROVIDER_MAX_OWNERS)
+    return cnet_plugin_error(
+        error, SALTS_ENOSPC, instance->instance_name, "capacity",
+        "CNet provider owner capacity is exhausted");
+
+  owner = (cnet_plugin_owner_t *)calloc(1u, sizeof(*owner));
   if (!owner)
-    return cnet_plugin_error(error, SALTS_ENOMEM, name, "allocate",
-                             "failed to allocate CNet Product owner");
-  memset(owner, 0, sizeof(*owner));
-  owner->root = provider->root;
-  memcpy(owner->name, name, strlen(name) + 1u);
+    return cnet_plugin_error(
+        error, SALTS_ENOMEM, instance->instance_name, "allocate",
+        "failed to allocate CNet runtime owner");
+  owner->root = slot->root;
+  memcpy(
+      owner->name, instance->instance_name,
+      strlen(instance->instance_name) + 1u);
   owner->state = TURBO_FLOW_MANAGED_BOUNDARY_REGISTERED;
   owner->last_status = SALTS_OK;
-  rc = turbo_flow_cnet_plugin_config_read(resolved, name, provider->kind, &owner->config, error);
+
+  rc = instance_runtime_config(slot, instance, &owner->config, error);
   if (rc != SALTS_OK) goto fail;
-  owner->metadata = (turbo_flow_resource_metadata_t)TURBO_FLOW_RESOURCE_METADATA_INIT;
+
+  owner->metadata =
+      (turbo_flow_resource_metadata_t)
+          TURBO_FLOW_RESOURCE_METADATA_INIT;
   owner->metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   owner->metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
-  (void)snprintf(owner->metadata.uid, sizeof(owner->metadata.uid), "cnet:%s", name);
-  (void)snprintf(owner->metadata.owner_name, sizeof(owner->metadata.owner_name), "%s", name);
+  (void)snprintf(
+      owner->metadata.uid, sizeof(owner->metadata.uid),
+      "cnet:%s", owner->name);
+  (void)snprintf(
+      owner->metadata.owner_name, sizeof(owner->metadata.owner_name),
+      "%s", owner->name);
   owner->metadata.generation = 1u;
   owner->metadata.observed_generation = 1u;
+
   owner->descriptor =
-      (turbo_flow_managed_boundary_descriptor_t)TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
+      (turbo_flow_managed_boundary_descriptor_t)
+          TURBO_FLOW_MANAGED_BOUNDARY_DESCRIPTOR_INIT;
   owner->descriptor.domain = owner->metadata.domain;
   owner->descriptor.kind = owner->metadata.kind;
-  (void)snprintf(owner->descriptor.uid, sizeof(owner->descriptor.uid), "%s", owner->metadata.uid);
-  (void)snprintf(owner->descriptor.owner_name, sizeof(owner->descriptor.owner_name), "%s", name);
-  owner->descriptor.role_flags = provider->kind <= CNET_TYPED_PACKET_SOURCE
-                                     ? TURBO_FLOW_MANAGED_BOUNDARY_SOURCE
-                                     : TURBO_FLOW_MANAGED_BOUNDARY_SINK;
-  if (provider->kind <= CNET_TYPED_PACKET_SOURCE) {
-    owner->descriptor.capability_flags = TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE;
+  (void)snprintf(
+      owner->descriptor.uid, sizeof(owner->descriptor.uid),
+      "%s", owner->metadata.uid);
+  (void)snprintf(
+      owner->descriptor.owner_name, sizeof(owner->descriptor.owner_name),
+      "%s", owner->name);
+  owner->descriptor.role_flags =
+      slot->kind <= CNET_TYPED_PACKET_SOURCE
+          ? TURBO_FLOW_MANAGED_BOUNDARY_SOURCE
+          : TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+  if (slot->kind <= CNET_TYPED_PACKET_SOURCE) {
+    owner->descriptor.capability_flags =
+        TURBO_FLOW_MANAGED_BOUNDARY_DEMAND_AWARE;
     owner->descriptor.output = owner->config.content;
   } else {
     owner->descriptor.input = owner->config.content;
   }
-  rc = cnet_plugin_root_add_owner(provider->root, owner);
-  if (rc != SALTS_OK) goto fail;
-  descriptor.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD |
-                     TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-  descriptor.ctx = owner;
-  descriptor.quiesce = cnet_plugin_owner_quiesce;
-  descriptor.drain = cnet_plugin_owner_drain;
-  descriptor.shutdown = cnet_plugin_owner_shutdown;
-  descriptor.destroy = cnet_plugin_owner_destroy;
-  descriptor.poll = cnet_plugin_owner_poll;
-  rc = turbo_flow_plugin_product_owner_publish(owner_out, &descriptor);
-  if (rc != SALTS_OK) {
-    cnet_plugin_root_remove_owner(provider->root, owner);
-    goto fail;
-  }
-  rc = provider->kind <= CNET_TYPED_PACKET_SOURCE
+
+  rc = slot->kind <= CNET_TYPED_PACKET_SOURCE
            ? cnet_plugin_register_source(owner, flow)
            : cnet_plugin_register_sink(owner, flow);
-  if (rc == SALTS_OK) return SALTS_OK;
-  *owner_out = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-  cnet_plugin_root_remove_owner(provider->root, owner);
+  if (rc != SALTS_OK) {
+    cnet_plugin_error(
+        error, rc, owner->name, "materialize",
+        "failed to register CNet native adapter owner");
+    goto fail;
+  }
+
+  rc = cnet_plugin_root_add_owner(slot->root, owner);
+  if (rc != SALTS_OK) {
+    cnet_plugin_error(
+        error, rc, owner->name, "capacity",
+        "failed to retain CNet runtime owner");
+    goto fail_registered;
+  }
+
+  *owner_out = cnet_runtime_owner_as_turbo_flow_runtime_owner(owner);
+  if (error)
+    *error =
+        (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  return SALTS_OK;
+
+fail_registered:
+  /*
+   * This path is unreachable after the prechecked owner-capacity guard unless
+   * provider stop races the control thread. Keep the Graph binding alive rather
+   * than freeing callback storage behind it; materialization fails closed.
+   */
+  return rc;
+
 fail:
   memset(owner, 0, sizeof(*owner));
-  provider->root->host->deallocate(provider->root->host->ctx, owner);
-  return cnet_plugin_error(error, rc, name, "materialize",
-                           "failed to materialize CNet adapter owner");
+  free(owner);
+  return rc;
 }
 
-static int cnet_plugin_load(const turbo_flow_plugin_host_v1_t *host, void **plugin_out) {
-  cnet_plugin_root_t *root;
-  int rc;
-  if (plugin_out) *plugin_out = NULL;
-  if (!plugin_out || !host || host->size != sizeof(*host)) return SALTS_EINVAL;
-  if (host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) return SALTS_EINVAL;
-  if (!host->allocate || !host->deallocate) return SALTS_EINVAL;
-  root = (cnet_plugin_root_t *)host->allocate(host->ctx, sizeof(*root));
-  if (!root) return SALTS_ENOMEM;
-  memset(root, 0, sizeof(*root));
-  root->host = host;
-  rc = cnet_plugin_stl_status(vec_init_bytes(&root->owners, sizeof(cnet_plugin_owner_t *),
-                                             _Alignof(cnet_plugin_owner_t *),
-                                             CNET_PROVIDER_MAX_OWNERS));
-  if (rc == SALTS_OK)
-    rc = cnet_plugin_stl_status(vec_reserve(&root->owners, CNET_PROVIDER_MAX_OWNERS));
-  if (rc != SALTS_OK) {
-    vec_destroy(&root->owners);
-    host->deallocate(host->ctx, root);
-    return rc;
-  }
+CMETA_IMPLEMENTS(
+    turbo_flow_provider_factory, cnet_provider_factory_impl, 0u,
+    .contract = provider_contract,
+    .preflight = provider_preflight,
+    .materialize = provider_materialize);
+
+static void provider_init(void) {
+  static const unsigned kinds[CNET_TYPED_KIND_COUNT] = {
+      CNET_TYPED_STREAM_SOURCE,
+      CNET_TYPED_LISTENER_SOURCE,
+      CNET_TYPED_PACKET_SOURCE,
+      CNET_TYPED_STREAM_SINK,
+      CNET_TYPED_DATAGRAM_SINK,
+      CNET_TYPED_PACKET_SINK};
+
+  memset(&provider_root, 0, sizeof(provider_root));
   for (size_t i = 0u; i < CNET_TYPED_KIND_COUNT; ++i) {
-    root->providers[i].root = root;
-    root->providers[i].kind = (turbo_flow_cnet_plugin_kind_t)i;
+    provider_root.slots[i].root = &provider_root;
+    provider_root.slots[i].kind = kinds[i];
+    provider_factories[i] =
+        cnet_provider_factory_impl_as_turbo_flow_provider_factory(
+            &provider_root.slots[i]);
+    provider_exports[i] = (salts_plugin_export){
+        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
+        .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+        .contract_version =
+            TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
+        .capabilities = 0u,
+        .export_id = provider_identity(kinds[i]),
+        .contract_id = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
+        .value.interface = {
+            .desc = turbo_flow_provider_factory_interface(),
+            .value = &provider_factories[i],
+        },
+    };
   }
-  *plugin_out = root;
-  return SALTS_OK;
 }
 
-static int cnet_plugin_register(void *plugin,
-                                const turbo_flow_plugin_registration_v1_t *registration) {
-  cnet_plugin_root_t *root = (cnet_plugin_root_t *)plugin;
-  if (!root || !registration || registration->size != sizeof(*registration) ||
-      registration->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      registration->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      !registration->add_transactional_adapter_provider)
-    return SALTS_EINVAL;
-  for (size_t i = 0u; i < CNET_TYPED_KIND_COUNT; ++i) {
-    turbo_flow_plugin_transactional_adapter_provider_v1_t provider =
-        TURBO_FLOW_PLUGIN_TRANSACTIONAL_ADAPTER_PROVIDER_V1_INIT;
-    int rc;
-    provider.kind = turbo_flow_cnet_plugin_kind_name((turbo_flow_cnet_plugin_kind_t)i);
-    provider.ctx = &root->providers[i];
-    provider.preflight = cnet_plugin_preflight;
-    provider.materialize = cnet_plugin_materialize;
-    rc = registration->add_transactional_adapter_provider(registration->ctx, &provider);
-    if (rc != SALTS_OK) return rc;
-  }
-  return SALTS_OK;
+static salts_plugin_status SALTS_PLUGIN_CALL provider_start(void *self) {
+  cnet_plugin_root_t *root = (cnet_plugin_root_t *)self;
+  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (root->owners != 0u) return SALTS_PLUGIN_BUSY;
+  root->stopping = false;
+  root->started = true;
+  return SALTS_PLUGIN_OK;
 }
 
-static int cnet_plugin_quiesce(void *plugin, uint64_t timeout_ms) {
-  cnet_plugin_root_t *root = (cnet_plugin_root_t *)plugin;
-  (void)timeout_ms;
-  if (!root) return SALTS_EINVAL;
-  if (vec_size(&root->owners) != 0u) return SALTS_EBUSY;
-  root->quiesced = 1;
-  return SALTS_OK;
+static salts_plugin_status SALTS_PLUGIN_CALL
+provider_request_stop(void *self) {
+  cnet_plugin_root_t *root = (cnet_plugin_root_t *)self;
+  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  root->stopping = true;
+  root->started = false;
+  return SALTS_PLUGIN_OK;
 }
 
-static int cnet_plugin_shutdown(void *plugin) {
-  cnet_plugin_root_t *root = (cnet_plugin_root_t *)plugin;
-  return root && root->quiesced && vec_size(&root->owners) == 0u ? SALTS_OK : SALTS_EBUSY;
+static bool SALTS_PLUGIN_CALL provider_is_quiescent(const void *self) {
+  const cnet_plugin_root_t *root =
+      (const cnet_plugin_root_t *)self;
+  return root && root->stopping && root->owners == 0u;
 }
 
-static void cnet_plugin_destroy(void *plugin) {
-  cnet_plugin_root_t *root = (cnet_plugin_root_t *)plugin;
-  const turbo_flow_plugin_host_v1_t *host;
-  if (!root) return;
-  host = root->host;
-  vec_destroy(&root->owners);
-  memset(root, 0, sizeof(*root));
-  host->deallocate(host->ctx, root);
+static void SALTS_PLUGIN_CALL provider_destroy(void *self) {
+  cnet_plugin_root_t *root = (cnet_plugin_root_t *)self;
+  if (!root || root->owners != 0u) return;
+  root->started = false;
+  root->stopping = true;
 }
 
-static const turbo_flow_plugin_api_v1_t cnet_plugin_api = {
-    sizeof(turbo_flow_plugin_api_v1_t),
-    TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,
-    TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
-    "turbo-flow.cnet",
-    "1.0.0",
-    TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL,
-    cnet_plugin_load,
-    cnet_plugin_register,
-    cnet_plugin_quiesce,
-    cnet_plugin_shutdown,
-    cnet_plugin_destroy};
+static salts_plugin_manifest provider_manifest = {
+    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
+    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+    .plugin_id = "turbo-flow.cnet",
+    .version = {2u, 0u, 0u},
+    .self = &provider_root,
+};
 
-TURBO_FLOW_PLUGIN_ENTRY const turbo_flow_plugin_api_v1_t *turbo_flow_plugin_get_api(void) {
-  return &cnet_plugin_api;
+SALTS_PLUGIN_QUERY_EXPORT
+const salts_plugin_manifest *SALTS_PLUGIN_CALL
+salts_plugin_query(uint32_t host_abi) {
+  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
+  salts_once(&provider_once, provider_init);
+  provider_manifest.exports = provider_exports;
+  provider_manifest.export_count = CNET_TYPED_KIND_COUNT;
+  provider_manifest.start = provider_start;
+  provider_manifest.request_stop = provider_request_stop;
+  provider_manifest.is_quiescent = provider_is_quiescent;
+  provider_manifest.destroy = provider_destroy;
+  return &provider_manifest;
 }
