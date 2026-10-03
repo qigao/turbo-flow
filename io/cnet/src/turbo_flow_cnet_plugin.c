@@ -816,47 +816,54 @@ static int cnet_plugin_owner_shutdown(void *ctx) { return ctx ? SALTS_OK : SALTS
 
 static void cnet_plugin_owner_destroy(void *ctx) {
   cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
-  const turbo_flow_plugin_host_v1_t *host;
+  cnet_plugin_root_t *root;
+  int rc = SALTS_OK;
   if (!owner) return;
-  host = owner->root->host;
+  root = owner->root;
   switch (owner->config.kind) {
   case CNET_TYPED_STREAM_SOURCE:
     if (owner->handle.stream_source)
-      (void)turbo_flow_cnet_stream_source_destroy(owner->handle.stream_source);
+      rc = turbo_flow_cnet_stream_source_destroy(owner->handle.stream_source);
     break;
   case CNET_TYPED_LISTENER_SOURCE:
-    if (owner->handle.listener_source) {
-      if (turbo_flow_cnet_listener_source_destroy(owner->handle.listener_source) != SALTS_OK)
-        return;
-      owner->handle.listener_source = NULL;
-    }
+    if (owner->handle.listener_source)
+      rc = turbo_flow_cnet_listener_source_destroy(owner->handle.listener_source);
     break;
   case CNET_TYPED_PACKET_SOURCE:
-    if (owner->handle.packet_source) {
-      if (turbo_flow_cnet_packet_source_destroy(owner->handle.packet_source) != SALTS_OK)
-        return;
-      owner->handle.packet_source = NULL;
-    }
+    if (owner->handle.packet_source)
+      rc = turbo_flow_cnet_packet_source_destroy(owner->handle.packet_source);
     break;
   case CNET_TYPED_STREAM_SINK:
     if (owner->handle.stream_sink)
-      (void)turbo_flow_cnet_stream_sink_destroy(owner->handle.stream_sink);
+      rc = turbo_flow_cnet_stream_sink_destroy(owner->handle.stream_sink);
     break;
   case CNET_TYPED_DATAGRAM_SINK:
     if (owner->handle.datagram_sink)
-      (void)turbo_flow_cnet_datagram_sink_destroy(owner->handle.datagram_sink);
+      rc = turbo_flow_cnet_datagram_sink_destroy(owner->handle.datagram_sink);
     break;
   case CNET_TYPED_PACKET_SINK:
     if (owner->handle.packet_sink)
-      (void)turbo_flow_cnet_packet_sink_destroy(owner->handle.packet_sink);
+      rc = turbo_flow_cnet_packet_sink_destroy(owner->handle.packet_sink);
     break;
   default:
+    rc = SALTS_EINVAL;
     break;
   }
-  cnet_plugin_root_remove_owner(owner->root, owner);
+  if (rc != SALTS_OK) return;
+  cnet_plugin_root_remove_owner(root, owner);
   memset(owner, 0, sizeof(*owner));
-  host->deallocate(host->ctx, owner);
+  free(owner);
 }
+
+CMETA_IMPLEMENTS(
+    turbo_flow_runtime_owner, cnet_runtime_owner,
+    TURBO_FLOW_RUNTIME_OWNER_CONTROL_THREAD |
+        TURBO_FLOW_RUNTIME_OWNER_EXTERNAL_POLL,
+    .quiesce = cnet_plugin_owner_quiesce,
+    .drain = cnet_plugin_owner_drain,
+    .shutdown = cnet_plugin_owner_shutdown,
+    .poll = cnet_plugin_owner_poll,
+    .destroy = cnet_plugin_owner_destroy);
 
 static int cnet_plugin_preflight(void *ctx, const turbo_flow_resolved_config_t *resolved,
                                  const char *name, turbo_flow_config_error_t *error) {
