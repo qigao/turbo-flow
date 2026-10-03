@@ -1209,11 +1209,13 @@ add_dependencies(
 cmake_add_test(
   test_flow_plugin_generation
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_generation.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest
+  LIBS TurboFlow::PluginHost Salts::Plugin Salts::TinyTest
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
   test_flow_plugin_generation
-  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
+  PRIVATE FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+          FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
           FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
           FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
           FLOW_PLUGIN_GENERATION_FIXTURE_PREFLIGHT_FAIL="$<TARGET_FILE:test_flow_plugin_generation_preflight_fail>"
@@ -1240,6 +1242,8 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR="$<TARGET_FILE:test_flow_plugin_generation_poll_small_descriptor>")
 add_dependencies(
   test_flow_plugin_generation
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture
   test_flow_plugin_generation_durable
   test_flow_plugin_good_one
   test_flow_plugin_generation_capacity
