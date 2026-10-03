@@ -24,6 +24,9 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_cnet_provider_config.schema"
   ARTIFACT_NAME "cnet_provider_config"
   ARTIFACTS MESSAGE)
+set_target_properties(${turbo_flow_cnet_provider_config_NATIVE_TARGET} PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
 
 install(FILES
   include/turbo_flow_cnet.h
