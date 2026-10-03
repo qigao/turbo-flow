@@ -8,6 +8,8 @@ on:
       - 'cmake/**'
       - 'turbo_flow/**'
       - 'io/cnet/**'
+      - 'tests/install_cnet_plugin_consumer/**'
+      - 'tests/install_consumer/run.cmake'
       - 'io/durable/**'
       - 'ingress/protocol/**'
       - 'plugins/applicant_mapper/**'
@@ -84,7 +86,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithRulesForge -WithCHttp
 
       - name: Verify published dependency boundary
         shell: bash
@@ -132,8 +134,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/protocol-network-runtime --target test_protocol_network_intake_config test_protocol_network_intake_core test_flow_applicant_mapper_plugin test_cnet_listener_source test_cnet_stream_sink test_turbo_flow_focus test_flow_transport_reply test_protocol_network_jtt808 -j2 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
-          ctest --test-dir build/protocol-network-runtime -R '^(test_protocol_network_intake_(config|core)|test_flow_applicant_mapper_plugin|test_cnet_(listener_source|stream_sink)|test_turbo_flow_(transport_vectors|use_aliases|legacy_cflow_boundary|source_only_cflow)|test_flow_transport_reply|test_protocol_network_jtt808)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
+          cmake --build build/protocol-network-runtime --target test_protocol_network_intake_config test_protocol_network_intake_core test_flow_applicant_mapper_plugin test_cnet_listener_source test_cnet_stream_sink test_cnet_typed_contract test_cnet_provider_interface test_turbo_flow_focus test_flow_transport_reply -j2 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-build.log"
+          ctest --test-dir build/protocol-network-runtime -R '^(test_protocol_network_intake_(config|core)|test_flow_applicant_mapper_plugin|test_cnet_(listener_source|stream_sink|typed_contract|provider_interface)|test_turbo_flow_(transport_vectors|use_aliases|legacy_cflow_boundary|source_only_cflow)|test_flow_transport_reply)$' --output-on-failure 2>&1 | tee "$RUNNER_TEMP/protocol-intake-evidence/runtime-ctest.log"
 
       - name: Verify sanitizer instrumentation flags
         shell: bash
@@ -152,6 +154,71 @@ jobs:
         run: |
           set -euxo pipefail
           git restore --source=HEAD -- CMakeLists.txt turbo_flow/CMakeLists.txt
+
+      - name: Qualify installed CNet Salts provider consumer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          prefix="$RUNNER_TEMP/cnet-provider-install"
+          rm -rf "$prefix" build/cnet-provider-install build/cnet-installed-consumer
+
+          cmake -S . -B build/cnet-provider-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build build/cnet-provider-install --parallel 2
+          cmake --install build/cnet-provider-install
+
+          plugin="$prefix/lib/libtf_cnet_plugin.so"
+          test -f "$plugin"
+          exports="$(nm -D --defined-only "$plugin" | awk '$2 ~ /^[TW]$/ {print $3}' | sort -u)"
+          printf '%s\n' "$exports" | tee "$RUNNER_TEMP/protocol-intake-evidence/cnet-installed-exports.txt"
+          test "$exports" = "salts_plugin_query"
+          ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
+
+          cmake -E env "TURBO_FLOW_ROOT=$prefix" \
+            cmake -S tests/install_cnet_plugin_consumer \
+            -B build/cnet-installed-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DTurboFlow_DIR="$prefix/lib/cmake/TurboFlow" \
+            -DTURBO_FLOW_CNET_PLUGIN_PATH="$plugin" \
+            -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build build/cnet-installed-consumer --parallel 2
+
+          consumer="$GITHUB_WORKSPACE/build/cnet-installed-consumer/turbo_flow_cnet_plugin_consumer"
+          test -x "$consumer"
+          ldd "$consumer" | tee "$RUNNER_TEMP/protocol-intake-evidence/cnet-installed-consumer-deps.txt"
+          ! ldd "$consumer" | grep -E 'libtf_cnet_adapter|libsalts_cnet'
+          cmake -E env \
+            "TURBO_FLOW_ROOT=$prefix" \
+            "LD_LIBRARY_PATH=$prefix/lib:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$RULES_FORGE_ROOT/lib:$HTTP_SERVICES_ROOT/lib:$LD_LIBRARY_PATH" \
+            "$consumer" "$plugin"
+
+          set +e
+          missing_output="$(cmake -E env \
+            "TURBO_FLOW_ROOT=$prefix" \
+            "LD_LIBRARY_PATH=$prefix/lib:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$RULES_FORGE_ROOT/lib:$HTTP_SERVICES_ROOT/lib:$LD_LIBRARY_PATH" \
+            "$consumer" "$prefix/lib/missing-cnet-plugin.so" 2>&1)"
+          missing_status=$?
+          set -e
+          printf '%s\n' "$missing_output"
+          test "$missing_status" -ne 0
+          printf '%s\n' "$missing_output" | grep -F 'failed at plugin DLL load'
+
 
       - name: Verify committed source was not modified
         if: always()

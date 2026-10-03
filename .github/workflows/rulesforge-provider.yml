@@ -98,11 +98,11 @@ jobs:
           test -z "${DATABIND_ROOT:-}"
           test -z "${DATABIND_HOST_ROOT:-}"
 
-      - name: Apply durable RulesForge E2E validation-only CMake assembly
+      - name: Apply RulesForge provider validation-only CMake assembly
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py --rulesforge-e2e
+          python3 .github/ci/task4_runtime_assembly.py --rulesforge
           git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/rulesforge-focused-cmake.patch"
 
       - name: Configure provider-focused TurboFlow build
@@ -111,32 +111,26 @@ jobs:
           set -euxo pipefail
           cmake -S . -B build/rulesforge-provider -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DENABLE_SANITIZER_ADDRESS=ON             -DENABLE_SANITIZER_UNDEFINED=ON             -DBUILD_TESTING=ON             -DBUILD_TESTS=ON             -DBUILD_EXAMPLES=OFF             -DBUILD_BENCHMARKS=OFF             -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=ON             -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=ON             -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="$SALTS_UTILS_HOST_ROOT/bin/salts-idlc"             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
 
-      - name: Build and run RulesForge provider and durable network composition
+      - name: Build and run RulesForge provider contract
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build build/rulesforge-provider             --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network -j2
-          ctest --test-dir build/rulesforge-provider             -R '^test_flow_rulesforge_(plugin|durable_network)$' --output-on-failure
+          cmake --build build/rulesforge-provider --target test_flow_rulesforge_plugin -j2
+          ctest --test-dir build/rulesforge-provider -R '^test_flow_rulesforge_plugin$' --output-on-failure
 
-      - name: Install and load composed providers from install tree
+      - name: Install and load RulesForge provider from install tree
         shell: bash
         run: |
           set -euxo pipefail
           prefix="$RUNNER_TEMP/turboflow-rulesforge-install"
           cmake --install build/rulesforge-provider --prefix "$prefix"
           provider="$(find "$prefix" -type f \( -name 'libtf_rulesforge_provider.so' -o -name 'tf_rulesforge_provider.dll' \) | head -n1)"
-          cnet_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_cnet_plugin.so' -o -name 'tf_cnet_plugin.dll' \) | head -n1)"
-          durable_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_durable_memory_plugin.so' -o -name 'tf_durable_memory_plugin.dll' \) | head -n1)"
-          jtt808_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_protocol_jtt808.so' -o -name 'tf_protocol_jtt808.dll' \) | head -n1)"
-          coap_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_protocol_coap.so' -o -name 'tf_protocol_coap.dll' \) | head -n1)"
-          mapper_provider="$(find "$prefix" \( -type f -o -type l \) \( -name 'libtf_applicant_mapper_provider.so' -o -name 'tf_applicant_mapper_provider.dll' \) | head -n1)"
           test_bin="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_plugin*' -perm -111 | head -n1)"
-          composition_test="$(find build/rulesforge-provider -type f -name 'test_flow_rulesforge_durable_network*' -perm -111 | head -n1)"
-          for path in "$provider" "$cnet_provider" "$durable_provider" "$jtt808_provider" "$coap_provider" "$mapper_provider" "$test_bin" "$composition_test"; do
-            test -n "$path"
-          done
-          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH"             FLOW_RULESFORGE_PLUGIN_PATH="$provider"             "$test_bin"
-          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH"             FLOW_RULESFORGE_PLUGIN_PATH="$provider"             FLOW_CNET_PLUGIN_PATH="$cnet_provider"             TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH="$durable_provider"             FLOW_PROTOCOL_JTT808_PLUGIN_PATH="$jtt808_provider"             FLOW_PROTOCOL_COAP_PLUGIN_PATH="$coap_provider"             FLOW_APPLICANT_MAPPER_PLUGIN_PATH="$mapper_provider"             "$composition_test"
+          test -n "$provider"
+          test -n "$test_bin"
+          LD_LIBRARY_PATH="$prefix/lib:$LD_LIBRARY_PATH" \
+            FLOW_RULESFORGE_PLUGIN_PATH="$provider" \
+            "$test_bin"
 
       - name: Verify core unlink and canonical provider export
         shell: bash

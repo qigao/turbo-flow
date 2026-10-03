@@ -1,6 +1,7 @@
 #include "flow_internal.h"
 #include "tinytest.h"
 #include "turbo_flow_provider.h"
+#include "turbo_flow_provider_adapter.h"
 
 #include <string.h>
 
@@ -139,6 +140,72 @@ static int scoped_boundary_snapshot(
 static void scoped_managed_owner_shutdown(void *ctx) {
   scoped_managed_owner_t *owner = (scoped_managed_owner_t *)ctx;
   if (owner) ++owner->probe.shutdowns;
+}
+
+typedef struct scoped_reply_probe_s {
+  uint64_t token;
+  size_t captures;
+  size_t sends;
+  int terminal_ready;
+  turbo_flow_transport_reply_terminal_t terminal;
+} scoped_reply_probe_t;
+
+static int scoped_reply_capture(
+    void *ctx, const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  (void)message;
+  if (!probe || !session) return SALTS_EINVAL;
+  *session =
+      (turbo_flow_transport_reply_session_t)
+          TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+  session->token_size = sizeof(probe->token);
+  memcpy(session->token, &probe->token, sizeof(probe->token));
+  ++probe->captures;
+  return SALTS_OK;
+}
+
+static int scoped_reply_send(
+    void *ctx, const turbo_flow_transport_reply_request_t *request) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  if (!probe || !request || probe->terminal_ready) return SALTS_EBUSY;
+  ++probe->sends;
+  probe->terminal =
+      (turbo_flow_transport_reply_terminal_t)
+          TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  probe->terminal.session = request->session;
+  probe->terminal.kind = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT;
+  probe->terminal.data_size = request->data_size;
+  probe->terminal.status = SALTS_OK;
+  probe->terminal.tag = request->tag;
+  probe->terminal_ready = 1;
+  return SALTS_OK;
+}
+
+static int scoped_reply_take(
+    void *ctx, turbo_flow_transport_reply_terminal_t *terminal) {
+  scoped_reply_probe_t *probe = (scoped_reply_probe_t *)ctx;
+  if (!probe || !terminal) return SALTS_EINVAL;
+  if (!probe->terminal_ready) return SALTS_ENOENT;
+  *terminal = probe->terminal;
+  probe->terminal_ready = 0;
+  return SALTS_OK;
+}
+
+static turbo_flow_adapter_schema_t source_schema(void) {
+  turbo_flow_adapter_schema_t schema;
+  memset(&schema, 0, sizeof(schema));
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+  schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+  return schema;
+}
+
+static turbo_flow_adapter_ops_t source_ops(void) {
+  turbo_flow_adapter_ops_t ops;
+  memset(&ops, 0, sizeof(ops));
+  ops.start = scoped_start;
+  return ops;
 }
 
 static turbo_flow_adapter_schema_t sink_schema(void) {
@@ -527,6 +594,119 @@ spec("provider-scoped adapter stage binding") {
     check_equal(legacy_register, SALTS_OK);
     check_equal(legacy_parse, SALTS_OK);
     check_equal(legacy_compile, SALTS_EINVAL);
+  }
+
+  it("routes transport reply through exact sealed provider stages") {
+    static const char *src =
+        "source a adapter fixture.reply\n"
+        "source b adapter fixture.reply\n"
+        "stage sink adapter legacy.sink\n"
+        "stage main {\n"
+        "  a -> sink\n"
+        "  b -> sink\n"
+        "}\n";
+    const char *stage_a[] = {"a"};
+    const char *stage_b[] = {"b"};
+    scoped_probe_t source_a = {0};
+    scoped_probe_t source_b = {0};
+    scoped_probe_t sink = {0};
+    scoped_reply_probe_t reply_a = {UINT64_C(0xA1), 0u, 0u, 0, {0}};
+    scoped_reply_probe_t reply_b = {UINT64_C(0xB2), 0u, 0u, 0, {0}};
+    turbo_flow_adapter_ops_t source_adapter_ops = source_ops();
+    turbo_flow_adapter_schema_t source_adapter_schema = source_schema();
+    turbo_flow_adapter_ops_t sink_adapter_ops = sink_ops();
+    turbo_flow_adapter_schema_t sink_adapter_schema = sink_schema();
+    turbo_flow_transport_reply_provider_ops_t reply_ops =
+        TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+    turbo_flow_transport_reply_session_t session_a =
+        TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+    turbo_flow_transport_reply_session_t session_b =
+        TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+    turbo_flow_transport_reply_request_t request =
+        TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
+    turbo_flow_transport_reply_terminal_t terminal =
+        TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    turbo_flow_msg_t message;
+    static const char payload[] = "ok";
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
+    check_equal(
+        register_scoped(
+            flow, "fixture.reply", stage_a, 1u,
+            &source_adapter_ops, &source_adapter_schema, &source_a),
+        SALTS_OK);
+    check_equal(
+        register_scoped(
+            flow, "fixture.reply", stage_b, 1u,
+            &source_adapter_ops, &source_adapter_schema, &source_b),
+        SALTS_OK);
+    check_equal(
+        turbo_flow_register_adapter_ex(
+            flow, "legacy.sink", &sink_adapter_ops, &sink,
+            &sink_adapter_schema),
+        SALTS_OK);
+
+    reply_ops.capture = scoped_reply_capture;
+    reply_ops.send = scoped_reply_send;
+    reply_ops.take_terminal = scoped_reply_take;
+    check_equal(
+        turbo_flow_provider_adapter_transport_reply_register(
+            flow, "a", &reply_ops, &reply_a),
+        SALTS_OK);
+    check_equal(
+        turbo_flow_provider_adapter_transport_reply_register(
+            flow, "b", &reply_ops, &reply_b),
+        SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+
+    check_equal(
+        turbo_flow_transport_reply_supported(flow, "fixture.reply"),
+        SALTS_ENOTSUP);
+    check_equal(
+        turbo_flow_transport_reply_supported_stage(flow, "a"), SALTS_OK);
+    check_equal(
+        turbo_flow_transport_reply_supported_stage(flow, "b"), SALTS_OK);
+
+    turbo_flow_msg_init(&message);
+    check_equal(
+        turbo_flow_transport_reply_capture_stage(
+            flow, "a", &message, &session_a),
+        SALTS_OK);
+    check_equal(
+        turbo_flow_transport_reply_capture_stage(
+            flow, "b", &message, &session_b),
+        SALTS_OK);
+    check_equal(reply_a.captures, (size_t)1u);
+    check_equal(reply_b.captures, (size_t)1u);
+    check_false(memcmp(session_a.token, session_b.token, sizeof(uint64_t)) == 0);
+
+    request.session = session_a;
+    request.data = payload;
+    request.data_size = sizeof(payload) - 1u;
+    request.tag = UINT64_C(7);
+    check_equal(
+        turbo_flow_transport_reply_send_stage(flow, "a", &request),
+        SALTS_OK);
+    check_equal(reply_a.sends, (size_t)1u);
+    check_equal(reply_b.sends, (size_t)0u);
+
+    check_equal(
+        turbo_flow_transport_reply_take_terminal_stage(
+            flow, "a", &terminal),
+        SALTS_OK);
+    check_equal(terminal.tag, UINT64_C(7));
+    terminal =
+        (turbo_flow_transport_reply_terminal_t)
+            TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    check_equal(
+        turbo_flow_transport_reply_take_terminal_stage(
+            flow, "b", &terminal),
+        SALTS_ENOENT);
+
+    turbo_flow_msg_cleanup(&message);
+    turbo_flow_destroy(flow);
   }
 
   it("preserves legacy global name-based registration") {

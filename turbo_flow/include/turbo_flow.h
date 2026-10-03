@@ -1365,6 +1365,29 @@ TURBO_FLOW_C_API int turbo_flow_transport_reply_take_terminal(
     const turbo_flow_t *flow, const char *adapter_name,
     turbo_flow_transport_reply_terminal_t *terminal);
 
+
+/**
+ * Exact-stage transport-reply variants for provider-scoped adapters.
+ *
+ * These APIs resolve only the sealed compiled stage -> adapter binding and do
+ * not fall back to the legacy global adapter-name registry.
+ */
+TURBO_FLOW_C_API int turbo_flow_transport_reply_supported_stage(
+    const turbo_flow_t *flow, const char *stage_name);
+TURBO_FLOW_C_API int turbo_flow_transport_reply_capture_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session);
+TURBO_FLOW_C_API int turbo_flow_transport_reply_send_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_request_t *request);
+TURBO_FLOW_C_API int turbo_flow_transport_reply_send_slices_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_slices_request_t *request);
+TURBO_FLOW_C_API int turbo_flow_transport_reply_take_terminal_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_transport_reply_terminal_t *terminal);
+
 typedef struct turbo_flow_adapter_ops_s {
   /**
    * Start one source/sink adapter binding.

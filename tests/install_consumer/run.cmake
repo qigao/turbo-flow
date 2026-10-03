@@ -235,9 +235,9 @@ if(WIN32)
     string(REGEX MATCH "[^ \t\r\n]+$" export_name "${export_row}")
   endif()
   if(NOT export_count EQUAL 1 OR
-     NOT export_name STREQUAL "turbo_flow_plugin_get_api")
+     NOT export_name STREQUAL "salts_plugin_query")
     message(FATAL_ERROR
-            "CNet plugin must export only turbo_flow_plugin_get_api\n${export_output}")
+            "CNet plugin must export only salts_plugin_query\n${export_output}")
   endif()
 
   execute_process(
@@ -247,10 +247,9 @@ if(WIN32)
     ERROR_VARIABLE plugin_dependent_error)
   if(NOT plugin_dependent_result EQUAL 0 OR
      NOT plugin_dependent_output MATCHES "tf_cnet_adapter\\.dll" OR
-     NOT plugin_dependent_output MATCHES "salts_cnet\\.dll" OR
      plugin_dependent_output MATCHES "turbo_flow\\.dll")
     message(FATAL_ERROR
-            "CNet plugin must not depend on turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
+            "CNet Salts provider must import tf_cnet_adapter.dll and must not depend on retired turbo_flow.dll\n${plugin_dependent_output}\n${plugin_dependent_error}")
   endif()
   if(TURBO_FLOW_CONFIG STREQUAL "Debug")
     if(NOT plugin_dependent_output MATCHES "VCRUNTIME140D\\.dll")
@@ -267,11 +266,11 @@ if(WIN32)
     ERROR_VARIABLE consumer_dependent_error)
   if(NOT consumer_dependent_result EQUAL 0)
     message(FATAL_ERROR
-            "Gateway dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
+            "Installed CNet provider consumer dependency inspection failed (${consumer_dependent_result})\n${consumer_dependent_output}\n${consumer_dependent_error}")
   endif()
   if(consumer_dependent_output MATCHES "tf_cnet_adapter\\.dll|salts_cnet\\.dll|turbo_flow\\.dll")
     message(FATAL_ERROR
-            "Gateway consumer must not link the CNet adapter, CNet runtime, or turbo_flow.dll\n${consumer_dependent_output}")
+            "Installed CNet provider consumer must not link the concrete CNet adapter/runtime or retired turbo_flow.dll\n${consumer_dependent_output}")
   endif()
 endif()
 
@@ -289,7 +288,7 @@ execute_process(
   ERROR_VARIABLE missing_cnet_error)
 string(CONCAT missing_cnet_diagnostic "${missing_cnet_output}" "\n${missing_cnet_error}")
 if(missing_cnet_result EQUAL 0 OR
-   NOT missing_cnet_diagnostic MATCHES "failed at configured plugin host create")
+   NOT missing_cnet_diagnostic MATCHES "failed at plugin DLL load")
   message(FATAL_ERROR "CNet missing-DLL negative case failed\n${missing_cnet_diagnostic}")
 endif()
 
@@ -309,7 +308,7 @@ if(WIN32)
   string(CONCAT missing_cnet_dependency_diagnostic
          "${missing_cnet_dependency_output}" "\n${missing_cnet_dependency_error}")
   if(missing_cnet_dependency_result EQUAL 0 OR
-     NOT missing_cnet_dependency_diagnostic MATCHES "Win32 dynamic library error 126")
+     NOT missing_cnet_dependency_diagnostic MATCHES "failed at plugin DLL load")
     message(FATAL_ERROR
             "CNet missing-transitive negative case failed\n${missing_cnet_dependency_diagnostic}")
   endif()

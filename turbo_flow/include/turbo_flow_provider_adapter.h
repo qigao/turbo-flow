@@ -56,6 +56,17 @@ TURBO_FLOW_C_API int turbo_flow_provider_adapter_register(
     turbo_flow_t *flow,
     const turbo_flow_provider_adapter_registration_v1_t *registration);
 
+
+/**
+ * Attach transport-reply capability to one already-bound provider stage.
+ *
+ * The stage must already be bound by turbo_flow_provider_adapter_register().
+ * This never consults the legacy global adapter-name registry.
+ */
+TURBO_FLOW_C_API int turbo_flow_provider_adapter_transport_reply_register(
+    turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

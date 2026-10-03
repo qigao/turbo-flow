@@ -1,0 +1,225 @@
+schema TurboFlowCNetProviderConfig [version(1)];
+
+message CNetStreamSourceConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+
+  @Min(1) uint32 connection_capacity;
+  @Min(1) uint32 command_capacity;
+  @Min(1) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(2) uint32 event_capacity;
+  @Min(1) uint32 max_send_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  uint32 connect_timeout_ms;
+  uint32 read_timeout_ms;
+  uint32 write_timeout_ms;
+  uint32 tls_io_buffer_bytes;
+  uint32 tls_handshake_timeout_ms;
+  uint32 command_buffer_bytes;
+  uint32 event_buffer_bytes;
+
+  uint32 socket_receive_buffer_bytes;
+  uint32 socket_send_buffer_bytes;
+  @Max(1) uint32 keepalive;
+  uint32 keepalive_idle_ms;
+  uint32 keepalive_interval_ms;
+  uint32 keepalive_count;
+  @Max(1) uint32 linger;
+  uint32 linger_ms;
+
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 scheduler_capacity;
+  @Min(1) uint32 scheduler_max_steps_per_poll;
+  @Min(1) uint64 first_message_id;
+  @Min(1) uint32 initial_demand;
+  @Min(1) uint32 stop_timeout_ms;
+
+  @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
+  @Size(min = 1, max = 127) string content_media_type;
+  @Size(min = 1, max = 127) string content_schema;
+  @Size(min = 1, max = 127) string content_type;
+}
+
+message CNetListenerSourceConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 tls_enabled;
+
+  @Min(1) uint32 connection_capacity;
+  @Min(1) uint32 command_capacity;
+  @Min(1) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(2) uint32 event_capacity;
+  @Min(1) uint32 max_send_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  uint32 connect_timeout_ms;
+  uint32 read_timeout_ms;
+  uint32 write_timeout_ms;
+  uint32 tls_io_buffer_bytes;
+  uint32 tls_handshake_timeout_ms;
+  uint32 command_buffer_bytes;
+  uint32 event_buffer_bytes;
+
+  uint32 socket_receive_buffer_bytes;
+  uint32 socket_send_buffer_bytes;
+  @Max(1) uint32 keepalive;
+  uint32 keepalive_idle_ms;
+  uint32 keepalive_interval_ms;
+  uint32 keepalive_count;
+  @Max(1) uint32 linger;
+  uint32 linger_ms;
+
+  @Min(1) uint32 backlog;
+  @Max(1) uint32 reuse_port;
+  @Max(1) uint32 tls_client_auth;
+  @Min(1) uint32 max_connections;
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 scheduler_capacity;
+  @Min(1) uint32 scheduler_max_steps_per_poll;
+  @Min(1) uint64 first_message_id;
+  @Min(1) uint32 initial_demand;
+  @Min(1) uint32 stop_timeout_ms;
+
+  @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
+  @Size(min = 1, max = 127) string content_media_type;
+  @Size(min = 1, max = 127) string content_schema;
+  @Size(min = 1, max = 127) string content_type;
+}
+
+message CNetPacketSourceConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 packet_mode;
+
+  @Min(1) uint32 datagram_send_capacity;
+  @Min(2) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(1) uint32 max_datagram_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  @Max(1) uint32 reuse_port;
+
+  @Min(1) uint32 session_capacity;
+  uint32 kcp_mtu;
+  uint32 kcp_send_window;
+  uint32 kcp_receive_window;
+  uint32 kcp_interval_ms;
+  uint32 kcp_fast_resend;
+  @Max(1) uint32 kcp_no_congestion_window;
+  @Max(1) uint32 kcp_stream_mode;
+  uint32 kcp_send_segment_capacity;
+  uint32 kcp_max_message_bytes;
+
+  @Max(1) uint32 security_mode;
+  uint32 handshake_retry_ms;
+  @Max(1) uint32 fec_backend;
+  uint32 fec_data_shards;
+  uint32 fec_parity_shards;
+  uint32 fec_max_payload_bytes;
+  uint32 fec_receive_group_count;
+
+  @Min(1) uint32 queue_capacity;
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 scheduler_capacity;
+  @Min(1) uint32 scheduler_max_steps_per_poll;
+  @Min(1) uint64 first_message_id;
+  @Min(1) uint32 initial_demand;
+  @Min(1) uint32 stop_timeout_ms;
+
+  @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
+  @Size(min = 1, max = 127) string content_media_type;
+  @Size(min = 1, max = 127) string content_schema;
+  @Size(min = 1, max = 127) string content_type;
+}
+
+message CNetStreamSinkConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+
+  @Min(1) uint32 connection_capacity;
+  @Min(1) uint32 command_capacity;
+  @Min(1) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(2) uint32 event_capacity;
+  @Min(1) uint32 max_send_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  uint32 connect_timeout_ms;
+  uint32 read_timeout_ms;
+  uint32 write_timeout_ms;
+  uint32 tls_io_buffer_bytes;
+  uint32 tls_handshake_timeout_ms;
+  uint32 command_buffer_bytes;
+  uint32 event_buffer_bytes;
+
+  uint32 socket_receive_buffer_bytes;
+  uint32 socket_send_buffer_bytes;
+  @Max(1) uint32 keepalive;
+  uint32 keepalive_idle_ms;
+  uint32 keepalive_interval_ms;
+  uint32 keepalive_count;
+  @Max(1) uint32 linger;
+  uint32 linger_ms;
+
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 actor_command_capacity;
+  @Min(1) uint32 actor_max_steps_per_poll;
+  @Min(1) uint32 stop_timeout_ms;
+}
+
+message CNetDatagramSinkConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+  @Min(1) uint32 datagram_send_capacity;
+  @Min(2) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(1) uint32 max_datagram_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  @Max(1) uint32 reuse_port;
+
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 actor_command_capacity;
+  @Min(1) uint32 actor_max_steps_per_poll;
+  @Min(1) uint32 stop_timeout_ms;
+}
+
+message CNetPacketSinkConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Max(3) uint32 backend;
+  @Max(1) uint32 packet_mode;
+
+  @Min(1) uint32 datagram_send_capacity;
+  @Min(2) uint32 request_capacity;
+  @Min(1) uint32 completion_batch_capacity;
+  @Min(1) uint32 max_datagram_bytes;
+  @Min(1) uint32 receive_buffer_bytes;
+  @Max(1) uint32 reuse_port;
+
+  @Min(1) uint32 session_capacity;
+  uint32 kcp_mtu;
+  uint32 kcp_send_window;
+  uint32 kcp_receive_window;
+  uint32 kcp_interval_ms;
+  uint32 kcp_fast_resend;
+  @Max(1) uint32 kcp_no_congestion_window;
+  @Max(1) uint32 kcp_stream_mode;
+  uint32 kcp_send_segment_capacity;
+  uint32 kcp_max_message_bytes;
+
+  @Max(1) uint32 security_mode;
+  uint32 handshake_retry_ms;
+  @Max(1) uint32 fec_backend;
+  uint32 fec_data_shards;
+  uint32 fec_parity_shards;
+  uint32 fec_max_payload_bytes;
+  uint32 fec_receive_group_count;
+
+  uint32 conversation;
+  @Min(1) uint32 adapter_send_capacity;
+  @Min(1) uint32 max_message_bytes;
+  @Min(1) uint32 actor_command_capacity;
+  @Min(1) uint32 actor_max_steps_per_poll;
+  @Min(1) uint32 stop_timeout_ms;
+}

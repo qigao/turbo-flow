@@ -19,18 +19,57 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(tf_cnet_adapter PUBLIC TurboFlow::Graph Salts::CNet Salts::CFlow Salts::CSTL)
 
-install(FILES include/turbo_flow_cnet.h DESTINATION include)
+salts_idl_target(
+  TARGET turbo_flow_cnet_provider_config
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_cnet_provider_config.schema"
+  ARTIFACT_NAME "cnet_provider_config"
+  ARTIFACTS MESSAGE)
+set_target_properties(${turbo_flow_cnet_provider_config_NATIVE_TARGET} PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
+install(FILES
+  include/turbo_flow_cnet.h
+  include/turbo_flow_cnet_resource.h
+  DESTINATION include)
+
+add_library(tf_cnet_provider_support STATIC
+  src/turbo_flow_cnet_typed_config.c
+  src/turbo_flow_cnet_typed_config_internal.h)
+set_target_properties(tf_cnet_provider_support PROPERTIES
+  FOLDER "io/cnet"
+  POSITION_INDEPENDENT_CODE ON
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+target_include_directories(tf_cnet_provider_support PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  "${turbo_flow_cnet_provider_config_GENERATED_DIR}")
+target_link_libraries(tf_cnet_provider_support PRIVATE
+  tf_cnet_adapter
+  TurboFlow::Product
+  Salts::UriParser
+  ${turbo_flow_cnet_provider_config_NATIVE_TARGET})
+add_dependencies(tf_cnet_provider_support
+  turbo_flow_cnet_provider_config_idl_codegen)
 
 add_library(tf_cnet_plugin SHARED
   src/turbo_flow_cnet_plugin.c
-  src/turbo_flow_cnet_plugin_config.c
-  src/turbo_flow_cnet_plugin_internal.h)
+  src/turbo_flow_cnet_provider_adapter_internal.h)
 cmake_config_target(tf_cnet_plugin FOLDER "io/cnet")
 target_compile_definitions(tf_cnet_plugin PRIVATE TURBO_FLOW_PLUGIN_BUILD)
-target_include_directories(tf_cnet_plugin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-                                                  ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(tf_cnet_plugin PRIVATE tf_cnet_adapter TurboFlow::Product Salts::CSTL
-                                             Salts::UriParser)
+target_include_directories(tf_cnet_plugin PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  "${turbo_flow_cnet_provider_config_GENERATED_DIR}")
+target_link_libraries(tf_cnet_plugin PRIVATE
+  tf_cnet_adapter
+  tf_cnet_provider_support
+  TurboFlow::Product
+  Salts::Plugin
+  ${turbo_flow_cnet_provider_config_NATIVE_TARGET})
+add_dependencies(tf_cnet_plugin
+  turbo_flow_cnet_provider_config_idl_codegen)
 if(WIN32)
   find_package(OpenSSL REQUIRED)
   target_link_libraries(tf_cnet_plugin PRIVATE ws2_32)

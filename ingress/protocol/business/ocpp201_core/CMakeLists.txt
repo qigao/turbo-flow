@@ -11,13 +11,13 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_ocpp201_core_generated_dir}"
   COMMAND
-    "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
     "${_ocpp201_core_schema}"
     --lang c
     --output "${_ocpp201_core_generated_header}"
     --source-output "${_ocpp201_core_generated_source}"
   DEPENDS "${_ocpp201_core_schema}"
-          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+          "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "Generating DataBind 2.0 OCPP 2.0.1 Core typed bindings"
   VERBATIM)

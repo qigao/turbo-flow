@@ -799,27 +799,16 @@ int turbo_flow_register_adapter_settlement(turbo_flow_t *flow, const char *name,
 }
 
 
-int turbo_flow_register_adapter_transport_reply(
-    turbo_flow_t *flow, const char *adapter_name,
+static int flow_transport_reply_attach(
+    flow_adapter_registration_t *adapter,
     const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
-  int index;
-  flow_adapter_registration_t *adapter;
-  if (!flow || !adapter_name || !adapter_name[0] || !ops ||
+  if (!adapter || !ops ||
       ops->size < TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_V1_SIZE ||
       ops->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
-      !ops->capture || !ops->send || !ops->take_terminal) {
+      !ops->capture || !ops->send || !ops->take_terminal)
     return SALTS_EINVAL;
-  }
-  if (flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STARTED ||
-      flow->state == TURBO_FLOW_STATE_STOPPED || flow->state == TURBO_FLOW_STATE_FAILED) {
-    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
-                                     "cannot register transport reply provider after compile");
-  }
-  index = flow_find_adapter(flow, adapter_name);
-  if (index < 0) return SALTS_ENOENT;
-  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
-  if (!adapter) return SALTS_ENOENT;
-  if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u) return SALTS_EINVAL;
+  if ((adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u)
+    return SALTS_EINVAL;
   if (adapter->transport_reply_ops.capture) return SALTS_EALREADY;
   memset(&adapter->transport_reply_ops, 0, sizeof(adapter->transport_reply_ops));
   memcpy(&adapter->transport_reply_ops, ops,
@@ -829,6 +818,62 @@ int turbo_flow_register_adapter_transport_reply(
   adapter->transport_reply_ops.size = sizeof(adapter->transport_reply_ops);
   adapter->transport_reply_ctx = ctx;
   return SALTS_OK;
+}
+
+int turbo_flow_register_adapter_transport_reply(
+    turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
+  int index;
+  flow_adapter_registration_t *adapter;
+  if (!flow || !adapter_name || !adapter_name[0]) return SALTS_EINVAL;
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED ||
+      flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "cannot register transport reply provider after compile");
+  }
+  index = flow_find_adapter(flow, adapter_name);
+  if (index < 0) return SALTS_ENOENT;
+  adapter = (flow_adapter_registration_t *)vec_at(
+      &flow->adapters, (size_t)index);
+  return flow_transport_reply_attach(adapter, ops, ctx);
+}
+
+int turbo_flow_provider_adapter_transport_reply_register(
+    turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx) {
+  int stage_index;
+  flow_stage_plan_impl_t *stage;
+  flow_adapter_registration_t *adapter;
+  int adapter_index;
+
+  if (!flow || !stage_name || !stage_name[0]) return SALTS_EINVAL;
+  if (flow->state == TURBO_FLOW_STATE_COMPILED ||
+      flow->state == TURBO_FLOW_STATE_STARTED ||
+      flow->state == TURBO_FLOW_STATE_STOPPED ||
+      flow->state == TURBO_FLOW_STATE_FAILED) {
+    return flow_set_error_keep_state(
+        flow, SALTS_EBUSY, 0, 0,
+        "cannot register provider transport reply after compile");
+  }
+
+  stage_index = turbo_flow_find_stage(flow, stage_name);
+  if (stage_index < 0) return SALTS_ENOENT;
+  stage = (flow_stage_plan_impl_t *)vec_at(
+      &flow->stages, (size_t)stage_index);
+  if (!stage || !stage->provider_adapter_bound)
+    return SALTS_ENOENT;
+
+  adapter_index = flow_adapter_index_for_stage(
+      flow, stage, (uint32_t)stage_index);
+  if (adapter_index < 0) return SALTS_EPROTO;
+  adapter = (flow_adapter_registration_t *)vec_at(
+      &flow->adapters, (size_t)adapter_index);
+  if (!adapter || !adapter->provider_scoped)
+    return SALTS_EPROTO;
+  return flow_transport_reply_attach(adapter, ops, ctx);
 }
 
 static const flow_adapter_registration_t *flow_transport_reply_adapter(
@@ -842,54 +887,73 @@ static const flow_adapter_registration_t *flow_transport_reply_adapter(
   return adapter && adapter->transport_reply_ops.capture ? adapter : NULL;
 }
 
-int turbo_flow_transport_reply_supported(
-    const turbo_flow_t *flow, const char *adapter_name) {
-  return flow_transport_reply_adapter(flow, adapter_name) ? SALTS_OK : SALTS_ENOTSUP;
+static const flow_adapter_registration_t *flow_transport_reply_stage_adapter(
+    const turbo_flow_t *flow, const char *stage_name) {
+  int stage_index;
+  const flow_adapter_registration_t *adapter;
+  if (!flow || !stage_name || !stage_name[0]) return NULL;
+  if (flow->state != TURBO_FLOW_STATE_COMPILED &&
+      flow->state != TURBO_FLOW_STATE_STARTED &&
+      flow->state != TURBO_FLOW_STATE_STOPPED &&
+      flow->state != TURBO_FLOW_STATE_FAILED)
+    return NULL;
+  stage_index = turbo_flow_find_stage(flow, stage_name);
+  if (stage_index < 0) return NULL;
+  adapter = flow_adapter_for_compiled_stage(flow, (uint32_t)stage_index);
+  return adapter && adapter->provider_scoped &&
+                 adapter->transport_reply_ops.capture
+             ? adapter
+             : NULL;
 }
 
-int turbo_flow_transport_reply_capture(
-    const turbo_flow_t *flow, const char *adapter_name, const turbo_flow_msg_t *message,
+static int flow_transport_reply_capture_impl(
+    const flow_adapter_registration_t *adapter,
+    const turbo_flow_msg_t *message,
     turbo_flow_transport_reply_session_t *session) {
-  const flow_adapter_registration_t *adapter;
   int rc;
   if (!message || !session || session->size < sizeof(*session) ||
-      session->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION) {
+      session->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION)
     return SALTS_EINVAL;
-  }
-  adapter = flow_transport_reply_adapter(flow, adapter_name);
-  if (!adapter) return SALTS_ENOTSUP;
-  *session = (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
-  rc = adapter->transport_reply_ops.capture(adapter->transport_reply_ctx, message, session);
+  if (!adapter || !adapter->transport_reply_ops.capture)
+    return SALTS_ENOTSUP;
+  *session =
+      (turbo_flow_transport_reply_session_t)
+          TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+  rc = adapter->transport_reply_ops.capture(
+      adapter->transport_reply_ctx, message, session);
   if (rc != SALTS_OK) {
-    *session = (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+    *session =
+        (turbo_flow_transport_reply_session_t)
+            TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
     return rc;
   }
   if (session->size != sizeof(*session) ||
       session->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
       session->token_size == 0u ||
       session->token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES) {
-    *session = (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
+    *session =
+        (turbo_flow_transport_reply_session_t)
+            TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
     return SALTS_EPROTO;
   }
   return SALTS_OK;
 }
 
-int turbo_flow_transport_reply_send(
-    const turbo_flow_t *flow, const char *adapter_name,
+static int flow_transport_reply_send_impl(
+    const flow_adapter_registration_t *adapter,
     const turbo_flow_transport_reply_request_t *request) {
-  const flow_adapter_registration_t *adapter;
   if (!request || request->size != sizeof(*request) ||
       request->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
       request->session.size != sizeof(request->session) ||
       request->session.version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
       request->session.token_size == 0u ||
       request->session.token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES ||
-      !request->data || request->data_size == 0u || request->tag == 0u) {
+      !request->data || request->data_size == 0u || request->tag == 0u)
     return SALTS_EINVAL;
-  }
-  adapter = flow_transport_reply_adapter(flow, adapter_name);
-  if (!adapter) return SALTS_ENOTSUP;
-  return adapter->transport_reply_ops.send(adapter->transport_reply_ctx, request);
+  if (!adapter || !adapter->transport_reply_ops.send)
+    return SALTS_ENOTSUP;
+  return adapter->transport_reply_ops.send(
+      adapter->transport_reply_ctx, request);
 }
 
 static int flow_transport_reply_slice_valid(const mem_slice_t *slice) {
@@ -898,7 +962,8 @@ static int flow_transport_reply_slice_valid(const mem_slice_t *slice) {
   uintptr_t data_address;
   size_t used;
   size_t offset;
-  if (!slice || !slice->buffer || !slice->data || slice->length == 0u) return 0;
+  if (!slice || !slice->buffer || !slice->data || slice->length == 0u)
+    return 0;
   base = mem_buffer_const_data(slice->buffer);
   used = mem_buffer_used(slice->buffer);
   if (!base || used == 0u) return 0;
@@ -909,10 +974,9 @@ static int flow_transport_reply_slice_valid(const mem_slice_t *slice) {
   return offset < used && slice->length <= used - offset;
 }
 
-int turbo_flow_transport_reply_send_slices(
-    const turbo_flow_t *flow, const char *adapter_name,
+static int flow_transport_reply_send_slices_impl(
+    const flow_adapter_registration_t *adapter,
     const turbo_flow_transport_reply_slices_request_t *request) {
-  const flow_adapter_registration_t *adapter;
   size_t total = 0u;
   if (!request || request->size != sizeof(*request) ||
       request->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
@@ -922,37 +986,39 @@ int turbo_flow_transport_reply_send_slices(
       request->session.token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES ||
       !request->segments || request->segment_count == 0u ||
       request->segment_count > TURBO_FLOW_TRANSPORT_VECTOR_MAX_SEGMENTS ||
-      request->tag == 0u) {
+      request->tag == 0u)
     return SALTS_EINVAL;
-  }
   for (size_t i = 0u; i < request->segment_count; ++i) {
     if (!flow_transport_reply_slice_valid(&request->segments[i]) ||
-        total > SIZE_MAX - request->segments[i].length) {
+        total > SIZE_MAX - request->segments[i].length)
       return SALTS_EINVAL;
-    }
     total += request->segments[i].length;
   }
   if (total == 0u) return SALTS_EINVAL;
-  adapter = flow_transport_reply_adapter(flow, adapter_name);
-  if (!adapter || !adapter->transport_reply_ops.send_slices) return SALTS_ENOTSUP;
-  return adapter->transport_reply_ops.send_slices(adapter->transport_reply_ctx, request);
+  if (!adapter || !adapter->transport_reply_ops.send_slices)
+    return SALTS_ENOTSUP;
+  return adapter->transport_reply_ops.send_slices(
+      adapter->transport_reply_ctx, request);
 }
 
-int turbo_flow_transport_reply_take_terminal(
-    const turbo_flow_t *flow, const char *adapter_name,
+static int flow_transport_reply_take_terminal_impl(
+    const flow_adapter_registration_t *adapter,
     turbo_flow_transport_reply_terminal_t *terminal) {
-  const flow_adapter_registration_t *adapter;
   int rc;
   if (!terminal || terminal->size < sizeof(*terminal) ||
-      terminal->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION) {
+      terminal->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION)
     return SALTS_EINVAL;
-  }
-  adapter = flow_transport_reply_adapter(flow, adapter_name);
-  if (!adapter) return SALTS_ENOTSUP;
-  *terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
-  rc = adapter->transport_reply_ops.take_terminal(adapter->transport_reply_ctx, terminal);
+  if (!adapter || !adapter->transport_reply_ops.take_terminal)
+    return SALTS_ENOTSUP;
+  *terminal =
+      (turbo_flow_transport_reply_terminal_t)
+          TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+  rc = adapter->transport_reply_ops.take_terminal(
+      adapter->transport_reply_ctx, terminal);
   if (rc != SALTS_OK) {
-    *terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    *terminal =
+        (turbo_flow_transport_reply_terminal_t)
+            TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
     return rc;
   }
   if (terminal->size != sizeof(*terminal) ||
@@ -961,11 +1027,86 @@ int turbo_flow_transport_reply_take_terminal(
       terminal->session.version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
       terminal->session.token_size == 0u ||
       terminal->session.token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES ||
-      terminal->kind == TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_NONE || terminal->tag == 0u) {
-    *terminal = (turbo_flow_transport_reply_terminal_t)TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+      terminal->kind == TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_NONE ||
+      terminal->tag == 0u) {
+    *terminal =
+        (turbo_flow_transport_reply_terminal_t)
+            TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
     return SALTS_EPROTO;
   }
   return SALTS_OK;
+}
+
+int turbo_flow_transport_reply_supported(
+    const turbo_flow_t *flow, const char *adapter_name) {
+  return flow_transport_reply_adapter(flow, adapter_name)
+             ? SALTS_OK
+             : SALTS_ENOTSUP;
+}
+
+int turbo_flow_transport_reply_supported_stage(
+    const turbo_flow_t *flow, const char *stage_name) {
+  return flow_transport_reply_stage_adapter(flow, stage_name)
+             ? SALTS_OK
+             : SALTS_ENOTSUP;
+}
+
+int turbo_flow_transport_reply_capture(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session) {
+  return flow_transport_reply_capture_impl(
+      flow_transport_reply_adapter(flow, adapter_name), message, session);
+}
+
+int turbo_flow_transport_reply_capture_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_msg_t *message,
+    turbo_flow_transport_reply_session_t *session) {
+  return flow_transport_reply_capture_impl(
+      flow_transport_reply_stage_adapter(flow, stage_name), message, session);
+}
+
+int turbo_flow_transport_reply_send(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_request_t *request) {
+  return flow_transport_reply_send_impl(
+      flow_transport_reply_adapter(flow, adapter_name), request);
+}
+
+int turbo_flow_transport_reply_send_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_request_t *request) {
+  return flow_transport_reply_send_impl(
+      flow_transport_reply_stage_adapter(flow, stage_name), request);
+}
+
+int turbo_flow_transport_reply_send_slices(
+    const turbo_flow_t *flow, const char *adapter_name,
+    const turbo_flow_transport_reply_slices_request_t *request) {
+  return flow_transport_reply_send_slices_impl(
+      flow_transport_reply_adapter(flow, adapter_name), request);
+}
+
+int turbo_flow_transport_reply_send_slices_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_transport_reply_slices_request_t *request) {
+  return flow_transport_reply_send_slices_impl(
+      flow_transport_reply_stage_adapter(flow, stage_name), request);
+}
+
+int turbo_flow_transport_reply_take_terminal(
+    const turbo_flow_t *flow, const char *adapter_name,
+    turbo_flow_transport_reply_terminal_t *terminal) {
+  return flow_transport_reply_take_terminal_impl(
+      flow_transport_reply_adapter(flow, adapter_name), terminal);
+}
+
+int turbo_flow_transport_reply_take_terminal_stage(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_transport_reply_terminal_t *terminal) {
+  return flow_transport_reply_take_terminal_impl(
+      flow_transport_reply_stage_adapter(flow, stage_name), terminal);
 }
 
 static int flow_managed_boundary_descriptor_valid(
