@@ -98,11 +98,11 @@ jobs:
           test -z "${DATABIND_ROOT:-}"
           test -z "${DATABIND_HOST_ROOT:-}"
 
-      - name: Apply durable RulesForge E2E validation-only CMake assembly
+      - name: Apply RulesForge provider validation-only CMake assembly
         shell: bash
         run: |
           set -euxo pipefail
-          python3 .github/ci/task4_runtime_assembly.py --rulesforge-e2e
+          python3 .github/ci/task4_runtime_assembly.py --rulesforge
           git diff -- CMakeLists.txt turbo_flow/CMakeLists.txt | tee "$RUNNER_TEMP/rulesforge-focused-cmake.patch"
 
       - name: Configure provider-focused TurboFlow build
