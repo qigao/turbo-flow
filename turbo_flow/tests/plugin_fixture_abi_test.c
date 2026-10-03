@@ -15,15 +15,6 @@ static int probe_add_resource(void *ctx,
     const turbo_flow_plugin_product_resource_provider_v1_t *provider) {
   (void)provider; ++((fixture_probe_t *)ctx)->registrations; return SALTS_OK;
 }
-static int probe_add_transactional_adapter(
-    void *ctx, const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider) {
-  (void)provider; ++((fixture_probe_t *)ctx)->registrations; return SALTS_OK;
-}
-static int probe_add_transactional_resource(
-    void *ctx, const turbo_flow_plugin_transactional_resource_provider_v1_t *provider) {
-  (void)provider; ++((fixture_probe_t *)ctx)->registrations; return SALTS_OK;
-}
-
 spec("plugin fixture shared ABI boundary") {
   it("rejects invalid host and registration ABI without side effects") {
     const turbo_flow_plugin_api_v1_t *api = turbo_flow_plugin_get_api();
@@ -41,8 +32,6 @@ spec("plugin fixture shared ABI boundary") {
     check_not_null(plugin);
     registration.size = sizeof(registration); registration.abi_major = 2u;
     registration.ctx = &probe; registration.add_resource_provider = probe_add_resource;
-    registration.add_transactional_adapter_provider = probe_add_transactional_adapter;
-    registration.add_transactional_resource_provider = probe_add_transactional_resource;
     check_equal(api->register_capabilities(plugin, &registration), SALTS_EINVAL);
     check_equal(probe.registrations, (size_t)0);
     check_equal(api->quiesce(plugin, 0u), SALTS_OK);
