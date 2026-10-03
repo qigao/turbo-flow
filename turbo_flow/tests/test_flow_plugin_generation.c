@@ -183,8 +183,10 @@ static void test_close(
         turbo_flow_plugin_host_destroy(
             test->host, 10u, plugin_error),
         SALTS_OK);
-  stop_unload(&test->registry, test->provider_ref);
-  stop_unload(&test->registry, test->resource_ref);
+  if (salts_plugin_ref_valid(test->provider_ref))
+    stop_unload(&test->registry, test->provider_ref);
+  if (salts_plugin_ref_valid(test->resource_ref))
+    stop_unload(&test->registry, test->resource_ref);
   check_equal(
       salts_plugin_registry_destroy(&test->registry),
       SALTS_PLUGIN_OK);
@@ -289,6 +291,16 @@ spec("canonical provider-backed Graph generation") {
             &test.registry, test.resource_ref, &quiescent),
         SALTS_PLUGIN_OK);
     check_true(quiescent);
+    check_equal(
+        salts_plugin_registry_unload(
+            &test.registry, test.provider_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_unload(
+            &test.registry, test.resource_ref),
+        SALTS_PLUGIN_OK);
+    test.provider_ref = (salts_plugin_ref){0};
+    test.resource_ref = (salts_plugin_ref){0};
 
     test_close(&test, &plugin_error);
   }
