@@ -617,6 +617,8 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPING) return SALTS_EBUSY;
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED) {
     rc = turbo_flow_runtime_owner_quiesce(intake->source_owner, timeout_ms);
+    if (rc == SALTS_OK)
+      rc = turbo_flow_runtime_owner_drain(intake->source_owner, timeout_ms);
     if (rc != SALTS_OK) return intake_owner_fail(intake, rc, NULL);
     intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED;
     intake->status = SALTS_OK;
