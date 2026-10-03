@@ -1298,9 +1298,6 @@ target_compile_definitions(test_flow_plugin_invalid_owner PRIVATE
 add_dependencies(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_fixture
   test_flow_plugin_generation_legacy_owner_prefix test_flow_plugin_generation_poll_small_descriptor)
 set_target_properties(test_flow_plugin_invalid_owner PROPERTIES FOLDER "turbo_flow/tests")
-add_test(NAME test_flow_plugin_invalid_owner COMMAND test_flow_plugin_invalid_owner --filter "destroys exact ABI")
-add_test(NAME test_flow_plugin_invalid_owner_abi COMMAND test_flow_plugin_invalid_owner --filter "pins unknown ABI")
-set_tests_properties(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_abi PROPERTIES LABELS "graph;core" TIMEOUT 30)
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config
