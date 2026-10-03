@@ -101,6 +101,7 @@ cmake_add_test(
   test_protocol_network_intake_config
   SOURCES test_protocol_network_intake_config.c
   LIBS tf_protocol_network_intake_core Salts::TinyTest
+  INCLUDES ${PROJECT_SOURCE_DIR}/io/cnet/src
   FOLDER "ingress/protocol/tests")
 set_tests_properties(test_protocol_network_intake_config
                      PROPERTIES LABELS "protocol-ingress;network-intake;config")
@@ -121,25 +122,24 @@ cmake_add_test(
 set_tests_properties(test_protocol_network_intake_edges
                      PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
 
-add_library(test_protocol_network_source_fixture SHARED
-            protocol_network_source_fixture.c)
-target_link_libraries(test_protocol_network_source_fixture PRIVATE TurboFlow::PluginHost)
-target_compile_definitions(test_protocol_network_source_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
-set_target_properties(
-  test_protocol_network_source_fixture
-  PROPERTIES C_VISIBILITY_PRESET hidden
-             VISIBILITY_INLINES_HIDDEN YES
-             FOLDER "ingress/protocol/tests/plugin-fixtures")
-
 cmake_add_test(
   test_protocol_network_intake
   SOURCES test_protocol_network_intake.c protocol_network_intake_header_cpp.cpp
-  LIBS TurboFlow::ProtocolNetworkIntake Salts::TinyTest
+  LIBS
+    TurboFlow::ProtocolNetworkIntake
+    TurboFlow::CNetAdapter
+    Salts::Plugin
+    Salts::TinyTest
   DEFS
-    FLOW_PROTOCOL_NETWORK_SOURCE_FIXTURE="$<TARGET_FILE:test_protocol_network_source_fixture>"
+    FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
+    FLOW_CNET_RESOURCE_FIXTURE="$<TARGET_FILE:test_cnet_deployment_resource_fixture>"
     FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_intake test_protocol_network_source_fixture tf_protocol_jtt808)
+add_dependencies(
+  test_protocol_network_intake
+  tf_cnet_plugin
+  test_cnet_deployment_resource_fixture
+  tf_protocol_jtt808)
 set_tests_properties(test_protocol_network_intake
                      PROPERTIES LABELS "protocol-ingress;network-intake;plugin")
 
