@@ -114,8 +114,6 @@ typedef struct turbo_flow_plugin_host_config_s {
   void *lifecycle_observer_ctx;
   size_t protocol_provider_capacity;
   size_t business_provider_capacity;
-  size_t transactional_adapter_provider_capacity;
-  size_t transactional_resource_provider_capacity;
   size_t schema_capacity;
   size_t operation_capacity;
   size_t materializer_capacity;
@@ -133,8 +131,6 @@ typedef struct turbo_flow_plugin_host_config_s {
    NULL,                                                                                           \
    16u,                                                                                            \
    16u,                                                                                            \
-   64u,                                                                                            \
-   64u,                                                                                            \
    64u,                                                                                            \
    64u,                                                                                            \
    64u,                                                                                            \
@@ -175,10 +171,6 @@ typedef struct turbo_flow_plugin_product_resource_provider_v1_s {
 
 typedef struct turbo_flow_plugin_protocol_provider_v1_s turbo_flow_plugin_protocol_provider_v1_t;
 typedef struct turbo_flow_plugin_business_provider_v1_s turbo_flow_plugin_business_provider_v1_t;
-typedef struct turbo_flow_plugin_transactional_adapter_provider_v1_s
-    turbo_flow_plugin_transactional_adapter_provider_v1_t;
-typedef struct turbo_flow_plugin_transactional_resource_provider_v1_s
-    turbo_flow_plugin_transactional_resource_provider_v1_t;
 
 #define TURBO_FLOW_PLUGIN_PRODUCT_RESOURCE_PROVIDER_V1_INIT                                        \
   {sizeof(turbo_flow_plugin_product_resource_provider_v1_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,  \
@@ -192,10 +184,6 @@ typedef int (*turbo_flow_plugin_add_protocol_provider_fn)(
     void *ctx, const turbo_flow_plugin_protocol_provider_v1_t *provider);
 typedef int (*turbo_flow_plugin_add_business_provider_fn)(
     void *ctx, const turbo_flow_plugin_business_provider_v1_t *provider);
-typedef int (*turbo_flow_plugin_add_transactional_adapter_provider_fn)(
-    void *ctx, const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider);
-typedef int (*turbo_flow_plugin_add_transactional_resource_provider_fn)(
-    void *ctx, const turbo_flow_plugin_transactional_resource_provider_v1_t *provider);
 
 /** Registration is valid only during one root register_capabilities callback. */
 typedef struct turbo_flow_plugin_registration_v1_s {
@@ -207,8 +195,6 @@ typedef struct turbo_flow_plugin_registration_v1_s {
   turbo_flow_plugin_add_resource_provider_fn add_resource_provider;
   turbo_flow_plugin_add_protocol_provider_fn add_protocol_provider;
   turbo_flow_plugin_add_business_provider_fn add_business_provider;
-  turbo_flow_plugin_add_transactional_adapter_provider_fn add_transactional_adapter_provider;
-  turbo_flow_plugin_add_transactional_resource_provider_fn add_transactional_resource_provider;
   turbo_flow_plugin_add_schema_fn add_schema;
   turbo_flow_plugin_add_operation_fn add_operation;
   turbo_flow_plugin_add_materializer_fn add_materializer;
@@ -292,10 +278,6 @@ TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_adapter_provider_count(const turbo_flow_plugin_host_t *host);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_resource_provider_count(const turbo_flow_plugin_host_t *host);
-TURBO_FLOW_C_API size_t
-turbo_flow_plugin_host_transactional_adapter_provider_count(const turbo_flow_plugin_host_t *host);
-TURBO_FLOW_C_API size_t
-turbo_flow_plugin_host_transactional_resource_provider_count(const turbo_flow_plugin_host_t *host);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_host_materializer_count(const turbo_flow_plugin_host_t *host);
 TURBO_FLOW_C_API size_t
