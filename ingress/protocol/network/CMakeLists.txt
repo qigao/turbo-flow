@@ -10,7 +10,8 @@ set_target_properties(
 target_include_directories(
   tf_protocol_network_intake_core
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
-         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+         ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${PROJECT_SOURCE_DIR}/io/cnet/src)
 target_link_libraries(
   tf_protocol_network_intake_core
   PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngress TurboFlow::PluginHost
@@ -30,11 +31,16 @@ target_include_directories(
   tf_protocol_network_intake
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+          ${PROJECT_SOURCE_DIR}/turbo_flow/src
+          ${PROJECT_SOURCE_DIR}/io/cnet/src)
 target_link_libraries(
   tf_protocol_network_intake
   PUBLIC TurboFlow::Graph TurboFlow::PluginHost
-  PRIVATE tf_protocol_network_intake_core TurboFlow::CNetAdapter
+  PRIVATE tf_protocol_network_intake_core
+          TurboFlow::Product
+          TurboFlow::CNetAdapter
+          tf_cnet_provider_support
           xxHash::xxhash)
 
 install(
