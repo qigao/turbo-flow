@@ -102,8 +102,6 @@ struct turbo_flow_plugin_catalog_snapshot_s {
   vec_t resource_providers;
   vec_t protocol_providers;
   vec_t business_providers;
-  vec_t transactional_adapter_providers;
-  vec_t transactional_resource_providers;
   vec_t schemas;
   vec_t operations;
   vec_t materializers;
@@ -817,10 +815,6 @@ static void flow_plugin_registration_rollback(flow_plugin_registration_context_t
                                registration->protocol_count_before);
   flow_plugin_zero_vector_tail(&registration->host->business_providers,
                                registration->business_count_before);
-  flow_plugin_zero_vector_tail(&registration->host->transactional_adapter_providers,
-                               registration->transactional_adapter_count_before);
-  flow_plugin_zero_vector_tail(&registration->host->transactional_resource_providers,
-                               registration->transactional_resource_count_before);
   flow_plugin_zero_vector_tail(&registration->host->schemas, registration->schema_count_before);
   flow_plugin_zero_vector_tail(&registration->host->operations,
                                registration->operation_count_before);
@@ -896,15 +890,6 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
       vec_init_bytes(&host->business_providers, sizeof(flow_plugin_business_provider_t),
                      _Alignof(turbo_flow_max_align_t), host->config.business_provider_capacity));
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_stl_error(vec_init_bytes(
-      &host->transactional_adapter_providers, sizeof(flow_plugin_transactional_adapter_provider_t),
-      _Alignof(turbo_flow_max_align_t), host->config.transactional_adapter_provider_capacity));
-  if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_stl_error(vec_init_bytes(&host->transactional_resource_providers,
-                                           sizeof(flow_plugin_transactional_resource_provider_t),
-                                           _Alignof(turbo_flow_max_align_t),
-                                           host->config.transactional_resource_provider_capacity));
-  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_stl_error(vec_init_bytes(&host->schemas, sizeof(flow_plugin_schema_t),
                                            _Alignof(turbo_flow_max_align_t),
                                            host->config.schema_capacity));
@@ -922,12 +907,6 @@ static int flow_plugin_vectors_initialize(turbo_flow_plugin_host_t *host) {
   if (rc == SALTS_OK && host->config.business_provider_capacity > 0u)
     rc = turbo_flow_stl_error(
         vec_reserve(&host->business_providers, host->config.business_provider_capacity));
-  if (rc == SALTS_OK && host->config.transactional_adapter_provider_capacity > 0u)
-    rc = turbo_flow_stl_error(vec_reserve(&host->transactional_adapter_providers,
-                                          host->config.transactional_adapter_provider_capacity));
-  if (rc == SALTS_OK && host->config.transactional_resource_provider_capacity > 0u)
-    rc = turbo_flow_stl_error(vec_reserve(&host->transactional_resource_providers,
-                                          host->config.transactional_resource_provider_capacity));
   if (rc == SALTS_OK && host->config.schema_capacity > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&host->schemas, host->config.schema_capacity));
   return rc;
@@ -939,8 +918,6 @@ static void flow_plugin_vectors_destroy(turbo_flow_plugin_host_t *host) {
   vec_destroy(&host->materializers);
   vec_destroy(&host->operations);
   vec_destroy(&host->schemas);
-  vec_destroy(&host->transactional_resource_providers);
-  vec_destroy(&host->transactional_adapter_providers);
   vec_destroy(&host->business_providers);
   vec_destroy(&host->protocol_providers);
   vec_destroy(&host->resource_providers);
@@ -969,8 +946,6 @@ int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_config_t *config,
       normalized.resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.protocol_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.business_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      normalized.transactional_adapter_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
-      normalized.transactional_resource_provider_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.schema_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.operation_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
       normalized.materializer_capacity > TURBO_FLOW_PLUGIN_HOST_MAX_PROVIDERS ||
@@ -1079,10 +1054,6 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
   registration.resource_count_before = vec_size(&host->resource_providers);
   registration.protocol_count_before = vec_size(&host->protocol_providers);
   registration.business_count_before = vec_size(&host->business_providers);
-  registration.transactional_adapter_count_before =
-      vec_size(&host->transactional_adapter_providers);
-  registration.transactional_resource_count_before =
-      vec_size(&host->transactional_resource_providers);
   registration.schema_count_before = vec_size(&host->schemas);
   registration.operation_count_before = vec_size(&host->operations);
   registration.materializer_count_before = vec_size(&host->materializers);
@@ -1096,10 +1067,6 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
   registration_api.add_resource_provider = flow_plugin_add_resource_provider;
   registration_api.add_protocol_provider = flow_plugin_add_protocol_provider;
   registration_api.add_business_provider = flow_plugin_add_business_provider;
-  registration_api.add_transactional_adapter_provider =
-      flow_plugin_add_transactional_adapter_provider;
-  registration_api.add_transactional_resource_provider =
-      flow_plugin_add_transactional_resource_provider;
   registration_api.add_schema = flow_plugin_add_schema;
   registration_api.add_operation = flow_plugin_add_operation;
   registration_api.add_materializer = flow_plugin_add_materializer;
@@ -1118,12 +1085,6 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
       actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL;
     if (vec_size(&host->business_providers) > registration.business_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS;
-    if (vec_size(&host->transactional_adapter_providers) >
-        registration.transactional_adapter_count_before)
-      actual |= TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER;
-    if (vec_size(&host->transactional_resource_providers) >
-        registration.transactional_resource_count_before)
-      actual |= TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE;
     if (vec_size(&host->schemas) > registration.schema_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_SCHEMA;
     if (vec_size(&host->operations) > registration.operation_count_before)
@@ -1132,7 +1093,7 @@ static int flow_plugin_host_load_expected(turbo_flow_plugin_host_t *host, const 
       actual |= TURBO_FLOW_PLUGIN_CAP_MATERIALIZER;
     if (vec_size(&host->protocol_mappers) > registration.protocol_mapper_count_before)
       actual |= TURBO_FLOW_PLUGIN_CAP_PROTOCOL_MAPPER;
-    if (actual != (api->capabilities & ~TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL)) rc = SALTS_EPROTO;
+    if (actual != api->capabilities) rc = SALTS_EPROTO;
   }
   if (rc != SALTS_OK) {
     flow_plugin_registration_rollback(&registration);
@@ -1233,16 +1194,6 @@ size_t turbo_flow_plugin_host_resource_provider_count(const turbo_flow_plugin_ho
   return host ? vec_size(&host->resource_providers) : 0u;
 }
 
-size_t
-turbo_flow_plugin_host_transactional_adapter_provider_count(const turbo_flow_plugin_host_t *host) {
-  return host ? vec_size(&host->transactional_adapter_providers) : 0u;
-}
-
-size_t
-turbo_flow_plugin_host_transactional_resource_provider_count(const turbo_flow_plugin_host_t *host) {
-  return host ? vec_size(&host->transactional_resource_providers) : 0u;
-}
-
 size_t turbo_flow_plugin_host_materializer_count(const turbo_flow_plugin_host_t *host) {
   return host ? vec_size(&host->materializers) : 0u;
 }
@@ -1254,9 +1205,8 @@ size_t turbo_flow_plugin_host_protocol_mapper_count(const turbo_flow_plugin_host
 static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_snapshot_t *snapshot,
                                                    size_t adapters, size_t resources,
                                                    size_t protocols, size_t businesses,
-                                                   size_t transactional_adapters,
-                                                   size_t transactional_resources, size_t schemas,
-                                                   size_t operations, size_t materializers,
+                                                   size_t schemas, size_t operations,
+                                                   size_t materializers,
                                                    size_t protocol_mappers) {
   int rc = turbo_flow_stl_error(vec_init_bytes(
       &snapshot->protocol_mappers,
@@ -1304,16 +1254,6 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
                                            sizeof(turbo_flow_protocol_business_plugin_api_t),
                                            _Alignof(turbo_flow_protocol_business_plugin_api_t), businesses));
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_stl_error(
-      vec_init_bytes(&snapshot->transactional_adapter_providers,
-                     sizeof(turbo_flow_plugin_transactional_adapter_provider_v1_t),
-                     _Alignof(turbo_flow_plugin_transactional_adapter_provider_v1_t), transactional_adapters));
-  if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_stl_error(
-      vec_init_bytes(&snapshot->transactional_resource_providers,
-                     sizeof(turbo_flow_plugin_transactional_resource_provider_v1_t),
-                     _Alignof(turbo_flow_plugin_transactional_resource_provider_v1_t), transactional_resources));
-  if (rc != SALTS_OK) return rc;
   if (adapters > 0u) rc = turbo_flow_stl_error(vec_reserve(&snapshot->adapter_providers, adapters));
   if (rc == SALTS_OK && resources > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->resource_providers, resources));
@@ -1321,12 +1261,6 @@ static int flow_plugin_snapshot_vectors_initialize(turbo_flow_plugin_catalog_sna
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->protocol_providers, protocols));
   if (rc == SALTS_OK && businesses > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->business_providers, businesses));
-  if (rc == SALTS_OK && transactional_adapters > 0u)
-    rc = turbo_flow_stl_error(
-        vec_reserve(&snapshot->transactional_adapter_providers, transactional_adapters));
-  if (rc == SALTS_OK && transactional_resources > 0u)
-    rc = turbo_flow_stl_error(
-        vec_reserve(&snapshot->transactional_resource_providers, transactional_resources));
   if (rc == SALTS_OK && schemas > 0u)
     rc = turbo_flow_stl_error(vec_reserve(&snapshot->schemas, schemas));
   return rc;
@@ -1338,8 +1272,6 @@ static void flow_plugin_snapshot_vectors_destroy(turbo_flow_plugin_catalog_snaps
   vec_destroy(&snapshot->materializers);
   vec_destroy(&snapshot->operations);
   vec_destroy(&snapshot->schemas);
-  vec_destroy(&snapshot->transactional_resource_providers);
-  vec_destroy(&snapshot->transactional_adapter_providers);
   vec_destroy(&snapshot->business_providers);
   vec_destroy(&snapshot->protocol_providers);
   vec_destroy(&snapshot->resource_providers);
@@ -1375,10 +1307,8 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
   rc = flow_plugin_snapshot_vectors_initialize(
       snapshot, vec_size(&host->adapter_providers), vec_size(&host->resource_providers),
       vec_size(&host->protocol_providers), vec_size(&host->business_providers),
-      vec_size(&host->transactional_adapter_providers),
-      vec_size(&host->transactional_resource_providers), vec_size(&host->schemas),
-      vec_size(&host->operations), vec_size(&host->materializers),
-      vec_size(&host->protocol_mappers));
+      vec_size(&host->schemas), vec_size(&host->operations),
+      vec_size(&host->materializers), vec_size(&host->protocol_mappers));
   if (rc != SALTS_OK) goto allocation_failed;
   for (size_t i = 0u; i < vec_size(&host->adapter_providers); ++i) {
     const flow_plugin_adapter_provider_t *entry =
@@ -1422,30 +1352,6 @@ int turbo_flow_plugin_catalog_snapshot_create(turbo_flow_plugin_host_t *host,
       goto allocation_failed;
     }
     rc = turbo_flow_stl_error(vec_push(&snapshot->business_providers, &entry->provider));
-    if (rc != SALTS_OK) goto allocation_failed;
-  }
-  for (size_t i = 0u; i < vec_size(&host->transactional_adapter_providers); ++i) {
-    const flow_plugin_transactional_adapter_provider_t *entry =
-        (const flow_plugin_transactional_adapter_provider_t *)vec_at_const(
-            &host->transactional_adapter_providers, i);
-    if (!entry) {
-      rc = SALTS_EPROTO;
-      goto allocation_failed;
-    }
-    rc = turbo_flow_stl_error(
-        vec_push(&snapshot->transactional_adapter_providers, &entry->provider));
-    if (rc != SALTS_OK) goto allocation_failed;
-  }
-  for (size_t i = 0u; i < vec_size(&host->transactional_resource_providers); ++i) {
-    const flow_plugin_transactional_resource_provider_t *entry =
-        (const flow_plugin_transactional_resource_provider_t *)vec_at_const(
-            &host->transactional_resource_providers, i);
-    if (!entry) {
-      rc = SALTS_EPROTO;
-      goto allocation_failed;
-    }
-    rc = turbo_flow_stl_error(
-        vec_push(&snapshot->transactional_resource_providers, &entry->provider));
     if (rc != SALTS_OK) goto allocation_failed;
   }
   for (size_t i = 0u; i < vec_size(&host->schemas); ++i) {
@@ -1581,26 +1487,6 @@ int turbo_flow_plugin_catalog_snapshot_operation_catalog(
   if (!snapshot || !snapshot->references) return SALTS_EINVAL;
   out->entries = vec_data_const(&snapshot->operations);
   out->count = vec_size(&snapshot->operations);
-  return SALTS_OK;
-}
-
-int turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
-    const turbo_flow_plugin_catalog_snapshot_t *snapshot,
-    turbo_flow_plugin_transactional_product_catalog_v1_t *catalog_out) {
-  if (!snapshot || snapshot->references == 0u || !catalog_out ||
-      catalog_out->size != sizeof(*catalog_out) ||
-      catalog_out->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      catalog_out->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR)
-    return SALTS_EINVAL;
-  catalog_out->abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
-  catalog_out->adapter_providers =
-      (const turbo_flow_plugin_transactional_adapter_provider_v1_t *)vec_data_const(
-          &snapshot->transactional_adapter_providers);
-  catalog_out->adapter_provider_count = vec_size(&snapshot->transactional_adapter_providers);
-  catalog_out->resource_providers =
-      (const turbo_flow_plugin_transactional_resource_provider_v1_t *)vec_data_const(
-          &snapshot->transactional_resource_providers);
-  catalog_out->resource_provider_count = vec_size(&snapshot->transactional_resource_providers);
   return SALTS_OK;
 }
 
