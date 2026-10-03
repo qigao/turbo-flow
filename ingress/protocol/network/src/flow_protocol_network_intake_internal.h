@@ -6,7 +6,7 @@
 #include "turbo_flow_protocol_source.h"
 #include "turbo_flow_protocol_mapper.h"
 #include "turbo_flow_resolved_config.h"
-#include "turbo_flow_cnet_typed_config_internal.h"
+#include "turbo_flow_cnet_source_contract_internal.h"
 
 #ifdef __cplusplus
 extern "C" {
