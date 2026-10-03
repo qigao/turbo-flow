@@ -148,6 +148,7 @@ add_library(turbo_flow_product SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_config_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_instance.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_generation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_product.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_flow_provider_adapter.h
