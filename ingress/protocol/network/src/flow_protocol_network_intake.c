@@ -1,6 +1,7 @@
 #include "turbo_flow_protocol_network_intake.h"
 
 #include "flow_protocol_network_intake_internal.h"
+#include "flow_provider_instance_internal.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_plugin_protocol.h"
 #include "turbo_flow_plugin_protocol_mapper.h"
@@ -17,7 +18,8 @@ struct turbo_flow_protocol_network_intake_s {
   turbo_flow_protocol_registry_t *protocol_registry;
   turbo_flow_protocol_owner_t *protocol_owner;
   turbo_flow_protocol_t *protocol;
-  turbo_flow_plugin_product_owner_v1_t source_owner;
+  flow_compiled_provider_instance_t *source_instance;
+  turbo_flow_runtime_owner *source_owner;
   flow_protocol_network_intake_sink_t *sink;
   flow_protocol_network_intake_settings_t settings;
   turbo_flow_protocol_mapper_v1_t mapper;
@@ -44,13 +46,13 @@ static int intake_owner_public_validate(
     const turbo_flow_protocol_network_intake_config_t *config, turbo_flow_t **flow_io,
     turbo_flow_protocol_network_intake_t **out, turbo_flow_config_error_t *error) {
   if (out) *out = NULL;
-  if (!config || config->size < TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE ||
-      (config->size > TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE &&
-       config->size < sizeof(*config)) ||
-      config->version != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION || !config->catalog ||
-      !config->resolved || !config->downstream_flow ||
+  if (!config || config->size != sizeof(*config) ||
+      config->version != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION ||
+      !config->catalog || !config->resolved ||
+      !config->provider_resolver || !config->resource_resolver ||
+      !config->downstream_flow ||
       turbo_flow_state(config->downstream_flow) != TURBO_FLOW_STATE_STARTED ||
-      !config->source_adapter_name || !config->source_adapter_name[0] ||
+      !config->source_stage_name || !config->source_stage_name[0] ||
       !config->decoder_adapter_name || !config->decoder_adapter_name[0] ||
       !config->decoded_source_name || !config->decoded_source_name[0] ||
       !flow_io || !*flow_io || !out || !error ||
@@ -95,27 +97,6 @@ static int intake_owner_reply_policy(
   settings->reply_max_encoded_bytes = policy->max_encoded_bytes;
   return SALTS_OK;
 }
-
-static int intake_owner_product_catalog(
-    turbo_flow_plugin_catalog_snapshot_t *snapshot,
-    turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    turbo_flow_config_error_t *error) {
-  int rc;
-  *catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
-      TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
-  rc = turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, catalog);
-  if (rc != SALTS_OK)
-    return intake_owner_error(error, rc, "$.providers",
-                              "failed to project transactional provider catalog");
-  if (catalog->size != sizeof(*catalog) ||
-      catalog->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      catalog->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      (catalog->adapter_provider_count != 0u && !catalog->adapter_providers))
-    return intake_owner_error(error, SALTS_EPROTO, "$.providers",
-                              "transactional provider catalog is malformed");
-  return SALTS_OK;
-}
-
 
 static int intake_owner_mapper_bind(
     turbo_flow_plugin_catalog_snapshot_t *snapshot,
@@ -196,103 +177,66 @@ static int intake_owner_mapper_bind(
   return SALTS_OK;
 }
 
-static int intake_owner_source_provider(
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    const turbo_flow_resolved_config_t *resolved, const char *source_name,
-    const turbo_flow_plugin_transactional_adapter_provider_v1_t **provider_out,
-    turbo_flow_config_error_t *error) {
-  turbo_flow_resolved_adapter_view_t source = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
-  const turbo_flow_plugin_transactional_adapter_provider_v1_t *found = NULL;
-  size_t matches = 0u;
+static int intake_owner_source_release(
+    turbo_flow_protocol_network_intake_t *intake, int destroy_flow) {
+  int first = SALTS_OK;
   int rc;
-  if (provider_out) *provider_out = NULL;
-  if (!catalog || !resolved || !source_name || !provider_out) return SALTS_EINVAL;
-  rc = turbo_flow_resolved_config_adapter(resolved, source_name, &source);
-  if (rc != SALTS_OK || !source.kind || !source.kind[0])
-    return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_EINVAL, "$.adapters",
-                              "configured Source adapter is missing or malformed");
-  for (size_t i = 0u; i < catalog->adapter_provider_count; ++i) {
-    const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider =
-        &catalog->adapter_providers[i];
-    if (provider->size != sizeof(*provider) ||
-        provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-        provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !provider->kind ||
-        !provider->kind[0] || !provider->preflight || !provider->materialize)
-      return intake_owner_error(error, SALTS_EPROTO, "$.providers.adapters",
-                                "transactional Source provider is malformed");
-    if (strcmp(provider->kind, source.kind) != 0) continue;
-    found = provider;
-    ++matches;
+  if (!intake) return SALTS_EINVAL;
+
+  if (intake->source_owner) {
+    rc = turbo_flow_runtime_owner_shutdown(intake->source_owner);
+    if (rc != SALTS_OK && first == SALTS_OK) first = rc;
   }
-  if (matches == 0u)
-    return intake_owner_error(error, SALTS_ENOTSUP, "$.providers.adapters",
-                              "configured Source kind has no transactional provider");
-  if (matches != 1u)
-    return intake_owner_error(error, SALTS_EALREADY, "$.providers.adapters",
-                              "configured Source kind has duplicate transactional providers");
-  *provider_out = found;
-  return SALTS_OK;
-}
 
-static int intake_owner_source_owner_abi_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
-  return owner && owner->size == sizeof(*owner) &&
-         owner->abi_major == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR &&
-         owner->abi_minor == TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
-}
-
-static int intake_owner_source_owner_valid(const turbo_flow_plugin_product_owner_v1_t *owner) {
-  const turbo_flow_plugin_product_owner_flags_t known =
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD | TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE |
-      TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-  return intake_owner_source_owner_abi_valid(owner) && owner->ctx &&
-         (owner->flags & ~known) == 0u &&
-         (((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD) != 0u) !=
-          ((owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_THREAD_SAFE) != 0u)) &&
-         (owner->flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u && owner->quiesce &&
-         owner->drain && owner->shutdown && owner->destroy && owner->poll;
-}
-
-static void intake_owner_destroy_unstarted_product(
-    turbo_flow_plugin_product_owner_v1_t *owner) {
-  if (!owner || !owner->ctx || !owner->destroy) return;
-  /* The Graph has already removed every registered callback. This mirrors generation-create
-     rollback: an unstarted Product owner is retired directly by its validated destroy callback. */
-  owner->destroy(owner->ctx);
-  *owner = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-}
-
-static void intake_owner_pretransfer_cleanup(turbo_flow_protocol_network_intake_t *intake) {
-  if (!intake) return;
-  flow_protocol_network_intake_sink_destroy(intake->sink);
-  if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-  if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-  if (intake->catalog) turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
-  free(intake);
-}
-
-static void intake_owner_failed_create_cleanup(turbo_flow_protocol_network_intake_t *intake) {
-  if (!intake) return;
-  if (intake->flow) {
+  if (destroy_flow && intake->flow) {
     turbo_flow_destroy(intake->flow);
     intake->flow = NULL;
   }
-  intake_owner_destroy_unstarted_product(&intake->source_owner);
+
+  if (intake->source_instance && intake->source_owner) {
+    rc = flow_compiled_provider_instance_owner_destroy(
+        intake->source_instance);
+    if (rc != SALTS_OK && first == SALTS_OK) first = rc;
+    if (rc == SALTS_OK) intake->source_owner = NULL;
+  }
+
+  if (intake->source_instance && !intake->source_owner) {
+    rc = flow_compiled_provider_instance_release(
+        &intake->source_instance);
+    if (rc != SALTS_OK && first == SALTS_OK) first = rc;
+  }
+  return first;
+}
+
+static void intake_owner_pretransfer_cleanup(
+    turbo_flow_protocol_network_intake_t *intake) {
+  if (!intake) return;
+  (void)intake_owner_source_release(intake, 0);
   flow_protocol_network_intake_sink_destroy(intake->sink);
-  if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-  if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-  if (intake->catalog) turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
+  if (intake->protocol_owner)
+    turbo_flow_protocol_owner_destroy(intake->protocol_owner);
+  if (intake->protocol_registry)
+    (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
+  if (intake->catalog)
+    turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
   free(intake);
 }
 
-static void intake_owner_pin_unretirable(turbo_flow_protocol_network_intake_t *intake) {
+static void intake_owner_failed_create_cleanup(
+    turbo_flow_protocol_network_intake_t *intake) {
   if (!intake) return;
-  if (intake->flow) turbo_flow_destroy(intake->flow);
+  if (intake->source_owner) {
+    (void)turbo_flow_runtime_owner_quiesce(intake->source_owner, 0u);
+    (void)turbo_flow_runtime_owner_drain(intake->source_owner, 0u);
+  }
+  (void)intake_owner_source_release(intake, 1);
   flow_protocol_network_intake_sink_destroy(intake->sink);
-  if (intake->protocol_owner) turbo_flow_protocol_owner_destroy(intake->protocol_owner);
-  if (intake->protocol_registry) (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
-  /* Keep the explicit catalog retain alive forever. The current ABI has no force-unload or
-     owner-repair operation for an opaque Product owner whose layout cannot be trusted. */
-  intake->catalog = NULL;
+  if (intake->protocol_owner)
+    turbo_flow_protocol_owner_destroy(intake->protocol_owner);
+  if (intake->protocol_registry)
+    (void)turbo_flow_protocol_registry_destroy(intake->protocol_registry);
+  if (intake->catalog)
+    turbo_flow_plugin_catalog_snapshot_destroy(intake->catalog);
   free(intake);
 }
 
@@ -307,7 +251,7 @@ static int intake_owner_refresh_endpoint(turbo_flow_protocol_network_intake_t *i
     if (rc == SALTS_ENOTSUP || rc == SALTS_ENOENT) continue;
     if (rc != SALTS_OK) return rc;
     if (!snapshot.adapter_name ||
-        strcmp(snapshot.adapter_name, intake->settings.source_adapter_name) != 0)
+        strcmp(snapshot.adapter_name, intake->settings.source_stage_name) != 0)
       continue;
     terminator = (const char *)memchr(snapshot.endpoint, '\0', sizeof(snapshot.endpoint));
     if (!terminator) return SALTS_EPROTO;
@@ -333,7 +277,7 @@ static int intake_owner_compiled_topology_validate(
   for (size_t i = 0u; i < turbo_flow_stage_count(intake->flow); ++i) {
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(intake->flow, i);
     if (!stage || !stage->adapter_name) continue;
-    if (strcmp(stage->adapter_name, intake->settings.source_adapter_name) == 0)
+    if (strcmp(stage->adapter_name, intake->settings.source_stage_name) == 0)
       source_index = i;
     if (strcmp(stage->adapter_name, intake->settings.decoder_adapter_name) == 0)
       decoder_index = i;
@@ -534,7 +478,7 @@ int turbo_flow_protocol_network_intake_create(
   }
   if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
     rc = turbo_flow_transport_reply_supported(intake->flow,
-                                              intake->settings.source_adapter_name);
+                                              intake->settings.source_stage_name);
     if (rc != SALTS_OK) {
       intake_owner_failed_create_cleanup(intake);
       return intake_owner_error(error, rc, "$.adapters.reply",
