@@ -347,187 +347,147 @@ static int flow_plugin_generation_bind_operation_materializers(
   return SALTS_OK;
 }
 
-static int flow_plugin_generation_materialize(
-    turbo_flow_plugin_generation_t *generation, const turbo_flow_resolved_config_t *resolved,
-    const turbo_flow_plugin_transactional_product_catalog_v1_t *catalog,
-    turbo_flow_config_error_t *error) {
-  const size_t stage_count = turbo_flow_stage_count(generation->flow);
-  for (int resource = 1; resource >= 0; --resource) {
-    for (size_t i = 0u; i < stage_count; ++i) {
-      const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(generation->flow, i);
-      const char *name = flow_plugin_generation_product_reference(stage, resource);
-      const void *untyped_provider = NULL;
-      turbo_flow_plugin_product_owner_v1_t owner = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-      flow_plugin_generation_owner_t entry;
-      int rc;
-      if (!name || flow_plugin_generation_reference_seen(generation->flow, i, resource, name))
-        continue;
-      rc = flow_plugin_generation_resolve_reference(catalog, resolved, name, resource,
-                                                    &untyped_provider, error);
-      if (rc != SALTS_OK) return rc;
-      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-      if (resource) {
-        const turbo_flow_plugin_transactional_resource_provider_v1_t *provider =
-            (const turbo_flow_plugin_transactional_resource_provider_v1_t *)untyped_provider;
-        rc = provider->materialize(provider->ctx, generation->flow, resolved, name, &owner, error);
-      } else {
-        const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider =
-            (const turbo_flow_plugin_transactional_adapter_provider_v1_t *)untyped_provider;
-        rc = provider->materialize(provider->ctx, generation->flow, resolved, name, &owner, error);
-      }
-      if (rc != SALTS_OK)
-        return flow_plugin_generation_provider_error(
-            error, rc, resource ? "channels" : "adapters", name,
-            resource ? "resource provider materialization failed"
-                     : "adapter provider materialization failed");
-      if (!flow_plugin_generation_owner_abi_valid(&owner)) {
-        /* Unknown layout grants no callback authority. Pin the Graph and module permanently;
-           the current ABI intentionally has no force-unload or owner-repair operation. */
-        generation->unretirable_owner = name;
-        generation->unretirable_resource = resource;
-        return flow_plugin_generation_provider_error(
-            error, SALTS_EINVAL, resource ? "channels" : "adapters", name,
-            "provider returned an incompatible Product owner ABI");
-      }
-      if (!flow_plugin_generation_owner_valid(&owner)) {
-        if (owner.destroy && owner.ctx) {
-          memset(&entry, 0, sizeof(entry));
-          entry.owner = owner;
-          /* No lifecycle may run on a rejected owner. Only its validated destroy is usable,
-             after the Graph has removed all registered callback references. */
-          entry.state = FLOW_PLUGIN_GENERATION_OWNER_SHUTDOWN;
-          entry.name = name;
-          entry.resource = resource;
-          rc = turbo_flow_stl_error(vec_push(&generation->owners, &entry));
-          if (rc != SALTS_OK) {
-            turbo_flow_destroy(generation->flow);
-            generation->flow = NULL;
-            owner.destroy(owner.ctx);
-            return flow_plugin_generation_error(
-                error, rc, "$.generation.owners",
-                "reserved owner storage rejected invalid-owner cleanup");
-          }
-        } else {
-          generation->unretirable_owner = name;
-          generation->unretirable_resource = resource;
-        }
-        return flow_plugin_generation_provider_error(
-            error, SALTS_EPROTO, resource ? "channels" : "adapters", name,
-            "provider returned an invalid Product owner vtable");
-      }
-      memset(&entry, 0, sizeof(entry));
-      entry.owner = owner;
-      entry.state = FLOW_PLUGIN_GENERATION_OWNER_ACTIVE;
-      entry.name = name;
-      entry.resource = resource;
-      rc = turbo_flow_stl_error(vec_push(&generation->owners, &entry));
-      if (rc != SALTS_OK) {
-        turbo_flow_destroy(generation->flow);
-        generation->flow = NULL;
-        owner.destroy(owner.ctx);
-        return flow_plugin_generation_error(error, rc, "$.generation.owners",
-                                            "reserved owner storage rejected materialization");
-      }
-    }
-  }
-  return SALTS_OK;
-}
-
 int turbo_flow_plugin_generation_create(
-    turbo_flow_plugin_catalog_snapshot_t *snapshot, const turbo_flow_resolved_config_t *resolved,
-    turbo_flow_t **flow_io, const turbo_flow_plugin_generation_config_t *config,
-    turbo_flow_plugin_result_domain_t *domain, turbo_flow_plugin_generation_t **generation_out,
-    turbo_flow_plugin_generation_t **cleanup_out, turbo_flow_config_error_t *error) {
-  turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
-      TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
+    const turbo_flow_resolved_config_t *resolved,
+    turbo_flow_t **flow_io,
+    const turbo_flow_plugin_generation_config_t *config,
+    turbo_flow_plugin_result_domain_t *domain,
+    turbo_flow_plugin_generation_t **generation_out,
+    turbo_flow_plugin_generation_t **cleanup_out,
+    turbo_flow_config_error_t *error) {
   turbo_flow_plugin_generation_t *generation;
-  size_t required = 0;
+  turbo_flow_config_error_t cleanup_error =
+      TURBO_FLOW_CONFIG_ERROR_INIT;
   int rc;
+
   if (generation_out) *generation_out = NULL;
   if (cleanup_out) *cleanup_out = NULL;
-  if (!snapshot || !resolved || !flow_io || !*flow_io || !config || !generation_out ||
-      !cleanup_out || generation_out == cleanup_out || !error || error->size != sizeof(*error) ||
-      config->size != sizeof(*config) || config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
+  if (!snapshot || !resolved || !flow_io || !*flow_io || !config ||
+      !generation_out || !cleanup_out || generation_out == cleanup_out ||
+      !error || error->size != sizeof(*error) ||
+      config->size != sizeof(*config) ||
+      config->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       config->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
       config->owner_capacity > TURBO_FLOW_PLUGIN_GENERATION_MAX_OWNERS)
-    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.generation",
-                                        "invalid generation arguments");
+    return flow_plugin_generation_error(
+        error, SALTS_EINVAL, "$.generation",
+        "invalid generation arguments");
+
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   if (turbo_flow_state(*flow_io) != TURBO_FLOW_STATE_PARSED)
-    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.graph", "Graph must be parsed");
-  rc = turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog);
-  if (rc != SALTS_OK)
-    return flow_plugin_generation_error(error, rc, "$.providers", "catalog unavailable");
-  rc = flow_plugin_generation_catalog_validate(&catalog, error);
-  if (rc != SALTS_OK) return rc;
-  rc = flow_plugin_generation_plan_validate(*flow_io, resolved, &catalog, config->owner_capacity,
-                                            &required, error);
-  if (rc != SALTS_OK) return rc;
-  generation = calloc(1, sizeof(*generation));
+    return flow_plugin_generation_error(
+        error, SALTS_EINVAL, "$.graph", "Graph must be parsed");
+
+  generation =
+      (turbo_flow_plugin_generation_t *)calloc(1u, sizeof(*generation));
   if (!generation)
-    return flow_plugin_generation_error(error, SALTS_ENOMEM, "$.generation", "allocation failed");
-  generation->cleanup_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  rc = turbo_flow_stl_error(
-      vec_init_bytes(&generation->owners, sizeof(flow_plugin_generation_owner_t),
-                     _Alignof(turbo_flow_max_align_t), config->owner_capacity));
-  if (rc == SALTS_OK && required)
-    rc = turbo_flow_stl_error(vec_reserve(&generation->owners, required));
+    return flow_plugin_generation_error(
+        error, SALTS_ENOMEM, "$.generation", "allocation failed");
+  generation->cleanup_error =
+      (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+
+  /*
+   * Canonical provider prepare is side-effect free: it retains provider/resource
+   * Salts Plugin leases, compiles typed MessagePlan config and completes provider
+   * preflight for every materialization root before Graph ownership moves.
+   */
+  rc = flow_provider_generation_prepare(
+      *flow_io, config->provider_resolver, config->resource_resolver,
+      config->owner_capacity, &generation->providers, error);
   if (rc != SALTS_OK) goto preflight_failed;
-  rc = flow_plugin_operations_prepare(snapshot, resolved, *flow_io, domain,
-                                      config->operation_memory_budget_bytes, &generation->bindings,
-                                      error);
+
+  rc = flow_plugin_operations_prepare(
+      snapshot, resolved, *flow_io, domain,
+      config->operation_memory_budget_bytes, &generation->bindings, error);
   if (rc != SALTS_OK) goto preflight_failed;
-  rc = flow_plugin_generation_prepare_materializers(snapshot, resolved, &generation->bindings,
-                                                    &generation->materializers, error);
+
+  rc = flow_plugin_generation_prepare_materializers(
+      snapshot, resolved, &generation->bindings,
+      &generation->materializers, error);
   if (rc != SALTS_OK) goto preflight_failed;
+
   rc = flow_plugin_generation_bind_operation_materializers(
       &generation->bindings, &generation->materializers, error);
   if (rc != SALTS_OK) goto preflight_failed;
-  rc = flow_plugin_generation_preflight(*flow_io, resolved, &catalog, error);
-  if (rc != SALTS_OK) goto preflight_failed;
+
   rc = flow_plugin_operations_preflight(&generation->bindings, error);
   if (rc != SALTS_OK) goto preflight_failed;
+
   rc = turbo_flow_plugin_catalog_snapshot_retain(snapshot);
   if (rc != SALTS_OK) goto preflight_failed;
   generation->snapshot = snapshot;
+
   if (domain) {
     rc = flow_plugin_result_domain_attach(domain);
     if (rc != SALTS_OK) goto preflight_failed;
   }
   generation->domain = domain;
+
   generation->flow = *flow_io;
   *flow_io = NULL;
-  rc = flow_plugin_generation_materialize(generation, resolved, &catalog, error);
+
+  rc = flow_provider_generation_materialize(
+      generation->providers, generation->flow, error);
   if (rc == SALTS_OK)
-    rc = flow_plugin_operations_materialize(&generation->bindings, domain, generation->flow, error);
+    rc = flow_plugin_operations_materialize(
+        &generation->bindings, domain, generation->flow, error);
+
   if (rc == SALTS_OK) {
     rc = turbo_flow_compile(generation->flow);
     if (rc != SALTS_OK) {
-      const turbo_flow_error_t *graph_error = turbo_flow_last_error(generation->flow);
-      flow_plugin_generation_error(error, rc, "$.graph",
-                                   graph_error && graph_error->message[0] ? graph_error->message
-                                                                          : "Graph compile failed");
+      const turbo_flow_error_t *graph_error =
+          turbo_flow_last_error(generation->flow);
+      flow_plugin_generation_error(
+          error, rc, "$.graph",
+          graph_error && graph_error->message[0]
+              ? graph_error->message
+              : "Graph compile failed");
     }
   }
+
   if (rc != SALTS_OK) {
-    turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
     generation->failed = 1;
     generation->state = TURBO_FLOW_PLUGIN_GENERATION_FAILED_CLEANUP;
-    if (turbo_flow_plugin_generation_destroy(generation, 0, &cleanup_error) != SALTS_OK)
+    if (turbo_flow_plugin_generation_destroy(
+            generation, 0u, &cleanup_error) != SALTS_OK)
       *cleanup_out = generation;
     return rc;
   }
+
   generation->state = TURBO_FLOW_PLUGIN_GENERATION_COMPILED;
   *generation_out = generation;
   return SALTS_OK;
+
 preflight_failed:
   if (error->status == SALTS_OK)
-    flow_plugin_generation_error(error, rc, "$.generation.preflight",
-                                 "generation preflight failed");
-  if (generation->snapshot) turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+    flow_plugin_generation_error(
+        error, rc, "$.generation.preflight",
+        "generation preflight failed");
+
+  if (generation->snapshot) {
+    turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+    generation->snapshot = NULL;
+  }
+  if (generation->domain) {
+    flow_plugin_result_domain_detach(generation->domain);
+    generation->domain = NULL;
+  }
   (void)flow_plugin_materializers_discard(&generation->materializers);
   flow_plugin_operations_free(&generation->bindings);
-  vec_destroy(&generation->owners);
+
+  if (generation->providers) {
+    int cleanup = flow_provider_generation_release(
+        &generation->providers, &cleanup_error);
+    if (cleanup != SALTS_OK) {
+      generation->failed = 1;
+      generation->state = TURBO_FLOW_PLUGIN_GENERATION_FAILED_CLEANUP;
+      generation->cleanup_error = cleanup_error;
+      *cleanup_out = generation;
+      return rc;
+    }
+  }
+
   free(generation);
   return rc;
 }
