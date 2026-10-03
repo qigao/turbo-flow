@@ -60,16 +60,6 @@ typedef struct flow_plugin_business_provider_s {
   size_t module_index;
 } flow_plugin_business_provider_t;
 
-typedef struct flow_plugin_transactional_adapter_provider_s {
-  turbo_flow_plugin_transactional_adapter_provider_v1_t provider;
-  size_t module_index;
-} flow_plugin_transactional_adapter_provider_t;
-
-typedef struct flow_plugin_transactional_resource_provider_s {
-  turbo_flow_plugin_transactional_resource_provider_v1_t provider;
-  size_t module_index;
-} flow_plugin_transactional_resource_provider_t;
-
 typedef struct flow_plugin_schema_s {
   turbo_flow_plugin_schema_v1_t schema;
   size_t module_index;
@@ -98,8 +88,6 @@ struct turbo_flow_plugin_host_s {
   vec_t resource_providers;
   vec_t protocol_providers;
   vec_t business_providers;
-  vec_t transactional_adapter_providers;
-  vec_t transactional_resource_providers;
   vec_t schemas;
   vec_t operations;
   vec_t materializers;
@@ -131,8 +119,6 @@ typedef struct flow_plugin_registration_context_s {
   size_t resource_count_before;
   size_t protocol_count_before;
   size_t business_count_before;
-  size_t transactional_adapter_count_before;
-  size_t transactional_resource_count_before;
   size_t schema_count_before;
   size_t operation_count_before;
   size_t materializer_count_before;
@@ -331,30 +317,6 @@ static int flow_plugin_find_resource_kind(const turbo_flow_plugin_host_t *host, 
   return -1;
 }
 
-static int flow_plugin_find_transactional_adapter_kind(const turbo_flow_plugin_host_t *host,
-                                                       const char *kind) {
-  if (!host || !kind) return -1;
-  for (size_t i = 0u; i < vec_size(&host->transactional_adapter_providers); ++i) {
-    const flow_plugin_transactional_adapter_provider_t *entry =
-        (const flow_plugin_transactional_adapter_provider_t *)vec_at_const(
-            &host->transactional_adapter_providers, i);
-    if (entry && entry->provider.kind && strcmp(entry->provider.kind, kind) == 0) return (int)i;
-  }
-  return -1;
-}
-
-static int flow_plugin_find_transactional_resource_kind(const turbo_flow_plugin_host_t *host,
-                                                        const char *kind) {
-  if (!host || !kind) return -1;
-  for (size_t i = 0u; i < vec_size(&host->transactional_resource_providers); ++i) {
-    const flow_plugin_transactional_resource_provider_t *entry =
-        (const flow_plugin_transactional_resource_provider_t *)vec_at_const(
-            &host->transactional_resource_providers, i);
-    if (entry && entry->provider.kind && strcmp(entry->provider.kind, kind) == 0) return (int)i;
-  }
-  return -1;
-}
-
 static int flow_plugin_find_protocol_name(const turbo_flow_plugin_host_t *host, const char *name) {
   if (!host || !name) return -1;
   for (size_t i = 0u; i < vec_size(&host->protocol_providers); ++i) {
@@ -407,8 +369,7 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
   const turbo_flow_plugin_capabilities_t known =
       TURBO_FLOW_PLUGIN_CAP_PRODUCT_ADAPTER | TURBO_FLOW_PLUGIN_CAP_PRODUCT_RESOURCE |
       TURBO_FLOW_PLUGIN_CAP_PROTOCOL | TURBO_FLOW_PLUGIN_CAP_PROTOCOL_BUSINESS |
-      TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE |
-      TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL | TURBO_FLOW_PLUGIN_CAP_SCHEMA |
+      TURBO_FLOW_PLUGIN_CAP_SCHEMA |
       (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_OPERATION |
       (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_MATERIALIZER |
       (turbo_flow_plugin_capabilities_t)TURBO_FLOW_PLUGIN_CAP_PROTOCOL_MAPPER;
@@ -421,12 +382,6 @@ static int flow_plugin_api_validate(const turbo_flow_plugin_api_v1_t *api,
       !api->register_capabilities || !api->quiesce || !api->shutdown || !api->destroy) {
     return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
                                    "invalid plugin root capabilities or lifecycle vtable");
-  }
-  if ((api->capabilities & TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL) != 0u &&
-      (api->capabilities & (TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER |
-                            TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_RESOURCE)) == 0u) {
-    return flow_plugin_error_write(error, SALTS_EPROTO, TURBO_FLOW_PLUGIN_STAGE_API, NULL, path,
-                                   "external progress requires a transactional Product provider");
   }
   if (!flow_plugin_identity_valid(api->plugin_id) ||
       !flow_plugin_version_valid(api->plugin_version)) {
@@ -456,8 +411,7 @@ static int flow_plugin_add_adapter_provider(
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
-  if (flow_plugin_find_adapter_kind(registration->host, provider->kind) >= 0 ||
-      flow_plugin_find_transactional_adapter_kind(registration->host, provider->kind) >= 0) {
+  if (flow_plugin_find_adapter_kind(registration->host, provider->kind) >= 0) {
     registration->first_error = SALTS_EALREADY;
     return registration->first_error;
   }
@@ -494,8 +448,7 @@ static int flow_plugin_add_resource_provider(
     registration->first_error = SALTS_EINVAL;
     return registration->first_error;
   }
-  if (flow_plugin_find_resource_kind(registration->host, provider->kind) >= 0 ||
-      flow_plugin_find_transactional_resource_kind(registration->host, provider->kind) >= 0) {
+  if (flow_plugin_find_resource_kind(registration->host, provider->kind) >= 0) {
     registration->first_error = SALTS_EALREADY;
     return registration->first_error;
   }
@@ -580,71 +533,6 @@ static int flow_plugin_add_business_provider(
   entry.provider = *provider;
   entry.module_index = registration->module_index;
   rc = turbo_flow_stl_error(vec_push(&registration->host->business_providers, &entry));
-  if (rc != SALTS_OK) registration->first_error = rc;
-  return rc;
-}
-
-static int flow_plugin_add_transactional_adapter_provider(
-    void *ctx, const turbo_flow_plugin_transactional_adapter_provider_v1_t *provider) {
-  flow_plugin_registration_context_t *registration = (flow_plugin_registration_context_t *)ctx;
-  flow_plugin_transactional_adapter_provider_t entry;
-  int rc;
-  if (!registration) return SALTS_EINVAL;
-  if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!provider || provider->size != sizeof(*provider) ||
-      provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      !flow_plugin_kind_valid(provider->kind) || !provider->preflight || !provider->materialize) {
-    registration->first_error = SALTS_EINVAL;
-    return registration->first_error;
-  }
-  if (flow_plugin_find_adapter_kind(registration->host, provider->kind) >= 0 ||
-      flow_plugin_find_transactional_adapter_kind(registration->host, provider->kind) >= 0) {
-    registration->first_error = SALTS_EALREADY;
-    return registration->first_error;
-  }
-  if (vec_size(&registration->host->transactional_adapter_providers) >=
-      registration->host->config.transactional_adapter_provider_capacity) {
-    registration->first_error = SALTS_ENOSPC;
-    return registration->first_error;
-  }
-  memset(&entry, 0, sizeof(entry));
-  entry.provider = *provider;
-  entry.module_index = registration->module_index;
-  rc = turbo_flow_stl_error(vec_push(&registration->host->transactional_adapter_providers, &entry));
-  if (rc != SALTS_OK) registration->first_error = rc;
-  return rc;
-}
-
-static int flow_plugin_add_transactional_resource_provider(
-    void *ctx, const turbo_flow_plugin_transactional_resource_provider_v1_t *provider) {
-  flow_plugin_registration_context_t *registration = (flow_plugin_registration_context_t *)ctx;
-  flow_plugin_transactional_resource_provider_t entry;
-  int rc;
-  if (!registration) return SALTS_EINVAL;
-  if (registration->first_error != SALTS_OK) return registration->first_error;
-  if (!provider || provider->size != sizeof(*provider) ||
-      provider->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      provider->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
-      !flow_plugin_kind_valid(provider->kind) || !provider->preflight || !provider->materialize) {
-    registration->first_error = SALTS_EINVAL;
-    return registration->first_error;
-  }
-  if (flow_plugin_find_resource_kind(registration->host, provider->kind) >= 0 ||
-      flow_plugin_find_transactional_resource_kind(registration->host, provider->kind) >= 0) {
-    registration->first_error = SALTS_EALREADY;
-    return registration->first_error;
-  }
-  if (vec_size(&registration->host->transactional_resource_providers) >=
-      registration->host->config.transactional_resource_provider_capacity) {
-    registration->first_error = SALTS_ENOSPC;
-    return registration->first_error;
-  }
-  memset(&entry, 0, sizeof(entry));
-  entry.provider = *provider;
-  entry.module_index = registration->module_index;
-  rc =
-      turbo_flow_stl_error(vec_push(&registration->host->transactional_resource_providers, &entry));
   if (rc != SALTS_OK) registration->first_error = rc;
   return rc;
 }
