@@ -1,0 +1,11 @@
+schema TurboFlowDurableMemoryProviderConfig [version(1)];
+
+message DurableMemoryConfig {
+  @Min(2) @Max(2) uint32 schema_version;
+  @Min(1) @Max(9223372036854775807) uint64 max_message_bytes;
+  @Min(1) @Max(1048576) uint64 max_records;
+  @Min(1) @Max(9223372036854775807) uint64 max_total_bytes;
+  @Min(1) @Max(9223372036854775807) uint64 max_record_bytes;
+  @Min(1) @Max(1048576) uint64 max_claims;
+  @Max(1) uint32 identity_mode;
+}
