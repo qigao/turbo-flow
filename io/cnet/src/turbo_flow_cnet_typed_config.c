@@ -122,6 +122,20 @@ static int build_content(
   return rc;
 }
 
+
+static int build_sink_content(turbo_flow_content_descriptor_t *out) {
+  int rc;
+  if (!out) return SALTS_EINVAL;
+  rc = turbo_flow_content_descriptor_init(
+      out, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
+      TURBO_FLOW_CONTENT_PROFILE_GENERIC, TURBO_FLOW_DATA_ENCODING_OPAQUE,
+      "application/octet-stream", "cnet.payload");
+  if (rc == SALTS_OK)
+    rc = turbo_flow_content_descriptor_declare_schema(
+        out, "CNetPayload", "Bytes", 1u);
+  return rc;
+}
+
 #define CNET_TYPED_FILL_CLIENT(OUT, TYPED)                                  \
   do {                                                                       \
     (OUT)->client.connection_capacity = (TYPED)->connection_capacity;        \
@@ -631,6 +645,7 @@ int cnet_typed_stream_sink_config(
   }
   if (rc == SALTS_OK) rc = stream_tls(out, deployment);
   CNET_TYPED_SINK_TAIL(out, typed);
+  if (rc == SALTS_OK) rc = build_sink_content(&out->content);
   if (rc == SALTS_OK &&
       out->max_message_bytes > out->client.max_send_bytes)
     rc = SALTS_ERANGE;
@@ -898,6 +913,7 @@ int cnet_typed_datagram_sink_config(
   if (rc == SALTS_OK) rc = parse_peer(deployment, &out->peer);
   out->peer_host = deployment->peer_host;
   CNET_TYPED_SINK_TAIL(out, typed);
+  if (rc == SALTS_OK) rc = build_sink_content(&out->content);
   if (rc == SALTS_OK &&
       out->max_message_bytes > out->datagram.max_datagram_bytes)
     rc = SALTS_ERANGE;
@@ -940,6 +956,7 @@ int cnet_typed_packet_sink_config(
   out->conversation = typed->conversation;
   out->adapter_send_capacity = typed->adapter_send_capacity;
   CNET_TYPED_SINK_TAIL(out, typed);
+  if (rc == SALTS_OK) rc = build_sink_content(&out->content);
   if (rc == SALTS_OK && out->endpoint.protocol == CNET_PACKET_UDP) {
     if (out->conversation != 0u ||
         out->adapter_send_capacity > out->endpoint.datagram.send_capacity)
