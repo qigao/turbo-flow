@@ -517,7 +517,7 @@ spec("canonical bounded memory durable provider") {
     close_fixture(&f);
   }
 
-  it("rolls back a materialized memory owner when Graph compile fails") {
+  it("releases prepared memory leases when operation preflight fails") {
     static const char graph[] =
         "source input\n"
         "buffer intake provider flow.durable.memory {\n"
@@ -539,10 +539,13 @@ spec("canonical bounded memory durable provider") {
         TURBO_FLOW_CONFIG_ERROR_INIT;
 
     check_equal(open_fixture(&f, graph, &error), SALTS_OK);
-    check_not_equal(create_generation(&f), SALTS_OK);
-    check_null(f.flow);
-    check_null(f.generation);
-    check_null(f.cleanup);
+    {
+      turbo_flow_t *original = f.flow;
+      check_not_equal(create_generation(&f), SALTS_OK);
+      check_true(f.flow == original);
+      check_null(f.generation);
+      check_null(f.cleanup);
+    }
     close_fixture(&f);
   }
 
