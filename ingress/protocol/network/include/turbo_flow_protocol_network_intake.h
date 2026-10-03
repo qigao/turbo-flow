@@ -58,9 +58,7 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   const char *decoder_adapter_name;
   const char *decoded_source_name;
   /**
-   * Optional additive reply policy. NULL preserves the historical no-reply
-   * contract. Old v2 callers whose config size ends before this field remain
-   * valid and are treated identically to NULL.
+   * Optional reply policy. NULL preserves explicit no-reply behavior.
    */
   const turbo_flow_protocol_network_reply_policy_t *reply_policy;
 } turbo_flow_protocol_network_intake_config_t;
