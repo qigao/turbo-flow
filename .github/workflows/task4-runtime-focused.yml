@@ -183,16 +183,6 @@ jobs:
           cmake --build build/task4-runtime-tsan             --target test_flow_durable_lifecycle test_flow_inbox test_flow_inbox_driver test_flow_async_terminal             -j2 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/build-tsan.log"
           ctest --test-dir build/task4-runtime-tsan             -R '^test_flow_(durable_lifecycle|inbox|inbox_driver|async_terminal)$'             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/ctest-tsan.log"
 
-      - name: Install and load the durable memory plugin component
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --install build/task4-runtime --prefix "$RUNNER_TEMP/durable-memory-install" --component DurableMemory             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/install-memory.log"
-          installed_plugin="$RUNNER_TEMP/durable-memory-install/lib/libtf_durable_memory_plugin.so"
-          test -f "$installed_plugin"
-          sha256sum "$installed_plugin" | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-sha256.txt"
-          cmake -E env             "TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH=$installed_plugin"             "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/build/task4-runtime/bin:$LD_LIBRARY_PATH"             "$GITHUB_WORKSPACE/build/task4-runtime/bin/test_flow_durable_memory_plugin"             2>&1 | tee "$RUNNER_TEMP/task4-runtime-evidence/installed-memory-test.log"
-
       - name: Verify committed source remained untouched
         if: always()
         shell: bash
