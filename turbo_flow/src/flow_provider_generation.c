@@ -73,12 +73,18 @@ static int provider_generation_source_has_terminal_companion(
     const turbo_flow_t *flow, size_t stage_index,
     const turbo_flow_stage_plan_t *stage) {
   const char *identity;
+  const char *resource_name;
   if (!flow || !stage || !stage->is_source ||
       !stage->resource_name || !stage->resource_name[0])
     return 0;
   identity = stage->adapter_name;
+  resource_name = stage->resource_name;
   if (!identity || !identity[0]) return 0;
 
+  /*
+   * turbo_flow_stage_at() reuses one thread-local view. Only retain the
+   * Graph-owned string pointers above while scanning companion stages.
+   */
   for (size_t i = 0u; i < turbo_flow_stage_count(flow); ++i) {
     const turbo_flow_stage_plan_t *candidate;
     if (i == stage_index) continue;
@@ -88,7 +94,7 @@ static int provider_generation_source_has_terminal_companion(
     if (provider_generation_same_text(
             candidate->adapter_name, identity) &&
         provider_generation_same_text(
-            candidate->resource_name, stage->resource_name))
+            candidate->resource_name, resource_name))
       return 1;
   }
   return 0;
@@ -203,6 +209,17 @@ int flow_provider_generation_prepare(
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
     flow_provider_generation_entry_t entry;
     if (!provider_generation_is_root(flow, i, stage)) continue;
+
+    /* Reacquire after root classification because companion scanning may have
+       overwritten the thread-local stage view. */
+    stage = turbo_flow_stage_at(flow, i);
+    if (!stage || !stage->name || !stage->name[0]) {
+      rc = SALTS_EPROTO;
+      provider_generation_error(
+          error, rc, NULL, "stage",
+          "provider root lost its canonical stage identity");
+      goto fail;
+    }
     memset(&entry, 0, sizeof(entry));
 
     entry.name = provider_generation_copy_text(stage->name);
