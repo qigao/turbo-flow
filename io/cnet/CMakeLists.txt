@@ -32,9 +32,7 @@ install(FILES
 
 add_library(tf_cnet_plugin SHARED
   src/turbo_flow_cnet_plugin.c
-  src/turbo_flow_cnet_plugin_config.c
   src/turbo_flow_cnet_typed_config.c
-  src/turbo_flow_cnet_plugin_internal.h
   src/turbo_flow_cnet_typed_config_internal.h
   src/turbo_flow_cnet_provider_adapter_internal.h)
 cmake_config_target(tf_cnet_plugin FOLDER "io/cnet")
@@ -44,7 +42,7 @@ target_include_directories(tf_cnet_plugin PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   "${turbo_flow_cnet_provider_config_GENERATED_DIR}")
 target_link_libraries(tf_cnet_plugin PRIVATE
-  tf_cnet_adapter TurboFlow::Product Salts::CSTL Salts::UriParser
+  tf_cnet_adapter TurboFlow::Product Salts::Plugin Salts::UriParser
   ${turbo_flow_cnet_provider_config_NATIVE_TARGET})
 add_dependencies(tf_cnet_plugin
   turbo_flow_cnet_provider_config_idl_codegen)
