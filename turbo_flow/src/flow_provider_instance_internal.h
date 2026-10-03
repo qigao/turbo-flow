@@ -22,7 +22,7 @@ typedef struct flow_compiled_provider_instance_s
  * Normal failure leaves *out NULL. If cleanup itself fails, *out remains
  * non-NULL so the caller can retry release; there is no force-release path.
  */
-int flow_compiled_provider_instance_prepare(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_prepare(
     turbo_flow_t *flow,
     size_t stage_index,
     const turbo_flow_provider_resolver_v1_t *provider_resolver,
@@ -31,7 +31,7 @@ int flow_compiled_provider_instance_prepare(
     turbo_flow_config_error_t *error);
 
 /** Borrow the exact provider-facing instance after successful preflight. */
-int flow_compiled_provider_instance_view(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_view(
     const flow_compiled_provider_instance_t *compiled,
     const turbo_flow_provider_instance_v1_t **out);
 
@@ -43,7 +43,7 @@ int flow_compiled_provider_instance_view(
  * callback. A successful materialization must be followed by explicit owner
  * destruction before the compiled instance can be released.
  */
-int flow_compiled_provider_instance_materialize(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_materialize(
     flow_compiled_provider_instance_t *compiled,
     turbo_flow_t *flow,
     turbo_flow_config_error_t *error);
@@ -54,12 +54,12 @@ int flow_compiled_provider_instance_materialize(
  * through flow_compiled_provider_instance_owner_destroy() so lease release is
  * ordered after the final provider-owned callback.
  */
-int flow_compiled_provider_instance_owner(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_owner(
     flow_compiled_provider_instance_t *compiled,
     turbo_flow_runtime_owner **out);
 
 /** Destroy the runtime owner while its provider/resource leases are retained. */
-int flow_compiled_provider_instance_owner_destroy(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_owner_destroy(
     flow_compiled_provider_instance_t *compiled);
 
 /**
@@ -67,7 +67,7 @@ int flow_compiled_provider_instance_owner_destroy(
  * Returns SALTS_EBUSY while a materialized runtime owner is still live.
  * On lease release failure, *compiled_io remains live for explicit retry.
  */
-int flow_compiled_provider_instance_release(
+TURBO_FLOW_C_API int flow_compiled_provider_instance_release(
     flow_compiled_provider_instance_t **compiled_io);
 
 #ifdef __cplusplus
