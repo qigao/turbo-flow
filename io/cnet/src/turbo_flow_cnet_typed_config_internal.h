@@ -25,13 +25,14 @@ typedef enum cnet_typed_source_kind_e {
 typedef struct cnet_typed_source_contract_s {
   size_t size;
   cnet_typed_source_kind_t kind;
+  uint32_t packet_mode;
   size_t transport_capacity;
   size_t max_message_bytes;
   size_t scheduler_max_steps_per_poll;
 } cnet_typed_source_contract_t;
 
 #define CNET_TYPED_SOURCE_CONTRACT_INIT \
-  {sizeof(cnet_typed_source_contract_t), (cnet_typed_source_kind_t)0, 0u, 0u, 0u}
+  {sizeof(cnet_typed_source_contract_t), (cnet_typed_source_kind_t)0, 0u, 0u, 0u, 0u}
 
 /**
  * Project protocol-admission facts from an already-bound canonical CNet
