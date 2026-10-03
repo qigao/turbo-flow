@@ -3,12 +3,14 @@
 
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_resolved_config.h"
+#include "turbo_flow_provider_binding.h"
+#include "turbo_flow_resource.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(2)
+#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(3)
 
 typedef struct turbo_flow_protocol_network_intake_s turbo_flow_protocol_network_intake_t;
 
@@ -40,11 +42,19 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   turbo_flow_plugin_catalog_snapshot_t *catalog;
   const turbo_flow_resolved_config_t *resolved;
   /**
+   * Explicit canonical provider/resource resolvers for the network Source.
+   * These are borrowed for create() only; the compiled provider instance owns
+   * the resulting provider/resource Salts Plugin leases afterwards.
+   */
+  const turbo_flow_provider_resolver_v1_t *provider_resolver;
+  const turbo_flow_resource_resolver_v1_t *resource_resolver;
+  /**
    * Borrowed STARTED Flow receiving normalized protocol messages. The named
    * decoded source must feed exactly one generic durable-buffer stage.
    */
   turbo_flow_t *downstream_flow;
-  const char *source_adapter_name;
+  /** Exact parsed Source stage instance name, e.g. "wire". */
+  const char *source_stage_name;
   const char *decoder_adapter_name;
   const char *decoded_source_name;
   /**
@@ -55,12 +65,10 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   const turbo_flow_protocol_network_reply_policy_t *reply_policy;
 } turbo_flow_protocol_network_intake_config_t;
 
-#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_V2_SIZE                                         \
-  offsetof(turbo_flow_protocol_network_intake_config_t, reply_policy)
-
-#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT                                             \
-  {sizeof(turbo_flow_protocol_network_intake_config_t),                                            \
-   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT \
+  {sizeof(turbo_flow_protocol_network_intake_config_t), \
+   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION, \
+   NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 typedef enum turbo_flow_protocol_network_intake_state_e {
   TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED = 1,
