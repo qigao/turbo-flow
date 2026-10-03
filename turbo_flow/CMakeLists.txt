@@ -33,6 +33,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_config_binding.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_instance.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_provider_generation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
