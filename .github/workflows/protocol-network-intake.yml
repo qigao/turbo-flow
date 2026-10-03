@@ -168,7 +168,8 @@ jobs:
           test "$exports" = "salts_plugin_query"
           ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
 
-          cmake -S tests/install_cnet_plugin_consumer \
+          cmake -E env "TURBO_FLOW_ROOT=$prefix" \
+            cmake -S tests/install_cnet_plugin_consumer \
             -B build/cnet-installed-consumer -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
