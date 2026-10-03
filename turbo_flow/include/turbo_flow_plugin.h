@@ -210,9 +210,7 @@ typedef void (*turbo_flow_plugin_destroy_fn)(void *plugin);
  *
  * plugin_id, plugin_version, callback code, provider descriptors, and every
  * provider context remain owned by the DLL until destroy returns. A plugin
- * instance is always destroyed on the same DLL/CRT side that created it. Plugins that can publish
- * external-poll Product owners declare TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL; pre-v1.3 hosts reject
- * that unknown capability before calling load/materialize.
+ * instance is always destroyed on the same DLL/CRT side that created it.
  */
 typedef struct turbo_flow_plugin_api_v1_s {
   size_t size;
