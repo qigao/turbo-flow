@@ -506,8 +506,11 @@ turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generat
   return generation->state;
 }
 
-size_t turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation) {
-  return generation ? vec_size(&generation->owners) : 0u;
+size_t turbo_flow_plugin_generation_owner_count(
+    const turbo_flow_plugin_generation_t *generation) {
+  return generation && generation->providers
+             ? flow_provider_generation_count(generation->providers)
+             : 0u;
 }
 
 size_t turbo_flow_plugin_generation_materializer_count(
@@ -626,43 +629,35 @@ int turbo_flow_plugin_materializer_materialize(
   return SALTS_OK;
 }
 
-int turbo_flow_plugin_generation_poll(turbo_flow_plugin_generation_t *generation,
-                                      uint32_t timeout_ms, turbo_flow_config_error_t *error) {
-  size_t owner_count;
-  size_t first = SIZE_MAX;
+int turbo_flow_plugin_generation_poll(
+    turbo_flow_plugin_generation_t *generation,
+    uint32_t timeout_ms,
+    turbo_flow_config_error_t *error) {
+  int rc;
+
   if (!generation || !error || error->size < sizeof(*error))
-    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.generation.poll",
-                                        "invalid Graph generation poll arguments");
+    return flow_plugin_generation_error(
+        error, SALTS_EINVAL, "$.generation.poll",
+        "invalid Graph generation poll arguments");
+
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   if (generation->failed || generation->poll_closed || !generation->flow ||
       turbo_flow_state(generation->flow) != TURBO_FLOW_STATE_STARTED)
-    return flow_plugin_generation_error(error, SALTS_EBUSY, "$.generation.poll",
-                                        "Graph generation is not accepting progress");
-  owner_count = vec_size(&generation->owners);
-  if (owner_count == 0u) return SALTS_OK;
-  for (size_t offset = 0u; offset < owner_count; ++offset) {
-    const size_t index = (generation->poll_cursor + offset) % owner_count;
-    const flow_plugin_generation_owner_t *entry =
-        (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
-    if (entry && (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) != 0u) {
-      first = index;
-      break;
-    }
-  }
-  if (first == SIZE_MAX) return SALTS_OK;
-  generation->poll_cursor = (first + 1u) % owner_count;
-  for (size_t offset = 0u; offset < owner_count; ++offset) {
-    const size_t index = (first + offset) % owner_count;
-    const flow_plugin_generation_owner_t *entry =
-        (const flow_plugin_generation_owner_t *)vec_at_const(&generation->owners, index);
-    int rc;
-    if (!entry ||
-        (entry->owner.flags & TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL) == 0u)
-      continue;
-    rc = entry->owner.poll(entry->owner.ctx, index == first ? timeout_ms : 0u);
-    if (rc != SALTS_OK) return flow_plugin_generation_owner_error(error, rc, entry, "poll");
-  }
-  return SALTS_OK;
+    return flow_plugin_generation_error(
+        error, SALTS_EBUSY, "$.generation.poll",
+        "Graph generation is not accepting progress");
+
+  if (!generation->providers) return SALTS_OK;
+
+  rc = flow_provider_generation_poll(
+      generation->providers, timeout_ms, error);
+  if (rc != SALTS_OK &&
+      (!error || error->size != sizeof(*error) ||
+       error->status == SALTS_OK))
+    flow_plugin_generation_error(
+        error, rc, "$.generation.providers.poll",
+        "canonical provider poll failed");
+  return rc;
 }
 
 int turbo_flow_plugin_generation_lease_acquire(turbo_flow_plugin_generation_t *generation) {
@@ -678,86 +673,137 @@ int turbo_flow_plugin_generation_lease_release(turbo_flow_plugin_generation_t *g
   return SALTS_OK;
 }
 
-static int flow_plugin_generation_retire(turbo_flow_plugin_generation_t *generation,
-                                         uint64_t timeout_ms, turbo_flow_config_error_t *error) {
+static int flow_plugin_generation_retire(
+    turbo_flow_plugin_generation_t *generation,
+    uint64_t timeout_ms,
+    turbo_flow_config_error_t *error) {
   int rc;
+
   if (!generation || !error || error->size < sizeof(*error))
-    return flow_plugin_generation_error(error, SALTS_EINVAL, "$.generation",
-                                        "invalid Graph generation destroy arguments");
+    return flow_plugin_generation_error(
+        error, SALTS_EINVAL, "$.generation",
+        "invalid Graph generation destroy arguments");
+
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  if (generation->unretirable_owner)
-    return flow_plugin_generation_provider_error(
-        error, SALTS_EINVAL, generation->unretirable_resource ? "channels" : "adapters",
-        generation->unretirable_owner,
-        "Product owner has no verifiable cleanup contract; resources remain pinned");
+
+  /*
+   * A preflight cleanup handle owns only retained canonical provider/resource
+   * leases. No Graph ownership moved and no runtime owner was materialized.
+   */
+  if (!generation->flow) {
+    if (generation->leases != 0u)
+      return flow_plugin_generation_error(
+          error, SALTS_EBUSY, "$.generation.leases",
+          "Graph generation still has active leases");
+
+    if (generation->providers) {
+      rc = flow_provider_generation_release(
+          &generation->providers, error);
+      if (rc != SALTS_OK) return rc;
+    }
+
+    if (generation->snapshot) {
+      turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+      generation->snapshot = NULL;
+    }
+    if (generation->domain) {
+      flow_plugin_result_domain_detach(generation->domain);
+      generation->domain = NULL;
+    }
+    (void)flow_plugin_materializers_discard(&generation->materializers);
+    flow_plugin_operations_free(&generation->bindings);
+    memset(generation, 0, sizeof(*generation));
+    free(generation);
+    return SALTS_OK;
+  }
+
   rc = flow_durable_buffers_prepare_retire(generation->flow, timeout_ms);
   if (rc != SALTS_OK)
-    return flow_plugin_generation_error(error, rc, "$.generation.buffers",
-                                        "durable backlog must settle before retirement");
-  rc = flow_plugin_materializers_stop_and_check(&generation->materializers, error);
+    return flow_plugin_generation_error(
+        error, rc, "$.generation.buffers",
+        "durable backlog must settle before retirement");
+
+  rc = flow_plugin_materializers_stop_and_check(
+      &generation->materializers, error);
   if (rc != SALTS_OK) return rc;
+
   rc = flow_plugin_operations_close(&generation->bindings);
   if (rc != SALTS_OK)
-    return flow_plugin_generation_error(error, rc, "$.generation.inflight",
-                                        "operation still executing");
+    return flow_plugin_generation_error(
+        error, rc, "$.generation.inflight",
+        "operation still executing");
+
   if (generation->leases != 0u)
-    return flow_plugin_generation_error(error, SALTS_EBUSY, "$.generation.leases",
-                                        "Graph generation still has active leases");
+    return flow_plugin_generation_error(
+        error, SALTS_EBUSY, "$.generation.leases",
+        "Graph generation still has active leases");
+
   generation->poll_closed = 1;
-  for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
-    flow_plugin_generation_owner_t *entry =
-        (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);
-    if (!entry || entry->state >= FLOW_PLUGIN_GENERATION_OWNER_QUIESCED) continue;
-    rc = entry->owner.quiesce(entry->owner.ctx, timeout_ms);
-    if (rc != SALTS_OK) return flow_plugin_generation_owner_error(error, rc, entry, "quiesce");
-    entry->state = FLOW_PLUGIN_GENERATION_OWNER_QUIESCED;
+
+  if (generation->providers) {
+    rc = flow_provider_generation_quiesce(
+        generation->providers, timeout_ms, error);
+    if (rc != SALTS_OK) return rc;
   }
   generation->state = TURBO_FLOW_PLUGIN_GENERATION_QUIESCED;
+
   /* A failed create never started execution; compile failure has no running Graph to stop. */
-  if (!generation->failed && generation->flow &&
+  if (!generation->failed &&
       (turbo_flow_state(generation->flow) == TURBO_FLOW_STATE_STARTED ||
        turbo_flow_state(generation->flow) == TURBO_FLOW_STATE_FAILED)) {
     rc = turbo_flow_stop(generation->flow);
     if (rc != SALTS_OK)
-      return flow_plugin_generation_error(error, rc, "$.generation.graph.stop",
-                                          "Graph stop failed");
+      return flow_plugin_generation_error(
+          error, rc, "$.generation.graph.stop",
+          "Graph stop failed");
   }
   generation->state = TURBO_FLOW_PLUGIN_GENERATION_STOPPED;
-  for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
-    flow_plugin_generation_owner_t *entry =
-        (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);
-    if (!entry || entry->state >= FLOW_PLUGIN_GENERATION_OWNER_DRAINED) continue;
-    rc = entry->owner.drain(entry->owner.ctx, timeout_ms);
-    if (rc != SALTS_OK) return flow_plugin_generation_owner_error(error, rc, entry, "drain");
-    entry->state = FLOW_PLUGIN_GENERATION_OWNER_DRAINED;
+
+  if (generation->providers) {
+    rc = flow_provider_generation_drain(
+        generation->providers, timeout_ms, error);
+    if (rc != SALTS_OK) return rc;
   }
   generation->state = TURBO_FLOW_PLUGIN_GENERATION_DRAINED;
+
   rc = flow_plugin_operations_release(&generation->bindings, error);
   if (rc != SALTS_OK) return rc;
-  for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
-    flow_plugin_generation_owner_t *entry =
-        (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);
-    if (!entry || entry->state >= FLOW_PLUGIN_GENERATION_OWNER_SHUTDOWN) continue;
-    rc = entry->owner.shutdown(entry->owner.ctx);
-    if (rc != SALTS_OK) return flow_plugin_generation_owner_error(error, rc, entry, "shutdown");
-    entry->state = FLOW_PLUGIN_GENERATION_OWNER_SHUTDOWN;
+
+  if (generation->providers) {
+    rc = flow_provider_generation_shutdown(
+        generation->providers, error);
+    if (rc != SALTS_OK) return rc;
   }
   generation->state = TURBO_FLOW_PLUGIN_GENERATION_SHUTDOWN;
+
   turbo_flow_destroy(generation->flow);
   generation->flow = NULL;
-  for (size_t i = vec_size(&generation->owners); i > 0u; --i) {
-    flow_plugin_generation_owner_t *entry =
-        (flow_plugin_generation_owner_t *)vec_at(&generation->owners, i - 1u);
-    if (entry) entry->owner.destroy(entry->owner.ctx);
+
+  if (generation->providers) {
+    rc = flow_provider_generation_owner_destroy(
+        generation->providers, error);
+    if (rc != SALTS_OK) return rc;
+
+    rc = flow_provider_generation_release(
+        &generation->providers, error);
+    if (rc != SALTS_OK) return rc;
   }
+
   flow_plugin_result_domain_detach(generation->domain);
+  generation->domain = NULL;
+
   rc = flow_plugin_materializers_discard(&generation->materializers);
   if (rc != SALTS_OK)
-    return flow_plugin_generation_error(error, rc, "$.generation.materializers",
-                                        "materializer projection owner cleanup failed");
-  turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+    return flow_plugin_generation_error(
+        error, rc, "$.generation.materializers",
+        "materializer projection owner cleanup failed");
+
+  if (generation->snapshot) {
+    turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
+    generation->snapshot = NULL;
+  }
   flow_plugin_operations_free(&generation->bindings);
-  vec_destroy(&generation->owners);
+
   memset(generation, 0, sizeof(*generation));
   free(generation);
   return SALTS_OK;
