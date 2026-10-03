@@ -134,6 +134,51 @@ static void stop_unload(
 }
 
 spec("canonical provider generation aggregate") {
+  it("accepts an empty provider set without a dummy resolver") {
+    static const char *src = "source input\n";
+    flow_provider_generation_t *generation = NULL;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+
+    check_not_null(flow);
+    check_equal(
+        turbo_flow_parse_string(flow, src, strlen(src)),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_prepare(
+            flow, NULL, NULL, 0u, &generation, &error),
+        SALTS_OK);
+    check_not_null(generation);
+    check_equal(flow_provider_generation_count(generation), (size_t)0u);
+    check_equal(
+        flow_provider_generation_materialize(
+            generation, flow, &error),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_poll(generation, 5u, &error),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_quiesce(generation, 5u, &error),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_drain(generation, 5u, &error),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_shutdown(generation, &error),
+        SALTS_OK);
+
+    turbo_flow_destroy(flow);
+    check_equal(
+        flow_provider_generation_owner_destroy(
+            generation, &error),
+        SALTS_OK);
+    check_equal(
+        flow_provider_generation_release(
+            &generation, &error),
+        SALTS_OK);
+    check_null(generation);
+  }
+
   it("prepares exact roots and lets a terminal claim its paired source") {
     static const char *src =
         "source ingress adapter fixture.provider {\n"
