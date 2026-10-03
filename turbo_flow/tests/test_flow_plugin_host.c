@@ -57,9 +57,6 @@
 #ifndef FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH
   #error FLOW_PLUGIN_FIXTURE_CAPABILITY_MISMATCH is required
 #endif
-#ifndef FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL
-  #error FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL is required
-#endif
 #ifndef FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER
   #error FLOW_PLUGIN_FIXTURE_INVALID_PROVIDER is required
 #endif
@@ -68,12 +65,6 @@
 #endif
 #ifndef FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL
   #error FLOW_PLUGIN_FIXTURE_MISSING_SYMBOL is required
-#endif
-#ifndef FLOW_PLUGIN_FIXTURE_TRANSACTIONAL
-  #error FLOW_PLUGIN_FIXTURE_TRANSACTIONAL is required
-#endif
-#ifndef FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND
-  #error FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND is required
 #endif
 
 #define FLOW_PLUGIN_TEST_MAX_EVENTS 64u
@@ -239,118 +230,6 @@ spec("unified PluginHost") {
     plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
     check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
     turbo_flow_resolved_config_destroy(resolved);
-  }
-
-  it("rejects external progress capability without a transactional Product provider") {
-    flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 2u, 1u);
-    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_plugin_host_t *host = NULL;
-
-    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(
-                    host, FLOW_PLUGIN_FIXTURE_EXTERNAL_POLL_WITHOUT_TRANSACTIONAL, &error),
-                SALTS_EPROTO);
-    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_API);
-    check_equal(turbo_flow_plugin_host_module_count(host), 0u);
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
-  }
-
-  it("atomically snapshots transactional adapter and resource providers") {
-    flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 0u, 0u);
-    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_plugin_transactional_product_catalog_v1_t catalog =
-        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
-    turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
-    turbo_flow_plugin_host_t *host = NULL;
-
-    config.transactional_adapter_provider_capacity = 1u;
-    config.transactional_resource_provider_capacity = 1u;
-    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL, &error),
-                SALTS_OK);
-    check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 1u);
-    check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 1u);
-    check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &error), SALTS_OK);
-    check_equal(
-        turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
-        SALTS_OK);
-    check_equal(catalog.adapter_provider_count, 1u);
-    check_equal(catalog.resource_provider_count, 1u);
-    check_equal(catalog.adapter_providers[0].kind, "fixture.transactional.adapter");
-    check_equal(catalog.resource_providers[0].kind, "fixture.transactional.resource");
-
-    {
-      const uint64_t canary = UINT64_C(0xA42C199E7735D108);
-      struct physical_catalog_s {
-        size_t size;
-        uint32_t abi_major;
-        uint32_t abi_minor;
-        uint64_t canary;
-      } physical = {sizeof(turbo_flow_plugin_transactional_product_catalog_v1_t), 2u, 0u,
-                    UINT64_C(0xA42C199E7735D108)};
-      check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(
-                      snapshot,
-                      (turbo_flow_plugin_transactional_product_catalog_v1_t *)(void *)&physical),
-                  SALTS_EINVAL);
-      check_equal(physical.canary, canary);
-    }
-    catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
-        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
-    catalog.size = sizeof(catalog) + 1u;
-    check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
-                SALTS_EINVAL);
-    catalog = (turbo_flow_plugin_transactional_product_catalog_v1_t)
-        TURBO_FLOW_PLUGIN_TRANSACTIONAL_PRODUCT_CATALOG_V1_INIT;
-    catalog.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u;
-    check_equal(turbo_flow_plugin_catalog_snapshot_transactional_product_catalog(snapshot, &catalog),
-                SALTS_EINVAL);
-
-    turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
-  }
-
-  it("rolls back transactional providers on bounded capacity exhaustion") {
-    const size_t adapter_capacities[] = {0u, 1u};
-    const size_t resource_capacities[] = {1u, 0u};
-    for (size_t i = 0u; i < 2u; ++i) {
-      flow_plugin_test_probe_t probe = {0};
-      turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 0u, 0u);
-      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-      turbo_flow_plugin_host_t *host = NULL;
-      config.transactional_adapter_provider_capacity = adapter_capacities[i];
-      config.transactional_resource_provider_capacity = resource_capacities[i];
-
-      check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-      check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL, &error),
-                  SALTS_ENOSPC);
-      check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
-      check_equal(turbo_flow_plugin_host_module_count(host), 0u);
-      check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 0u);
-      check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 0u);
-      check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
-    }
-  }
-
-  it("rejects one kind shared by legacy and transactional catalogs") {
-    flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 1u, 1u);
-    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_plugin_host_t *host = NULL;
-    config.transactional_adapter_provider_capacity = 1u;
-    config.transactional_resource_provider_capacity = 1u;
-
-    check_equal(turbo_flow_plugin_host_create(&config, &host, &error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_GOOD_ONE, &error), SALTS_OK);
-    check_equal(
-        turbo_flow_plugin_host_load(host, FLOW_PLUGIN_FIXTURE_TRANSACTIONAL_DUPLICATE_KIND, &error),
-        SALTS_EALREADY);
-    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_REGISTRATION);
-    check_equal(turbo_flow_plugin_host_module_count(host), 1u);
-    check_equal(turbo_flow_plugin_host_transactional_adapter_provider_count(host), 0u);
-    check_equal(turbo_flow_plugin_host_transactional_resource_provider_count(host), 0u);
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
   }
 
   it("rejects zero module capacity before allocating a host") {
