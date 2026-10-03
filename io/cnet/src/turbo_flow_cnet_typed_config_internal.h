@@ -16,6 +16,33 @@ enum {
   CNET_TYPED_KIND_COUNT
 };
 
+typedef enum cnet_typed_source_kind_e {
+  CNET_TYPED_SOURCE_STREAM = 1,
+  CNET_TYPED_SOURCE_LISTENER = 2,
+  CNET_TYPED_SOURCE_PACKET = 3
+} cnet_typed_source_kind_t;
+
+typedef struct cnet_typed_source_contract_s {
+  size_t size;
+  cnet_typed_source_kind_t kind;
+  size_t transport_capacity;
+  size_t max_message_bytes;
+  size_t scheduler_max_steps_per_poll;
+} cnet_typed_source_contract_t;
+
+#define CNET_TYPED_SOURCE_CONTRACT_INIT \
+  {sizeof(cnet_typed_source_contract_t), (cnet_typed_source_kind_t)0, 0u, 0u, 0u}
+
+/**
+ * Project protocol-admission facts from an already-bound canonical CNet
+ * provider config. This validates the exact generated artifact/DataDesc and
+ * performs no field-name/schema lookup.
+ */
+int cnet_typed_source_contract(
+    const turbo_flow_provider_config_view_v1_t *config,
+    cnet_typed_source_contract_t *out,
+    turbo_flow_config_error_t *error);
+
 typedef struct cnet_typed_runtime_config_s {
   unsigned kind;
 
