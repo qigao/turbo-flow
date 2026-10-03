@@ -45,6 +45,96 @@ static int typed_fail(
   return status;
 }
 
+static int source_contract_fail(
+    turbo_flow_config_error_t *error, int status, const char *message) {
+  if (error && error->size == sizeof(*error)) {
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+    error->status = status;
+    (void)snprintf(
+        error->path, sizeof(error->path), "$.protocol_network_intake.source");
+    (void)snprintf(
+        error->message, sizeof(error->message), "%s",
+        message ? message : "invalid CNet source provider contract");
+  }
+  return status;
+}
+
+static int source_contract_exact(
+    const turbo_flow_provider_config_view_v1_t *config,
+    const DataBindMessageNativeArtifact *artifact,
+    size_t value_bytes) {
+  DataBindNativeTypeBinding native =
+      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  if (!config || config->size != sizeof(*config) || !artifact ||
+      !config->type_name || !config->data || !config->value ||
+      config->value_bytes != value_bytes ||
+      strcmp(config->type_name, artifact->type_name) != 0 ||
+      artifact->native_binding(&native, &error) != DATA_BIND_OK ||
+      config->data != native.data)
+    return 0;
+  return 1;
+}
+
+int cnet_typed_source_contract(
+    const turbo_flow_provider_config_view_v1_t *config,
+    cnet_typed_source_contract_t *out,
+    turbo_flow_config_error_t *error) {
+  cnet_typed_source_contract_t contract = CNET_TYPED_SOURCE_CONTRACT_INIT;
+
+  if (!out || out->size != sizeof(*out))
+    return source_contract_fail(
+        error, SALTS_EINVAL, "invalid CNet source contract destination");
+
+  if (source_contract_exact(
+          config, CNetStreamSourceConfig_native_artifact(),
+          sizeof(CNetStreamSourceConfig_t))) {
+    const CNetStreamSourceConfig_t *typed =
+        (const CNetStreamSourceConfig_t *)config->value;
+    contract.kind = CNET_TYPED_SOURCE_STREAM;
+    contract.transport_capacity = typed->connection_capacity;
+    contract.max_message_bytes = typed->max_message_bytes;
+    contract.scheduler_max_steps_per_poll =
+        typed->scheduler_max_steps_per_poll;
+  } else if (source_contract_exact(
+                 config, CNetListenerSourceConfig_native_artifact(),
+                 sizeof(CNetListenerSourceConfig_t))) {
+    const CNetListenerSourceConfig_t *typed =
+        (const CNetListenerSourceConfig_t *)config->value;
+    contract.kind = CNET_TYPED_SOURCE_LISTENER;
+    contract.transport_capacity = typed->max_connections;
+    contract.max_message_bytes = typed->max_message_bytes;
+    contract.scheduler_max_steps_per_poll =
+        typed->scheduler_max_steps_per_poll;
+  } else if (source_contract_exact(
+                 config, CNetPacketSourceConfig_native_artifact(),
+                 sizeof(CNetPacketSourceConfig_t))) {
+    const CNetPacketSourceConfig_t *typed =
+        (const CNetPacketSourceConfig_t *)config->value;
+    contract.kind = CNET_TYPED_SOURCE_PACKET;
+    contract.transport_capacity = typed->session_capacity;
+    contract.max_message_bytes = typed->max_message_bytes;
+    contract.scheduler_max_steps_per_poll =
+        typed->scheduler_max_steps_per_poll;
+  } else {
+    return source_contract_fail(
+        error, SALTS_EPROTO,
+        "provider config is not an exact canonical CNet Source artifact");
+  }
+
+  if (contract.transport_capacity == 0u ||
+      contract.max_message_bytes == 0u ||
+      contract.scheduler_max_steps_per_poll == 0u)
+    return source_contract_fail(
+        error, SALTS_ERANGE,
+        "CNet Source admission contract contains a zero bound");
+
+  *out = contract;
+  if (error)
+    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
+  return SALTS_OK;
+}
+
 static int text_present(const char *value) {
   return value && value[0] != '\0';
 }
