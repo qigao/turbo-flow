@@ -276,10 +276,12 @@ static int intake_owner_compiled_topology_validate(
 
   for (size_t i = 0u; i < turbo_flow_stage_count(intake->flow); ++i) {
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(intake->flow, i);
-    if (!stage || !stage->adapter_name) continue;
-    if (strcmp(stage->adapter_name, intake->settings.source_stage_name) == 0)
+    if (!stage) continue;
+    if (stage->name &&
+        strcmp(stage->name, intake->settings.source_stage_name) == 0)
       source_index = i;
-    if (strcmp(stage->adapter_name, intake->settings.decoder_adapter_name) == 0)
+    if (stage->adapter_name &&
+        strcmp(stage->adapter_name, intake->settings.decoder_adapter_name) == 0)
       decoder_index = i;
   }
   edge = turbo_flow_edge_at(intake->flow, 0u);
@@ -325,89 +327,125 @@ static int intake_owner_fail(turbo_flow_protocol_network_intake_t *intake, int s
 }
 
 int turbo_flow_protocol_network_intake_create(
-    const turbo_flow_protocol_network_intake_config_t *config, turbo_flow_t **intake_flow_io,
-    turbo_flow_protocol_network_intake_t **out, turbo_flow_config_error_t *error) {
-  turbo_flow_plugin_transactional_product_catalog_v1_t catalog;
-  const turbo_flow_plugin_transactional_adapter_provider_v1_t *source_provider = NULL;
+    const turbo_flow_protocol_network_intake_config_t *config,
+    turbo_flow_t **intake_flow_io,
+    turbo_flow_protocol_network_intake_t **out,
+    turbo_flow_config_error_t *error) {
   turbo_flow_protocol_network_intake_t *intake = NULL;
-  turbo_flow_protocol_open_request_t request = TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
-  turbo_flow_plugin_product_owner_v1_t source_owner = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+  turbo_flow_protocol_open_request_t request =
+      TURBO_FLOW_PROTOCOL_OPEN_REQUEST_INIT;
   flow_protocol_network_intake_sink_config_t sink_config;
+  const turbo_flow_provider_instance_v1_t *source_view = NULL;
+  cnet_typed_source_contract_t source_contract =
+      CNET_TYPED_SOURCE_CONTRACT_INIT;
+  const turbo_flow_stage_plan_t *source_stage;
+  int source_stage_index;
   int rc;
 
   rc = intake_owner_public_validate(config, intake_flow_io, out, error);
   if (rc != SALTS_OK) return rc;
-  intake = (turbo_flow_protocol_network_intake_t *)calloc(1u, sizeof(*intake));
+
+  source_stage_index =
+      turbo_flow_find_stage(*intake_flow_io, config->source_stage_name);
+  if (source_stage_index < 0)
+    return intake_owner_error(
+        error, SALTS_ENOENT, "$.graph",
+        "configured canonical Source stage is missing");
+  source_stage =
+      turbo_flow_stage_at(*intake_flow_io, (size_t)source_stage_index);
+  if (!source_stage || !source_stage->is_source ||
+      !source_stage->adapter_name || !source_stage->adapter_name[0])
+    return intake_owner_error(
+        error, SALTS_EINVAL, "$.graph",
+        "configured canonical Source stage has no provider identity");
+
+  intake =
+      (turbo_flow_protocol_network_intake_t *)calloc(1u, sizeof(*intake));
   if (!intake)
-    return intake_owner_error(error, SALTS_ENOMEM, "$.protocol_network_intake",
-                              "failed to allocate ProtocolNetworkIntake owner");
-  intake->source_owner =
-      (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+    return intake_owner_error(
+        error, SALTS_ENOMEM, "$.protocol_network_intake",
+        "failed to allocate ProtocolNetworkIntake owner");
   intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED;
   intake->status = SALTS_OK;
 
-  rc = flow_protocol_network_intake_preflight(config->resolved, *intake_flow_io,
-                                              config->source_adapter_name,
-                                              config->decoder_adapter_name, &intake->settings,
-                                              error);
+  rc = flow_compiled_provider_instance_prepare(
+      *intake_flow_io, (size_t)source_stage_index,
+      config->provider_resolver, config->resource_resolver,
+      &intake->source_instance, error);
   if (rc != SALTS_OK) {
-    free(intake);
+    intake_owner_pretransfer_cleanup(intake);
+    return intake_owner_error(
+        error, rc, "$.protocol_network_intake.source",
+        "canonical Source provider preflight failed");
+  }
+  rc = flow_compiled_provider_instance_view(
+      intake->source_instance, &source_view);
+  if (rc != SALTS_OK || !source_view) {
+    intake_owner_pretransfer_cleanup(intake);
+    return intake_owner_error(
+        error, rc != SALTS_OK ? rc : SALTS_EPROTO,
+        "$.protocol_network_intake.source",
+        "canonical Source provider view is unavailable");
+  }
+  rc = cnet_typed_source_contract(
+      &source_view->config, &source_contract, error);
+  if (rc != SALTS_OK) {
+    intake_owner_pretransfer_cleanup(intake);
+    return intake_owner_error(
+        error, rc, "$.protocol_network_intake.source",
+        "canonical Source provider does not expose an admitted CNet source contract");
+  }
+
+  rc = flow_protocol_network_intake_preflight(
+      config->resolved, *intake_flow_io, config->source_stage_name,
+      &source_contract, config->decoder_adapter_name,
+      &intake->settings, error);
+  if (rc != SALTS_OK) {
+    intake_owner_pretransfer_cleanup(intake);
     return rc;
   }
   rc = intake_owner_reply_policy(config, &intake->settings, error);
   if (rc != SALTS_OK) {
-    free(intake);
+    intake_owner_pretransfer_cleanup(intake);
     return rc;
-  }
-  rc = intake_owner_product_catalog(config->catalog, &catalog, error);
-  if (rc != SALTS_OK) {
-    free(intake);
-    return rc;
-  }
-  rc = intake_owner_source_provider(&catalog, config->resolved, config->source_adapter_name,
-                                    &source_provider, error);
-  if (rc != SALTS_OK) {
-    free(intake);
-    return rc;
-  }
-  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  rc = source_provider->preflight(source_provider->ctx, config->resolved,
-                                  config->source_adapter_name, error);
-  if (rc != SALTS_OK) {
-    free(intake);
-    return intake_owner_error(error, rc, "$.adapters",
-                              "configured Source provider preflight failed");
   }
 
   rc = turbo_flow_plugin_catalog_snapshot_retain(config->catalog);
   if (rc != SALTS_OK) {
-    free(intake);
-    return intake_owner_error(error, rc, "$.catalog", "failed to retain plugin catalog");
+    intake_owner_pretransfer_cleanup(intake);
+    return intake_owner_error(
+        error, rc, "$.catalog", "failed to retain plugin catalog");
   }
   intake->catalog = config->catalog;
-  rc = turbo_flow_protocol_registry_create(config->catalog, &intake->protocol_registry);
+
+  rc = turbo_flow_protocol_registry_create(
+      config->catalog, &intake->protocol_registry);
   if (rc != SALTS_OK) {
     intake_owner_pretransfer_cleanup(intake);
-    return intake_owner_error(error, rc, "$.protocol",
-                              "failed to create protocol registry from catalog");
+    return intake_owner_error(
+        error, rc, "$.protocol",
+        "failed to create protocol registry from catalog");
   }
   request.protocol = intake->settings.protocol_kind;
   request.protocol_version = intake->settings.protocol_version;
   request.max_frame_size = intake->settings.max_frame_size;
-  rc = turbo_flow_protocol_owner_create_registered(intake->protocol_registry,
-                                                   intake->settings.protocol_provider, &request,
-                                                   &intake->protocol_owner);
+  rc = turbo_flow_protocol_owner_create_registered(
+      intake->protocol_registry, intake->settings.protocol_provider,
+      &request, &intake->protocol_owner);
   if (rc != SALTS_OK) {
     intake_owner_pretransfer_cleanup(intake);
-    return intake_owner_error(error, rc, "$.protocol",
-                              "configured protocol provider/version could not be opened");
+    return intake_owner_error(
+        error, rc, "$.protocol",
+        "configured protocol provider/version could not be opened");
   }
-  rc = turbo_flow_protocol_owner_instance(intake->protocol_owner, intake->settings.protocol_kind,
-                                          &intake->protocol);
+  rc = turbo_flow_protocol_owner_instance(
+      intake->protocol_owner, intake->settings.protocol_kind,
+      &intake->protocol);
   if (rc != SALTS_OK || !intake->protocol) {
     intake_owner_pretransfer_cleanup(intake);
-    return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_EPROTO, "$.protocol",
-                              "configured protocol owner returned no matching instance");
+    return intake_owner_error(
+        error, rc != SALTS_OK ? rc : SALTS_EPROTO, "$.protocol",
+        "configured protocol owner returned no matching instance");
   }
   if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
     turbo_flow_protocol_info_t info = TURBO_FLOW_PROTOCOL_INFO_INIT;
@@ -415,12 +453,15 @@ int turbo_flow_protocol_network_intake_create(
     if (rc != SALTS_OK ||
         (info.capabilities & TURBO_FLOW_PROTOCOL_CAP_PROTOCOL_REPLY) == 0u) {
       intake_owner_pretransfer_cleanup(intake);
-      return intake_owner_error(error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.protocol.reply",
-                                "configured protocol does not support codec-owned replies");
+      return intake_owner_error(
+          error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.protocol.reply",
+          "configured protocol does not support codec-owned replies");
     }
   }
-  rc = intake_owner_mapper_bind(intake->catalog, &intake->settings, &intake->mapper,
-                                &intake->mapper_contract, error);
+
+  rc = intake_owner_mapper_bind(
+      intake->catalog, &intake->settings, &intake->mapper,
+      &intake->mapper_contract, error);
   if (rc != SALTS_OK) {
     intake_owner_pretransfer_cleanup(intake);
     return rc;
@@ -435,12 +476,15 @@ int turbo_flow_protocol_network_intake_create(
   sink_config.decoded_source_name = config->decoded_source_name;
   sink_config.settings = &intake->settings;
   sink_config.mapper = intake->mapper_bound ? &intake->mapper : NULL;
-  sink_config.mapper_contract = intake->mapper_bound ? &intake->mapper_contract : NULL;
-  rc = flow_protocol_network_intake_sink_create(&sink_config, &intake->sink);
+  sink_config.mapper_contract =
+      intake->mapper_bound ? &intake->mapper_contract : NULL;
+  rc = flow_protocol_network_intake_sink_create(
+      &sink_config, &intake->sink);
   if (rc != SALTS_OK) {
     intake_owner_pretransfer_cleanup(intake);
-    return intake_owner_error(error, rc, "$.protocol_network_intake.sink",
-                              "failed to create bounded protocol intake Sink");
+    return intake_owner_error(
+        error, rc, "$.protocol_network_intake.sink",
+        "failed to create bounded protocol intake Sink");
   }
 
   intake->flow = *intake_flow_io;
@@ -448,58 +492,59 @@ int turbo_flow_protocol_network_intake_create(
   rc = flow_protocol_network_intake_sink_register(intake->sink);
   if (rc != SALTS_OK) {
     intake_owner_failed_create_cleanup(intake);
-    return intake_owner_error(error, rc, "$.protocol_network_intake.sink",
-                              "failed to register protocol intake Sink");
+    return intake_owner_error(
+        error, rc, "$.protocol_network_intake.sink",
+        "failed to register protocol intake Sink");
   }
 
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  rc = source_provider->materialize(source_provider->ctx, intake->flow, config->resolved,
-                                    config->source_adapter_name, &source_owner, error);
+  rc = flow_compiled_provider_instance_materialize(
+      intake->source_instance, intake->flow, error);
   if (rc != SALTS_OK) {
     intake_owner_failed_create_cleanup(intake);
-    return intake_owner_error(error, rc, "$.adapters",
-                              "configured Source provider materialization failed");
+    return intake_owner_error(
+        error, rc, "$.protocol_network_intake.source",
+        "canonical Source provider materialization failed");
   }
-  intake->source_owner = source_owner;
-  if (!intake_owner_source_owner_abi_valid(&intake->source_owner)) {
-    intake_owner_pin_unretirable(intake);
-    return intake_owner_error(error, SALTS_EINVAL, "$.adapters.owner",
-                              "provider returned an incompatible Product owner ABI");
-  }
-  if (!intake_owner_source_owner_valid(&intake->source_owner)) {
-    if (!intake->source_owner.ctx || !intake->source_owner.destroy) {
-      intake_owner_pin_unretirable(intake);
-      return intake_owner_error(error, SALTS_EPROTO, "$.adapters.owner",
-                                "provider returned an unretirable Product owner vtable");
-    }
+  rc = flow_compiled_provider_instance_owner(
+      intake->source_instance, &intake->source_owner);
+  if (rc != SALTS_OK || !intake->source_owner ||
+      !turbo_flow_runtime_owner_contract_valid(intake->source_owner) ||
+      (turbo_flow_runtime_owner_capabilities(intake->source_owner) &
+       TURBO_FLOW_RUNTIME_OWNER_EXTERNAL_POLL) == 0u) {
     intake_owner_failed_create_cleanup(intake);
-    return intake_owner_error(error, SALTS_EPROTO, "$.adapters.owner",
-                              "provider returned an invalid Product owner vtable");
-  }
-  if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
-    rc = turbo_flow_transport_reply_supported(intake->flow,
-                                              intake->settings.source_stage_name);
-    if (rc != SALTS_OK) {
-      intake_owner_failed_create_cleanup(intake);
-      return intake_owner_error(error, rc, "$.adapters.reply",
-                                "configured Source has no generation-fenced reply capability");
-    }
+    return intake_owner_error(
+        error, rc != SALTS_OK ? rc : SALTS_EPROTO,
+        "$.protocol_network_intake.source.owner",
+        "canonical Source owner is not externally pollable");
   }
 
   rc = turbo_flow_compile(intake->flow);
   if (rc != SALTS_OK) {
     intake_owner_failed_create_cleanup(intake);
-    return intake_owner_error(error, rc, "$.graph", "failed to compile intake Flow");
+    return intake_owner_error(
+        error, rc, "$.graph", "failed to compile intake Flow");
   }
   rc = intake_owner_compiled_topology_validate(intake, error);
   if (rc != SALTS_OK) {
     intake_owner_failed_create_cleanup(intake);
     return rc;
   }
+
+  if (intake->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
+    rc = turbo_flow_transport_reply_supported_stage(
+        intake->flow, intake->settings.source_stage_name);
+    if (rc != SALTS_OK) {
+      intake_owner_failed_create_cleanup(intake);
+      return intake_owner_error(
+          error, rc, "$.protocol_network_intake.source.reply",
+          "canonical Source stage has no generation-fenced reply capability");
+    }
+  }
+
   *out = intake;
   return SALTS_OK;
 }
-
 int turbo_flow_protocol_network_intake_start(turbo_flow_protocol_network_intake_t *intake) {
   int rc;
   if (!intake) return SALTS_EINVAL;
@@ -539,7 +584,7 @@ int turbo_flow_protocol_network_intake_poll(
   }
   if (intake->source_polls == UINT64_MAX) return intake_owner_fail(intake, SALTS_ERANGE, snapshot);
   ++intake->source_polls;
-  rc = intake->source_owner.poll(intake->source_owner.ctx, timeout_ms);
+  rc = turbo_flow_runtime_owner_poll(intake->source_owner, timeout_ms);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
   rc = flow_protocol_network_intake_sink_retry(intake->sink);
   if (rc != SALTS_OK) return intake_owner_fail(intake, rc, snapshot);
@@ -571,7 +616,7 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED) return SALTS_EALREADY;
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPING) return SALTS_EBUSY;
   if (intake->state == TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED) {
-    rc = intake->source_owner.quiesce(intake->source_owner.ctx, timeout_ms);
+    rc = turbo_flow_runtime_owner_quiesce(intake->source_owner, timeout_ms);
     if (rc != SALTS_OK) return intake_owner_fail(intake, rc, NULL);
     intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED;
     intake->status = SALTS_OK;
@@ -579,7 +624,7 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   }
 
   intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPING;
-  rc = intake->source_owner.quiesce(intake->source_owner.ctx, timeout_ms);
+  rc = turbo_flow_runtime_owner_quiesce(intake->source_owner, timeout_ms);
   if (rc != SALTS_OK) first_status = rc;
   flow_protocol_network_intake_sink_cancel(intake->sink, SALTS_ECANCELED);
   flow_state = intake->flow ? turbo_flow_state(intake->flow) : TURBO_FLOW_STATE_STOPPED;
@@ -604,7 +649,7 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
       first_status = SALTS_EBUSY;
   }
   if (first_status == SALTS_OK) {
-    rc = intake->source_owner.drain(intake->source_owner.ctx, timeout_ms);
+    rc = turbo_flow_runtime_owner_drain(intake->source_owner, timeout_ms);
     if (rc != SALTS_OK) first_status = rc;
   }
   if (first_status != SALTS_OK) return intake_owner_fail(intake, first_status, NULL);
@@ -613,21 +658,33 @@ int turbo_flow_protocol_network_intake_stop(turbo_flow_protocol_network_intake_t
   return SALTS_OK;
 }
 
-int turbo_flow_protocol_network_intake_destroy(turbo_flow_protocol_network_intake_t *intake) {
+int turbo_flow_protocol_network_intake_destroy(
+    turbo_flow_protocol_network_intake_t *intake) {
   int rc;
   if (!intake) return SALTS_OK;
-  if (intake->state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED) return SALTS_EBUSY;
+  if (intake->state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_STOPPED)
+    return SALTS_EBUSY;
+
+  if (intake->source_owner) {
+    rc = turbo_flow_runtime_owner_shutdown(intake->source_owner);
+    if (rc != SALTS_OK) return rc;
+  }
   if (intake->flow) {
     turbo_flow_destroy(intake->flow);
     intake->flow = NULL;
   }
-  if (intake->source_owner.ctx) {
-    rc = intake->source_owner.shutdown(intake->source_owner.ctx);
+  if (intake->source_instance && intake->source_owner) {
+    rc = flow_compiled_provider_instance_owner_destroy(
+        intake->source_instance);
     if (rc != SALTS_OK) return rc;
-    intake->source_owner.destroy(intake->source_owner.ctx);
-    intake->source_owner =
-        (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
+    intake->source_owner = NULL;
   }
+  if (intake->source_instance) {
+    rc = flow_compiled_provider_instance_release(
+        &intake->source_instance);
+    if (rc != SALTS_OK) return rc;
+  }
+
   if (intake->sink) {
     flow_protocol_network_intake_sink_destroy(intake->sink);
     intake->sink = NULL;
