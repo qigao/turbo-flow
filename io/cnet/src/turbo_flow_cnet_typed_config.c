@@ -112,6 +112,7 @@ int cnet_typed_source_contract(
     const CNetPacketSourceConfig_t *typed =
         (const CNetPacketSourceConfig_t *)config->value;
     contract.kind = CNET_TYPED_SOURCE_PACKET;
+    contract.packet_mode = typed->packet_mode;
     contract.transport_capacity = typed->session_capacity;
     contract.max_message_bytes = typed->max_message_bytes;
     contract.scheduler_max_steps_per_poll =
