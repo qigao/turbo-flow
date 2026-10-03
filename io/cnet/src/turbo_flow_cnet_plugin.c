@@ -1161,22 +1161,23 @@ static int provider_materialize(
     owner->descriptor.input = owner->config.content;
   }
 
-  rc = slot->kind <= CNET_TYPED_PACKET_SOURCE
-           ? cnet_plugin_register_source(owner, flow)
-           : cnet_plugin_register_sink(owner, flow);
-  if (rc != SALTS_OK) {
-    cnet_plugin_error(
-        error, rc, owner->name, "materialize",
-        "failed to register CNet native adapter owner");
-    goto fail;
-  }
-
   rc = cnet_plugin_root_add_owner(slot->root, owner);
   if (rc != SALTS_OK) {
     cnet_plugin_error(
         error, rc, owner->name, "capacity",
         "failed to retain CNet runtime owner");
-    goto fail_registered;
+    goto fail;
+  }
+
+  rc = slot->kind <= CNET_TYPED_PACKET_SOURCE
+           ? cnet_plugin_register_source(owner, flow)
+           : cnet_plugin_register_sink(owner, flow);
+  if (rc != SALTS_OK) {
+    cnet_plugin_root_remove_owner(slot->root, owner);
+    cnet_plugin_error(
+        error, rc, owner->name, "materialize",
+        "failed to register CNet native adapter owner");
+    goto fail;
   }
 
   *owner_out = cnet_runtime_owner_as_turbo_flow_runtime_owner(owner);
@@ -1184,14 +1185,6 @@ static int provider_materialize(
     *error =
         (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   return SALTS_OK;
-
-fail_registered:
-  /*
-   * This path is unreachable after the prechecked owner-capacity guard unless
-   * provider stop races the control thread. Keep the Graph binding alive rather
-   * than freeing callback storage behind it; materialization fails closed.
-   */
-  return rc;
 
 fail:
   memset(owner, 0, sizeof(*owner));
