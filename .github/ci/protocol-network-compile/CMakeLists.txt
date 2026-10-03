@@ -32,6 +32,7 @@ set(_tf_include_dirs
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/include"
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/include"
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/src"
+    "${TURBO_FLOW_SOURCE_DIR}/io/durable/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/common/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/include"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/inbox/src"
@@ -85,6 +86,12 @@ target_compile_options(protocol_network_tests PRIVATE $<$<COMPILE_LANGUAGE:C>:${
 target_link_libraries(protocol_network_tests PRIVATE
     Salts::Core Salts::CFlow Salts::CNet Salts::DataBind Salts::TinyTest xxHash::xxhash)
 
+salts_idl_target(
+    TARGET protocol_memory_provider_config
+    IDL "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_provider_config.schema"
+    ARTIFACT_NAME "durable_memory_provider_config"
+    ARTIFACTS MESSAGE)
+
 add_library(graph_durable_buffer_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/flow_plan_type_probe.c"
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/test_flow_durable_buffer.c"
@@ -96,13 +103,20 @@ add_library(graph_durable_buffer_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_plugin.c"
     "${TURBO_FLOW_SOURCE_DIR}/io/durable/src/turbo_flow_durable_memory_config.c"
     "${TURBO_FLOW_SOURCE_DIR}/turbo_flow/tests/durable_identity_header_cpp.cpp")
-target_include_directories(graph_durable_buffer_contract PRIVATE ${_tf_include_dirs})
+target_include_directories(
+    graph_durable_buffer_contract PRIVATE
+    ${_tf_include_dirs}
+    "${protocol_memory_provider_config_GENERATED_DIR}")
 target_compile_definitions(graph_durable_buffer_contract PRIVATE TURBO_FLOW_BUILD TURBO_FLOW_PLUGIN_BUILD)
 target_compile_options(graph_durable_buffer_contract PRIVATE
     $<$<COMPILE_LANGUAGE:C>:${_tf_c_options}>
     $<$<COMPILE_LANGUAGE:CXX>:${_tf_cxx_options}>)
 target_link_libraries(graph_durable_buffer_contract PRIVATE
-    Salts::Core Salts::CFlow Salts::TinyTest)
+    Salts::Core Salts::CFlow Salts::DataBind Salts::Plugin Salts::TinyTest
+    ${protocol_memory_provider_config_NATIVE_TARGET})
+add_dependencies(
+    graph_durable_buffer_contract
+    protocol_memory_provider_config_idl_codegen)
 
 add_library(protocol_network_cpp_contract OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/tests/cnet_stream_source_header_cpp.cpp"

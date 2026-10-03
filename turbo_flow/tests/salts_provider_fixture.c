@@ -1,4 +1,5 @@
 #include "turbo_flow_provider.h"
+#include "turbo_flow_provider_adapter.h"
 #include "salts_resource_fixture.h"
 #include "provider_config_native.h"
 
@@ -116,6 +117,73 @@ static void fixture_owner_destroy(void *self) {
   if (state) ++state->owner_destroy_calls;
 }
 
+static int fixture_adapter_start(
+    void *self, turbo_flow_t *flow,
+    const turbo_flow_stage_plan_t *stage) {
+  (void)self;
+  (void)flow;
+  return stage ? SALTS_OK : SALTS_EINVAL;
+}
+
+static int fixture_adapter_consume(
+    void *self, turbo_flow_t *flow,
+    const turbo_flow_stage_plan_t *stage,
+    turbo_flow_msg_t *message) {
+  (void)self;
+  (void)flow;
+  return stage && message ? SALTS_OK : SALTS_EINVAL;
+}
+
+static int fixture_register_exact_stage_adapter(
+    fixture_provider_state_t *state, turbo_flow_t *flow,
+    const turbo_flow_provider_instance_v1_t *instance) {
+  turbo_flow_provider_adapter_registration_v1_t registration =
+      TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+  turbo_flow_adapter_ops_t ops = {0};
+  turbo_flow_adapter_schema_t schema = {0};
+  const turbo_flow_stage_plan_t *stage;
+  const char *stage_names[1];
+  int stage_index;
+
+  if (!state || !flow || !instance || !instance->instance_name)
+    return SALTS_EINVAL;
+
+  stage_index = turbo_flow_find_stage(flow, instance->instance_name);
+  if (stage_index < 0) return SALTS_ENOENT;
+  stage = turbo_flow_stage_at(flow, (size_t)stage_index);
+  if (!stage) return SALTS_EPROTO;
+
+  /*
+   * Buffer providers own a separate buffer binding contract. This generic
+   * fixture only publishes exact adapter-stage registrations so the canonical
+   * generation integration test can reach Graph compile.
+   */
+  if (stage->is_buffer) return SALTS_OK;
+  if (!stage->adapter_name ||
+      strcmp(stage->adapter_name, "fixture.provider") != 0)
+    return SALTS_EPROTO;
+
+  schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
+  if (stage->is_source) {
+    schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
+    schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+    ops.start = fixture_adapter_start;
+  } else {
+    schema.roles = TURBO_FLOW_ADAPTER_SINK;
+    schema.direction = TURBO_FLOW_ADAPTER_OUTPUT;
+    ops.consume = fixture_adapter_consume;
+  }
+
+  stage_names[0] = instance->instance_name;
+  registration.provider_identity = "fixture.provider";
+  registration.stage_names = stage_names;
+  registration.stage_count = 1u;
+  registration.adapter_ops = &ops;
+  registration.schema = &schema;
+  registration.ctx = state;
+  return turbo_flow_provider_adapter_register(flow, &registration);
+}
+
 CMETA_IMPLEMENTS(
     turbo_flow_runtime_owner, fixture_runtime_owner,
     TURBO_FLOW_RUNTIME_OWNER_CONTROL_THREAD |
@@ -135,6 +203,9 @@ static int fixture_materialize(void *self, turbo_flow_t *flow,
 
   if (!state || !flow || !owner_out) return SALTS_EINVAL;
   rc = fixture_preflight(self, instance, error);
+  if (rc != SALTS_OK) return rc;
+
+  rc = fixture_register_exact_stage_adapter(state, flow, instance);
   if (rc != SALTS_OK) return rc;
 
   *owner_out =

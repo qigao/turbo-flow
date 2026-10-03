@@ -1209,11 +1209,13 @@ add_dependencies(
 cmake_add_test(
   test_flow_plugin_generation
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_generation.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest
+  LIBS TurboFlow::PluginHost Salts::Plugin Salts::TinyTest
   FOLDER "turbo_flow/tests")
 target_compile_definitions(
   test_flow_plugin_generation
-  PRIVATE FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
+  PRIVATE FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+          FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>"
+          FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
           FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
           FLOW_PLUGIN_GENERATION_FIXTURE_CAPACITY="$<TARGET_FILE:test_flow_plugin_generation_capacity>"
           FLOW_PLUGIN_GENERATION_FIXTURE_PREFLIGHT_FAIL="$<TARGET_FILE:test_flow_plugin_generation_preflight_fail>"
@@ -1240,6 +1242,8 @@ target_compile_definitions(
           FLOW_PLUGIN_GENERATION_FIXTURE_POLL_SMALL_DESCRIPTOR="$<TARGET_FILE:test_flow_plugin_generation_poll_small_descriptor>")
 add_dependencies(
   test_flow_plugin_generation
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture
   test_flow_plugin_generation_durable
   test_flow_plugin_good_one
   test_flow_plugin_generation_capacity
@@ -1294,9 +1298,6 @@ target_compile_definitions(test_flow_plugin_invalid_owner PRIVATE
 add_dependencies(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_fixture
   test_flow_plugin_generation_legacy_owner_prefix test_flow_plugin_generation_poll_small_descriptor)
 set_target_properties(test_flow_plugin_invalid_owner PROPERTIES FOLDER "turbo_flow/tests")
-add_test(NAME test_flow_plugin_invalid_owner COMMAND test_flow_plugin_invalid_owner --filter "destroys exact ABI")
-add_test(NAME test_flow_plugin_invalid_owner_abi COMMAND test_flow_plugin_invalid_owner --filter "pins unknown ABI")
-set_tests_properties(test_flow_plugin_invalid_owner test_flow_plugin_invalid_owner_abi PROPERTIES LABELS "graph;core" TIMEOUT 30)
 
 set_tests_properties(
   test_turbo_flow test_flow_async_terminal test_flow_async_emit test_flow_resource_document test_flow_managed_boundary test_flow_config

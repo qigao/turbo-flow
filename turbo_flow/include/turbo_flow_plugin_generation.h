@@ -9,6 +9,11 @@
 extern "C" {
 #endif
 
+typedef struct turbo_flow_provider_resolver_v1_s
+    turbo_flow_provider_resolver_v1_t;
+typedef struct turbo_flow_resource_resolver_v1_s
+    turbo_flow_resource_resolver_v1_t;
+
 typedef uint64_t turbo_flow_plugin_product_owner_flags_t;
 enum {
   TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD = UINT64_C(1) << 0,
@@ -176,13 +181,18 @@ typedef struct turbo_flow_plugin_generation_config_s {
   uint32_t abi_minor;
   size_t owner_capacity;
   size_t operation_memory_budget_bytes;
+  /** Explicit canonical provider resolver for .flow provider identities. */
+  const turbo_flow_provider_resolver_v1_t *provider_resolver;
+  /** Explicit deployment-resource resolver for provider resource requirements. */
+  const turbo_flow_resource_resolver_v1_t *resource_resolver;
 } turbo_flow_plugin_generation_config_t;
 
 enum { TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT = 67108864u };
 
 #define TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT                                                   \
   {sizeof(turbo_flow_plugin_generation_config_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,             \
-   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u, TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT}
+   TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u, TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT,   \
+   NULL, NULL}
 
 /**
  * Fill a caller-owned immutable transactional Product catalog view.
@@ -202,7 +212,9 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * @param snapshot Live immutable provider snapshot; retained by the generation.
  * @param resolved Immutable resolved configuration borrowed for the duration of this call.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
- * @param config Initialized size/versioned capacity configuration.
+ * @param config Initialized size/versioned capacity plus explicit canonical
+ * provider/resource resolvers. Resolvers are borrowed for create/preflight only;
+ * acquired provider/resource leases are retained by the generation.
  * @param result_domain Caller-owned READY domain with the same snapshot; required for operations.
  * @param generation_out Receives the owned generation on success and NULL on failure.
  * @param cleanup_out Required distinct output retaining failed retirement. Retry recoverable
