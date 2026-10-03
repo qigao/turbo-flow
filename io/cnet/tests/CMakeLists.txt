@@ -105,32 +105,39 @@ cmake_add_test(
 set_tests_properties(test_cnet_packet_sink
                      PROPERTIES LABELS "cnet-adapter;graph")
 
-cmake_add_test(
-  test_cnet_plugin
-  SOURCES test_cnet_plugin.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest
-  DEFS TURBO_FLOW_CNET_PLUGIN_PATH="$<TARGET_FILE:tf_cnet_plugin>"
-  FOLDER "io/cnet/tests")
-add_dependencies(test_cnet_plugin tf_cnet_plugin)
-if(WIN32)
-  target_link_libraries(test_cnet_plugin PRIVATE ws2_32)
-endif()
-set_tests_properties(test_cnet_plugin PROPERTIES LABELS "cnet-plugin;plugin;graph")
+add_library(test_cnet_deployment_resource_fixture SHARED
+  cnet_deployment_resource_fixture.c)
+target_include_directories(test_cnet_deployment_resource_fixture PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_link_libraries(test_cnet_deployment_resource_fixture PRIVATE
+  Salts::Plugin)
+set_target_properties(test_cnet_deployment_resource_fixture PROPERTIES
+  FOLDER "io/cnet/tests/fixtures"
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
 
 cmake_add_test(
-  test_cnet_plugin_source_snapshot
-  SOURCES test_cnet_plugin_source_snapshot.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest
-  DEFS TURBO_FLOW_CNET_PLUGIN_PATH="$<TARGET_FILE:tf_cnet_plugin>"
+  test_cnet_provider_interface
+  SOURCES test_cnet_provider_interface.c
+  LIBS
+    TurboFlow::Product
+    TurboFlow::CNetAdapter
+    Salts::Plugin
+    Salts::TinyTest
+    ${turbo_flow_cnet_provider_config_NATIVE_TARGET}
+  INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${turbo_flow_cnet_provider_config_GENERATED_DIR}
+  DEFS
+    FLOW_CNET_PROVIDER_FIXTURE="$<TARGET_FILE:tf_cnet_plugin>"
+    FLOW_CNET_RESOURCE_FIXTURE="$<TARGET_FILE:test_cnet_deployment_resource_fixture>"
   FOLDER "io/cnet/tests")
-add_dependencies(test_cnet_plugin_source_snapshot tf_cnet_plugin)
-set_tests_properties(test_cnet_plugin_source_snapshot
-                     PROPERTIES LABELS "cnet-plugin;plugin;graph")
-
-cmake_add_test(test_cnet_plugin_abi
-  SOURCES ../../../tests/plugin_host_abi_test.c
-  LIBS TurboFlow::PluginHost Salts::TinyTest tf_cnet_plugin
-  FOLDER "io/cnet/tests")
+add_dependencies(test_cnet_provider_interface
+  tf_cnet_plugin
+  test_cnet_deployment_resource_fixture
+  turbo_flow_cnet_provider_config_idl_codegen)
+set_tests_properties(test_cnet_provider_interface PROPERTIES
+  LABELS "cnet-plugin;provider;resource;lease;graph")
 
 cmake_add_test(
   test_cnet_adapter_benchmark_stats
