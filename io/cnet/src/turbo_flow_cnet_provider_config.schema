@@ -36,10 +36,10 @@ message CNetStreamSourceConfig {
   @Min(1) uint32 stop_timeout_ms;
 
   @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
   @Size(min = 1, max = 127) string content_media_type;
   @Size(min = 1, max = 127) string content_schema;
   @Size(min = 1, max = 127) string content_type;
-  @Min(1) uint32 content_schema_version;
 }
 
 message CNetListenerSourceConfig {
@@ -83,10 +83,10 @@ message CNetListenerSourceConfig {
   @Min(1) uint32 stop_timeout_ms;
 
   @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
   @Size(min = 1, max = 127) string content_media_type;
   @Size(min = 1, max = 127) string content_schema;
   @Size(min = 1, max = 127) string content_type;
-  @Min(1) uint32 content_schema_version;
 }
 
 message CNetPacketSourceConfig {
@@ -129,10 +129,10 @@ message CNetPacketSourceConfig {
   @Min(1) uint32 stop_timeout_ms;
 
   @Max(5) uint32 content_encoding;
+  @Min(1) uint32 content_schema_version;
   @Size(min = 1, max = 127) string content_media_type;
   @Size(min = 1, max = 127) string content_schema;
   @Size(min = 1, max = 127) string content_type;
-  @Min(1) uint32 content_schema_version;
 }
 
 message CNetStreamSinkConfig {
