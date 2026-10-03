@@ -235,8 +235,31 @@ int flow_provider_generation_prepare(
         flow, i, provider_resolver, resource_resolver,
         &entry.compiled, error);
     if (rc != SALTS_OK) {
-      free(entry.name);
-      entry.name = NULL;
+      /*
+       * A non-NULL compiled handle means the lower-level prepare rejected the
+       * instance but could not complete lease/config cleanup. Retain that
+       * cleanup handle in the aggregate so fail-path release can retry it
+       * explicitly instead of losing the provider/resource lease.
+       */
+      if (entry.compiled) {
+        entry.state = FLOW_PROVIDER_GENERATION_PREPARED;
+        if (turbo_flow_stl_error(
+                vec_push(&generation->entries, &entry)) != SALTS_OK) {
+          int cleanup =
+              flow_compiled_provider_instance_release(&entry.compiled);
+          free(entry.name);
+          entry.name = NULL;
+          if (cleanup != SALTS_OK) {
+            *out = generation;
+            return provider_generation_error(
+                error, cleanup, stage->name, "cleanup",
+                "provider cleanup handle could not be retained or released");
+          }
+        }
+      } else {
+        free(entry.name);
+        entry.name = NULL;
+      }
       goto fail;
     }
     entry.state = FLOW_PROVIDER_GENERATION_PREPARED;
