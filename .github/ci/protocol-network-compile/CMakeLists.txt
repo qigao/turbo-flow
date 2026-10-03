@@ -5,10 +5,10 @@ if(NOT DEFINED TURBO_FLOW_SOURCE_DIR OR NOT IS_DIRECTORY "${TURBO_FLOW_SOURCE_DI
   message(FATAL_ERROR "TURBO_FLOW_SOURCE_DIR must name the checked-out TurboFlow source tree")
 endif()
 if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
-  message(FATAL_ERROR "SALTS_ROOT must name the installed pinned Salts SDK")
+  message(FATAL_ERROR "SALTS_ROOT must name the installed published Salts SDK")
 endif()
 if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the installed pinned SaltsUtils SDK")
+  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the installed published SaltsUtils SDK")
 endif()
 
 set(CMAKE_C_STANDARD 11)
@@ -52,7 +52,6 @@ set(_tf_cxx_options
 
 add_library(protocol_network_production OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/src/turbo_flow_cnet_listener_source.c"
-    "${TURBO_FLOW_SOURCE_DIR}/io/cnet/src/turbo_flow_cnet_plugin.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/src/flow_protocol_network_intake_config.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/src/flow_protocol_network_intake_sink.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/network/src/flow_protocol_network_intake.c")
@@ -64,7 +63,6 @@ target_link_libraries(protocol_network_production PRIVATE
 
 add_library(protocol_network_tests OBJECT
     "${TURBO_FLOW_SOURCE_DIR}/io/cnet/tests/test_cnet_listener_message_context.c"
-    "${TURBO_FLOW_SOURCE_DIR}/io/cnet/tests/test_cnet_plugin_source_snapshot.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/protocol_network_source_fixture.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/test_protocol_network_intake_config.c"
     "${TURBO_FLOW_SOURCE_DIR}/ingress/protocol/tests/test_protocol_network_intake_core.c"
