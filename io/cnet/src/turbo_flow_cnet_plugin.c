@@ -592,53 +592,78 @@ static int cnet_plugin_transport_reply_take_terminal(
   }
 }
 
-static int cnet_plugin_register_source(cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
+static int cnet_plugin_register_source(
+    cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
   turbo_flow_adapter_ops_t ops = {0};
   turbo_flow_adapter_schema_t schema = {0};
   turbo_flow_managed_boundary_provider_ops_t boundary =
       TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
-  turbo_flow_managed_source_registration_t registration =
-      TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
+  turbo_flow_provider_adapter_registration_v1_t registration =
+      TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+  turbo_flow_transport_reply_provider_ops_t reply =
+      TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+  const char *stages[1];
+  const char *identity;
+  int rc;
+
+  if (!owner || !flow) return SALTS_EINVAL;
+  identity = provider_identity(owner->config.kind);
+  if (!identity) return SALTS_EINVAL;
+  stages[0] = owner->name;
+
   ops.start = cnet_plugin_source_start;
   ops.stop = cnet_plugin_source_stop;
   ops.shutdown = cnet_plugin_source_shutdown;
   if (owner->config.kind == CNET_TYPED_LISTENER_SOURCE ||
       owner->config.kind == CNET_TYPED_PACKET_SOURCE)
     ops.connection_snapshot = cnet_plugin_source_connection_snapshot;
+
   schema.kind = TURBO_FLOW_ADAPTER_KIND_SOCKET;
   schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
   schema.direction = TURBO_FLOW_ADAPTER_INPUT;
+
   boundary.resource.metadata = cnet_plugin_boundary_metadata;
   boundary.descriptor = cnet_plugin_boundary_descriptor;
   boundary.snapshot = cnet_plugin_boundary_snapshot;
-  registration.adapter_name = owner->name;
+
+  registration.provider_identity = identity;
+  registration.stage_names = stages;
+  registration.stage_count = 1u;
   registration.adapter_ops = &ops;
   registration.schema = &schema;
-  registration.owner_name = owner->name;
-  registration.boundary_ops = &boundary;
+  registration.managed_owner_name = owner->name;
+  registration.managed_boundary_ops = &boundary;
   registration.ctx = owner;
-  {
-    int rc = turbo_flow_register_managed_source_adapter(flow, &registration);
-    if (rc != SALTS_OK) return rc;
-    if (owner->config.kind == CNET_TYPED_LISTENER_SOURCE ||
-        owner->config.kind == CNET_TYPED_PACKET_SOURCE) {
-      turbo_flow_transport_reply_provider_ops_t reply =
-          TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
-      reply.capture = cnet_plugin_transport_reply_capture;
-      reply.send = cnet_plugin_transport_reply_send;
-      reply.take_terminal = cnet_plugin_transport_reply_take_terminal;
-      if (owner->config.kind == CNET_TYPED_LISTENER_SOURCE)
-        reply.send_slices = cnet_plugin_transport_reply_send_slices;
-      rc = turbo_flow_register_adapter_transport_reply(flow, owner->name, &reply, owner);
-    }
-    return rc;
-  }
+  rc = turbo_flow_provider_adapter_register(flow, &registration);
+  if (rc != SALTS_OK) return rc;
+
+  if (owner->config.kind != CNET_TYPED_LISTENER_SOURCE &&
+      owner->config.kind != CNET_TYPED_PACKET_SOURCE)
+    return SALTS_OK;
+
+  reply.capture = cnet_plugin_transport_reply_capture;
+  reply.send = cnet_plugin_transport_reply_send;
+  reply.take_terminal = cnet_plugin_transport_reply_take_terminal;
+  if (owner->config.kind == CNET_TYPED_LISTENER_SOURCE)
+    reply.send_slices = cnet_plugin_transport_reply_send_slices;
+  return turbo_flow_provider_adapter_transport_reply_register(
+      flow, owner->name, &reply, owner);
 }
 
-static int cnet_plugin_register_sink(cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
+static int cnet_plugin_register_sink(
+    cnet_plugin_owner_t *owner, turbo_flow_t *flow) {
+  const char *stages[1];
+  const char *identity;
+
+  if (!owner || !flow) return SALTS_EINVAL;
+  identity = provider_identity(owner->config.kind);
+  if (!identity) return SALTS_EINVAL;
+  stages[0] = owner->name;
+
   switch (owner->config.kind) {
   case CNET_TYPED_STREAM_SINK: {
-    turbo_flow_cnet_stream_sink_config_t sink = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_config_t sink =
+        TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
     sink.flow = flow;
     sink.adapter_name = owner->name;
     sink.uri = owner->config.uri;
@@ -647,24 +672,30 @@ static int cnet_plugin_register_sink(cnet_plugin_owner_t *owner, turbo_flow_t *f
     sink.tls = owner->config.tls_enabled ? &owner->config.tls_client : NULL;
     sink.max_message_bytes = owner->config.max_message_bytes;
     sink.actor_command_capacity = owner->config.actor_command_capacity;
-    sink.actor_max_steps_per_poll = owner->config.actor_max_steps_per_poll;
+    sink.actor_max_steps_per_poll =
+        owner->config.actor_max_steps_per_poll;
     sink.stop_timeout_ms = owner->config.stop_timeout_ms;
-    return turbo_flow_cnet_stream_sink_register(&sink, &owner->handle.stream_sink);
+    return turbo_flow_cnet_stream_sink_register_provider(
+        &sink, identity, stages, 1u, &owner->handle.stream_sink);
   }
   case CNET_TYPED_DATAGRAM_SINK: {
-    turbo_flow_cnet_datagram_sink_config_t sink = TURBO_FLOW_CNET_DATAGRAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_datagram_sink_config_t sink =
+        TURBO_FLOW_CNET_DATAGRAM_SINK_CONFIG_INIT;
     sink.flow = flow;
     sink.adapter_name = owner->name;
     sink.datagram = &owner->config.datagram;
     sink.peer = owner->config.peer;
     sink.max_message_bytes = owner->config.max_message_bytes;
     sink.actor_command_capacity = owner->config.actor_command_capacity;
-    sink.actor_max_steps_per_poll = owner->config.actor_max_steps_per_poll;
+    sink.actor_max_steps_per_poll =
+        owner->config.actor_max_steps_per_poll;
     sink.stop_timeout_ms = owner->config.stop_timeout_ms;
-    return turbo_flow_cnet_datagram_sink_register(&sink, &owner->handle.datagram_sink);
+    return turbo_flow_cnet_datagram_sink_register_provider(
+        &sink, identity, stages, 1u, &owner->handle.datagram_sink);
   }
   case CNET_TYPED_PACKET_SINK: {
-    turbo_flow_cnet_packet_sink_config_t sink = TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
+    turbo_flow_cnet_packet_sink_config_t sink =
+        TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
     sink.flow = flow;
     sink.adapter_name = owner->name;
     sink.endpoint = &owner->config.endpoint;
@@ -673,9 +704,11 @@ static int cnet_plugin_register_sink(cnet_plugin_owner_t *owner, turbo_flow_t *f
     sink.send_capacity = owner->config.adapter_send_capacity;
     sink.max_message_bytes = owner->config.max_message_bytes;
     sink.actor_command_capacity = owner->config.actor_command_capacity;
-    sink.actor_max_steps_per_poll = owner->config.actor_max_steps_per_poll;
+    sink.actor_max_steps_per_poll =
+        owner->config.actor_max_steps_per_poll;
     sink.stop_timeout_ms = owner->config.stop_timeout_ms;
-    return turbo_flow_cnet_packet_sink_register(&sink, &owner->handle.packet_sink);
+    return turbo_flow_cnet_packet_sink_register_provider(
+        &sink, identity, stages, 1u, &owner->handle.packet_sink);
   }
   default:
     return SALTS_EINVAL;
