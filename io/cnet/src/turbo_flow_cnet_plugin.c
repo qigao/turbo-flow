@@ -309,15 +309,16 @@ static int cnet_plugin_source_start(void *ctx, turbo_flow_t *flow,
                                     const turbo_flow_stage_plan_t *stage) {
   cnet_plugin_owner_t *owner = (cnet_plugin_owner_t *)ctx;
   int rc = SALTS_EINVAL;
-  if (!owner || !flow || !stage || owner->handle.any || owner->quiesced) return SALTS_EINVAL;
-  if (!stage->name || strlen(stage->name) >= sizeof(owner->source_name)) return SALTS_ERANGE;
-  memcpy(owner->source_name, stage->name, strlen(stage->name) + 1u);
+  if (!owner || !flow || !stage || owner->handle.any || owner->quiesced)
+    return SALTS_EINVAL;
+  if (!stage->name || strcmp(stage->name, owner->name) != 0)
+    return SALTS_EPROTO;
   owner->state = TURBO_FLOW_MANAGED_BOUNDARY_STARTING;
   switch (owner->config.kind) {
   case CNET_TYPED_STREAM_SOURCE: {
     turbo_flow_cnet_stream_source_config_t source = TURBO_FLOW_CNET_STREAM_SOURCE_CONFIG_INIT;
     source.flow = flow;
-    source.source_name = owner->source_name;
+    source.source_name = owner->name;
     source.uri = owner->config.uri;
     source.client = &owner->config.client;
     source.socket_options = &owner->config.socket_options;
@@ -333,7 +334,7 @@ static int cnet_plugin_source_start(void *ctx, turbo_flow_t *flow,
   case CNET_TYPED_LISTENER_SOURCE: {
     turbo_flow_cnet_listener_source_config_t source = TURBO_FLOW_CNET_LISTENER_SOURCE_CONFIG_INIT;
     source.flow = flow;
-    source.source_name = owner->source_name;
+    source.source_name = owner->name;
     source.listener = &owner->config.listener;
     source.listener_options = &owner->config.listener_options;
     source.client = &owner->config.client;
@@ -352,7 +353,7 @@ static int cnet_plugin_source_start(void *ctx, turbo_flow_t *flow,
   case CNET_TYPED_PACKET_SOURCE: {
     turbo_flow_cnet_packet_source_config_t source = TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_INIT;
     source.flow = flow;
-    source.source_name = owner->source_name;
+    source.source_name = owner->name;
     source.endpoint = &owner->config.endpoint;
     source.content = &owner->config.content;
     source.queue_capacity = owner->config.queue_capacity;
