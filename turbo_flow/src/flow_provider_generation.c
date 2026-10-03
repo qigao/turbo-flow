@@ -164,9 +164,7 @@ int flow_provider_generation_prepare(
   int rc;
 
   if (out) *out = NULL;
-  if (!flow || !provider_resolver ||
-      provider_resolver->size != sizeof(*provider_resolver) ||
-      !provider_resolver->resolve || !out)
+  if (!flow || !out)
     return provider_generation_error(
         error, SALTS_EINVAL, NULL, NULL,
         "invalid canonical provider generation arguments");
@@ -185,6 +183,13 @@ int flow_provider_generation_prepare(
     return provider_generation_error(
         error, SALTS_ENOSPC, NULL, "capacity",
         "provider owner capacity is exhausted");
+  if (roots != 0u &&
+      (!provider_resolver ||
+       provider_resolver->size != sizeof(*provider_resolver) ||
+       !provider_resolver->resolve))
+    return provider_generation_error(
+        error, SALTS_EINVAL, NULL, "resolver",
+        "provider resolver is required for canonical provider roots");
 
   generation =
       (flow_provider_generation_t *)calloc(1u, sizeof(*generation));
