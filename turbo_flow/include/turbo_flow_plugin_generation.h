@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 typedef struct turbo_flow_provider_resolver_v1_s
-    turbo_flow_provider_resolver_v1_t;
+    turbo_flow_provider_resolver_v2_t;
 typedef struct turbo_flow_resource_resolver_v1_s
     turbo_flow_resource_resolver_v1_t;
 
@@ -185,7 +185,7 @@ typedef struct turbo_flow_plugin_generation_config_s {
   /** Published Component runtime used to pin exactly one provider generation. */
   salts_component_plugin_runtime *component_runtime;
   /** Explicit deployment alias resolver for .flow provider identities. */
-  const turbo_flow_provider_resolver_v1_t *provider_resolver;
+  const turbo_flow_provider_resolver_v2_t *provider_resolver;
   /** Explicit deployment-resource resolver for provider resource requirements. */
   const turbo_flow_resource_resolver_v1_t *resource_resolver;
 } turbo_flow_plugin_generation_config_t;
