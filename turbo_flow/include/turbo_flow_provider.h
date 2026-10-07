@@ -160,6 +160,12 @@ turbo_flow_runtime_owner_contract_valid(const turbo_flow_runtime_owner *owner) {
 
 CMETA_INTERFACE(turbo_flow_provider_factory, TURBO_FLOW_PROVIDER_FACTORY_METHODS);
 
+/*
+ * Provider factories are projected from one Salts Component generation.
+ * The returned Interface is borrowed from the enclosing Component scope.
+ */
+CMETA_OBJECT_INTERFACE_ADAPTER(turbo_flow_provider_factory);
+
 static inline int
 turbo_flow_provider_config_contract_valid(
     const turbo_flow_provider_config_contract_v1_t *config) {
