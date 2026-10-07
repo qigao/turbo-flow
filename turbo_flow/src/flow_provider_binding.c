@@ -63,7 +63,7 @@ static char *provider_copy_text(const char *text) {
 }
 
 static int provider_candidate_valid(
-    const turbo_flow_provider_candidate_v1_t *candidate) {
+    const turbo_flow_provider_candidate_v2_t *candidate) {
   return candidate &&
          candidate->size == sizeof(*candidate) &&
          candidate->component_identity &&
@@ -92,12 +92,12 @@ static void provider_binding_free(turbo_flow_provider_binding_t *binding) {
 
 int turbo_flow_provider_binding_acquire(
     const salts_component_plugin_scope *component_scope,
-    const turbo_flow_provider_resolver_v1_t *resolver,
+    const turbo_flow_provider_resolver_v2_t *resolver,
     const char *provider_identity,
     turbo_flow_provider_binding_t **out,
     turbo_flow_config_error_t *error) {
-  turbo_flow_provider_candidate_v1_t candidate =
-      TURBO_FLOW_PROVIDER_CANDIDATE_V1_INIT;
+  turbo_flow_provider_candidate_v2_t candidate =
+      TURBO_FLOW_PROVIDER_CANDIDATE_V2_INIT;
   turbo_flow_provider_binding_t *binding = NULL;
   salts_component_service service;
   salts_component_plugin_status component_status;
