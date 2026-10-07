@@ -26,11 +26,13 @@ typedef struct flow_provider_generation_s flow_provider_generation_t;
  *   shape the terminal stage owns the materialization and may bind both exact
  *   stages through the provider adapter contract.
  *
- * Success retains provider/resource Salts Plugin leases and typed config for all
- * roots. No provider materialize callback has run yet.
+ * Success retains exactly one Salts Component generation scope for every
+ * provider root plus any domain-specific resource bindings and typed config.
+ * No provider materialize callback has run yet.
  */
 int flow_provider_generation_prepare(
     turbo_flow_t *flow,
+    salts_component_plugin_runtime *component_runtime,
     const turbo_flow_provider_resolver_v1_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     size_t owner_capacity,
@@ -45,6 +47,10 @@ int flow_provider_generation_materialize(
 
 /** Number of provider materialization roots retained by this generation. */
 size_t flow_provider_generation_count(
+    const flow_provider_generation_t *generation);
+
+/** Exact Salts Component generation pinned by every provider binding. */
+uint64_t flow_provider_generation_component_generation_id(
     const flow_provider_generation_t *generation);
 
 /** One bounded external-poll round over materialized owners. */
@@ -69,14 +75,16 @@ int flow_provider_generation_shutdown(
 /**
  * Destroy materialized runtime owners after Graph teardown.
  *
- * Provider/resource leases and typed config remain retained until this succeeds.
+ * Component scope, resource bindings and typed config remain retained until
+ * this succeeds.
  */
 int flow_provider_generation_owner_destroy(
     flow_provider_generation_t *generation,
     turbo_flow_config_error_t *error);
 
 /**
- * Release typed config plus resource/provider leases and free the generation.
+ * Release typed config/resource bindings, then release the one retained
+ * Component scope and free the generation.
  *
  * Materialized owners must already have been destroyed. On release failure the
  * generation remains live for explicit retry.
