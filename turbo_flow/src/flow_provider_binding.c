@@ -6,42 +6,31 @@
 
 struct turbo_flow_provider_binding_s {
   char *provider_identity;
+  char *component_identity;
   char *module_identity;
-  salts_plugin_registry *registry;
-  salts_plugin_lease lease;
-  turbo_flow_provider_factory *factory;
+
+  const salts_component_plugin_scope *scope;
+  uint64_t component_generation_id;
+
+  turbo_flow_provider_factory factory;
   turbo_flow_provider_contract_v1_t contract;
 };
 
-static int provider_plugin_status(salts_plugin_status status) {
+static int provider_component_status(salts_component_plugin_status status) {
   switch (status) {
-    case SALTS_PLUGIN_OK:
+    case SALTS_COMPONENT_PLUGIN_OK:
       return SALTS_OK;
-    case SALTS_PLUGIN_INVALID_ARGUMENT:
+    case SALTS_COMPONENT_PLUGIN_INVALID_ARGUMENT:
       return SALTS_EINVAL;
-    case SALTS_PLUGIN_UNKNOWN_EXPORT:
-    case SALTS_PLUGIN_UNKNOWN_PLUGIN:
-    case SALTS_PLUGIN_STALE:
-      return SALTS_ENOENT;
-    case SALTS_PLUGIN_CAPACITY_EXCEEDED:
+    case SALTS_COMPONENT_PLUGIN_CAPACITY_EXCEEDED:
       return SALTS_ENOSPC;
-    case SALTS_PLUGIN_ALLOCATION_FAILED:
-      return SALTS_ENOMEM;
-    case SALTS_PLUGIN_ALREADY:
-    case SALTS_PLUGIN_DUPLICATE_PLUGIN_ID:
-    case SALTS_PLUGIN_DUPLICATE_EXPORT:
-      return SALTS_EALREADY;
-    case SALTS_PLUGIN_BUSY:
+    case SALTS_COMPONENT_PLUGIN_BUSY:
       return SALTS_EBUSY;
-    case SALTS_PLUGIN_LOAD_FAILED:
-    case SALTS_PLUGIN_UNLOAD_FAILED:
-      return SALTS_EIO;
-    case SALTS_PLUGIN_UNSUPPORTED_ABI:
-    case SALTS_PLUGIN_INVALID_MANIFEST:
-    case SALTS_PLUGIN_INCOMPATIBLE_CONTRACT:
-    case SALTS_PLUGIN_QUERY_MISSING:
-    case SALTS_PLUGIN_QUERY_REJECTED:
-    case SALTS_PLUGIN_INVALID_STATE:
+    case SALTS_COMPONENT_PLUGIN_COMPONENT_ERROR:
+      return SALTS_ENOENT;
+    case SALTS_COMPONENT_PLUGIN_PLUGIN_ERROR:
+    case SALTS_COMPONENT_PLUGIN_PROVIDER_ERROR:
+    case SALTS_COMPONENT_PLUGIN_INVALID_STATE:
       return SALTS_EPROTO;
   }
   return SALTS_EPROTO;
@@ -77,43 +66,32 @@ static int provider_candidate_valid(
     const turbo_flow_provider_candidate_v1_t *candidate) {
   return candidate &&
          candidate->size == sizeof(*candidate) &&
-         candidate->registry &&
-         salts_plugin_ref_valid(candidate->plugin);
+         candidate->component_identity &&
+         candidate->component_identity[0] != '\0';
+}
+
+static int provider_binding_live(
+    const turbo_flow_provider_binding_t *binding) {
+  return binding &&
+         binding->scope &&
+         binding->component_generation_id != UINT64_C(0) &&
+         salts_component_plugin_scope_generation_id(binding->scope) ==
+             binding->component_generation_id &&
+         turbo_flow_provider_factory_valid(&binding->factory) &&
+         turbo_flow_provider_contract_valid(&binding->contract);
 }
 
 static void provider_binding_free(turbo_flow_provider_binding_t *binding) {
   if (!binding) return;
   free(binding->provider_identity);
+  free(binding->component_identity);
   free(binding->module_identity);
+  memset(binding, 0, sizeof(*binding));
   free(binding);
 }
 
-static int provider_cleanup_failed_acquire(
-    turbo_flow_provider_binding_t *binding,
-    turbo_flow_provider_binding_t **out,
-    turbo_flow_config_error_t *error,
-    const char *provider_identity,
-    int original_status,
-    const char *message) {
-  salts_plugin_status released;
-  if (!binding || !salts_plugin_lease_valid(binding->lease)) {
-    provider_binding_free(binding);
-    return provider_error(error, original_status, provider_identity, message);
-  }
-
-  released = salts_plugin_registry_release(binding->registry, &binding->lease);
-  if (released != SALTS_PLUGIN_OK) {
-    *out = binding;
-    return provider_error(
-        error, provider_plugin_status(released), provider_identity,
-        "provider lease cleanup failed after binding rejection");
-  }
-
-  provider_binding_free(binding);
-  return provider_error(error, original_status, provider_identity, message);
-}
-
 int turbo_flow_provider_binding_acquire(
+    const salts_component_plugin_scope *component_scope,
     const turbo_flow_provider_resolver_v1_t *resolver,
     const char *provider_identity,
     turbo_flow_provider_binding_t **out,
@@ -121,13 +99,17 @@ int turbo_flow_provider_binding_acquire(
   turbo_flow_provider_candidate_v1_t candidate =
       TURBO_FLOW_PROVIDER_CANDIDATE_V1_INIT;
   turbo_flow_provider_binding_t *binding = NULL;
-  const salts_plugin_manifest *manifest = NULL;
-  const salts_plugin_export *entry = NULL;
-  salts_plugin_status plugin_status;
+  salts_component_service service;
+  salts_component_plugin_status component_status;
+  cmeta_status projection_status;
+  uint64_t generation_id;
   int status;
 
   if (out) *out = NULL;
-  if (!resolver || resolver->size != sizeof(*resolver) || !resolver->resolve ||
+  generation_id =
+      salts_component_plugin_scope_generation_id(component_scope);
+  if (!component_scope || generation_id == UINT64_C(0) ||
+      !resolver || resolver->size != sizeof(*resolver) || !resolver->resolve ||
       !provider_identity || !provider_identity[0] || !out)
     return provider_error(error, SALTS_EINVAL, provider_identity,
                           "invalid provider binding arguments");
@@ -146,7 +128,7 @@ int turbo_flow_provider_binding_acquire(
   if (!provider_candidate_valid(&candidate))
     return provider_error(
         error, SALTS_EPROTO, provider_identity,
-        "deployment provider resolver returned an invalid candidate");
+        "deployment provider resolver returned an invalid component identity");
 
   binding = (turbo_flow_provider_binding_t *)calloc(1u, sizeof(*binding));
   if (!binding)
@@ -154,67 +136,69 @@ int turbo_flow_provider_binding_acquire(
                           "provider binding allocation failed");
 
   binding->provider_identity = provider_copy_text(provider_identity);
+  binding->component_identity =
+      provider_copy_text(candidate.component_identity);
   binding->module_identity = candidate.module_identity
                                  ? provider_copy_text(candidate.module_identity)
                                  : NULL;
-  binding->registry = candidate.registry;
+  binding->scope = component_scope;
+  binding->component_generation_id = generation_id;
   binding->contract =
       (turbo_flow_provider_contract_v1_t)TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
-  if (!binding->provider_identity ||
+
+  if (!binding->provider_identity || !binding->component_identity ||
       (candidate.module_identity && !binding->module_identity)) {
     provider_binding_free(binding);
     return provider_error(error, SALTS_ENOMEM, provider_identity,
                           "provider identity allocation failed");
   }
 
-  plugin_status = salts_plugin_registry_acquire(
-      binding->registry, candidate.plugin, &binding->lease, &manifest);
-  if (plugin_status != SALTS_PLUGIN_OK) {
-    status = provider_plugin_status(plugin_status);
+  memset(&service, 0, sizeof(service));
+  component_status = salts_component_plugin_scope_find_service_from(
+      component_scope,
+      binding->component_identity,
+      turbo_flow_provider_factory_interface(),
+      &service);
+  if (component_status != SALTS_COMPONENT_PLUGIN_OK) {
+    status = provider_component_status(component_status);
     provider_binding_free(binding);
-    return provider_error(error, status, provider_identity,
-                          "provider plugin lease acquisition failed");
+    return provider_error(
+        error, status, provider_identity,
+        "provider Component service was not found in the pinned generation");
   }
 
-  plugin_status = salts_plugin_manifest_find_export(
-      manifest, binding->provider_identity, &entry);
-  if (plugin_status != SALTS_PLUGIN_OK) {
-    status = provider_plugin_status(plugin_status);
-    return provider_cleanup_failed_acquire(
-        binding, out, error, provider_identity, status,
-        "provider factory export was not found");
-  }
-
-  plugin_status = salts_plugin_export_require_interface(
-      entry, TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
-      TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION, 0u,
-      turbo_flow_provider_factory_interface());
-  if (plugin_status != SALTS_PLUGIN_OK) {
-    status = provider_plugin_status(plugin_status);
-    return provider_cleanup_failed_acquire(
-        binding, out, error, provider_identity, status,
-        "provider factory Interface contract is incompatible");
-  }
-
-  binding->factory =
-      (turbo_flow_provider_factory *)entry->value.interface.value;
-  if (!turbo_flow_provider_factory_valid(binding->factory)) {
-    return provider_cleanup_failed_acquire(
-        binding, out, error, provider_identity, SALTS_EPROTO,
-        "provider factory Interface handle is invalid");
+  binding->factory = turbo_flow_provider_factory_bind(NULL, NULL);
+  projection_status = turbo_flow_provider_factory_borrow_from_object(
+      service.object, service.interfaces, &binding->factory);
+  if (projection_status != CMETA_OK ||
+      !turbo_flow_provider_factory_valid(&binding->factory)) {
+    provider_binding_free(binding);
+    return provider_error(
+        error, SALTS_EPROTO, provider_identity,
+        "provider factory Interface projection is incompatible");
   }
 
   status = turbo_flow_provider_factory_contract(
-      binding->factory, &binding->contract);
+      &binding->factory, &binding->contract);
   if (status != SALTS_OK) {
-    return provider_cleanup_failed_acquire(
-        binding, out, error, provider_identity, status,
+    provider_binding_free(binding);
+    return provider_error(
+        error, status, provider_identity,
         "provider factory contract query failed");
   }
   if (!turbo_flow_provider_contract_valid(&binding->contract)) {
-    return provider_cleanup_failed_acquire(
-        binding, out, error, provider_identity, SALTS_EPROTO,
+    provider_binding_free(binding);
+    return provider_error(
+        error, SALTS_EPROTO, provider_identity,
         "provider factory returned an invalid typed contract");
+  }
+
+  /* Fail closed if publication changed while control-plane binding ran. */
+  if (!provider_binding_live(binding)) {
+    provider_binding_free(binding);
+    return provider_error(
+        error, SALTS_EBUSY, provider_identity,
+        "provider Component generation changed during binding");
   }
 
   *out = binding;
@@ -224,10 +208,7 @@ int turbo_flow_provider_binding_acquire(
 int turbo_flow_provider_binding_contract(
     const turbo_flow_provider_binding_t *binding,
     turbo_flow_provider_contract_v1_t *out) {
-  if (!binding || !out || out->size != sizeof(*out) ||
-      !salts_plugin_lease_valid(binding->lease) ||
-      !binding->factory ||
-      !turbo_flow_provider_contract_valid(&binding->contract))
+  if (!out || out->size != sizeof(*out) || !provider_binding_live(binding))
     return SALTS_EINVAL;
   *out = binding->contract;
   return SALTS_OK;
@@ -237,8 +218,7 @@ int turbo_flow_provider_binding_preflight(
     turbo_flow_provider_binding_t *binding,
     const turbo_flow_provider_instance_v1_t *instance,
     turbo_flow_config_error_t *error) {
-  if (!binding || !salts_plugin_lease_valid(binding->lease) ||
-      !turbo_flow_provider_factory_valid(binding->factory) ||
+  if (!provider_binding_live(binding) ||
       !instance || instance->size != sizeof(*instance) ||
       !instance->instance_name || !instance->instance_name[0])
     return provider_error(
@@ -247,7 +227,7 @@ int turbo_flow_provider_binding_preflight(
         "invalid provider preflight arguments");
 
   return turbo_flow_provider_factory_preflight(
-      binding->factory, instance, error);
+      &binding->factory, instance, error);
 }
 
 int turbo_flow_provider_binding_materialize(
@@ -256,8 +236,7 @@ int turbo_flow_provider_binding_materialize(
     const turbo_flow_provider_instance_v1_t *instance,
     turbo_flow_runtime_owner *owner_out,
     turbo_flow_config_error_t *error) {
-  if (!binding || !salts_plugin_lease_valid(binding->lease) ||
-      !turbo_flow_provider_factory_valid(binding->factory) ||
+  if (!provider_binding_live(binding) ||
       !flow || !instance || instance->size != sizeof(*instance) ||
       !instance->instance_name || !instance->instance_name[0] ||
       !owner_out)
@@ -267,23 +246,13 @@ int turbo_flow_provider_binding_materialize(
         "invalid provider materialization arguments");
 
   return turbo_flow_provider_factory_materialize(
-      binding->factory, flow, instance, owner_out, error);
+      &binding->factory, flow, instance, owner_out, error);
 }
 
 int turbo_flow_provider_binding_release(
     turbo_flow_provider_binding_t **binding_io) {
-  turbo_flow_provider_binding_t *binding;
-  salts_plugin_status status;
-
   if (!binding_io || !*binding_io) return SALTS_EINVAL;
-  binding = *binding_io;
-  if (!binding->registry || !salts_plugin_lease_valid(binding->lease))
-    return SALTS_EINVAL;
-
-  status = salts_plugin_registry_release(binding->registry, &binding->lease);
-  if (status != SALTS_PLUGIN_OK) return provider_plugin_status(status);
-
-  provider_binding_free(binding);
+  provider_binding_free(*binding_io);
   *binding_io = NULL;
   return SALTS_OK;
 }
