@@ -48,13 +48,13 @@ typedef struct generation_test_s {
   salts_component_plugin_runtime component_runtime;
 
   generation_resolver_fixture_t resolver;
-  turbo_flow_provider_resolver_v1_t provider_resolver;
+  turbo_flow_provider_resolver_v2_t provider_resolver;
   turbo_flow_resource_resolver_v1_t resource_resolver;
 } generation_test_t;
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   generation_resolver_fixture_t *fixture =
       (generation_resolver_fixture_t *)ctx;
@@ -227,8 +227,8 @@ static int test_open(
   test->resolver.resource = test->resource_ref;
 
   test->provider_resolver =
-      (turbo_flow_provider_resolver_v1_t)
-          TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+      (turbo_flow_provider_resolver_v2_t)
+          TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   test->provider_resolver.ctx = &test->resolver;
   test->provider_resolver.resolve = resolve_provider;
 
