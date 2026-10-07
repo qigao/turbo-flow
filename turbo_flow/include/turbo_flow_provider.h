@@ -7,6 +7,7 @@
 #include "turbo_flow_export.h"
 
 #include <cmeta/interface.h>
+#include <cmeta/object_interface.h>
 #include <data_bind.h>
 #include <data_bind_native_binding.h>
 
@@ -23,8 +24,8 @@ enum { TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION = 2u };
 /**
  * Generated DataBind contract required to bind one provider's .flow literals.
  *
- * Both pointers are provider-module owned and may only be used while the host
- * holds that provider's Salts Plugin lease.
+ * Both pointers are provider-module owned and may only be used while the
+ * enclosing Salts Component generation scope remains live.
  */
 typedef DataBindStatus (*turbo_flow_provider_codec_factory_fn)(
     DataBind **out, DataBindError *error);
