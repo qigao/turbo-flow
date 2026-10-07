@@ -33,7 +33,7 @@ typedef struct flow_provider_generation_s flow_provider_generation_t;
 int flow_provider_generation_prepare(
     turbo_flow_t *flow,
     salts_component_plugin_runtime *component_runtime,
-    const turbo_flow_provider_resolver_v1_t *provider_resolver,
+    const turbo_flow_provider_resolver_v2_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     size_t owner_capacity,
     flow_provider_generation_t **out,
