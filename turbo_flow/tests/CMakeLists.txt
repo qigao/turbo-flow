@@ -296,6 +296,26 @@ set_tests_properties(test_flow_provider_generation PROPERTIES
   LABELS "graph;provider;plugin;interface;lease;generation"
   TIMEOUT 30)
 
+# Focused Component-runtime qualification avoids the historical PluginHost
+# fixture fan-out attached to test_flow_plugin_generation.
+cmake_add_test(
+  test_flow_component_generation
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_plugin_generation.c
+  LIBS TurboFlow::PluginHost Salts::Plugin Salts::TinyTest
+  FOLDER "turbo_flow/tests")
+target_compile_definitions(test_flow_component_generation PRIVATE
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
+add_dependencies(test_flow_component_generation
+  test_flow_salts_provider_fixture
+  test_flow_salts_resource_fixture)
+set_target_properties(test_flow_component_generation PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+set_tests_properties(test_flow_component_generation PROPERTIES
+  LABELS "graph;provider;component;generation"
+  TIMEOUT 30)
+
+
 cmake_add_test(
   test_flow_resource_binding
   SOURCES
