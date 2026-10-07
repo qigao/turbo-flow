@@ -5,7 +5,7 @@
 #include "turbo_flow_export.h"
 #include "turbo_flow_provider.h"
 
-#include <salts/plugin.h>
+#include <salts/component_plugin.h>
 
 #include <stddef.h>
 
@@ -16,29 +16,26 @@ extern "C" {
 /**
  * Deployment lookup result for one canonical .flow provider identity.
  *
- * provider_identity is itself the Salts Plugin export_id. The resolver may only
- * select the loaded/started plugin ref that owns that exact export; it cannot
- * substitute a different export identity.
- *
- * module_identity is optional non-secret diagnostic text borrowed until the
- * enclosing acquire call returns. registry must outlive every acquired binding.
+ * component_identity is the exact Salts Component stable_id selected by
+ * deployment configuration. module_identity is optional diagnostic text.
+ * No Plugin registry/ref/lease is exposed here: module lifetime is pinned by
+ * the generation-owned Component scope.
  */
 typedef struct turbo_flow_provider_candidate_v1_s {
   size_t size;
   const char *module_identity;
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  const char *component_identity;
 } turbo_flow_provider_candidate_v1_t;
 
 #define TURBO_FLOW_PROVIDER_CANDIDATE_V1_INIT \
-  {sizeof(turbo_flow_provider_candidate_v1_t), NULL, NULL, {0u, 0u}}
+  {sizeof(turbo_flow_provider_candidate_v1_t), NULL, NULL}
 
 typedef int (*turbo_flow_provider_resolve_fn)(
     void *ctx, const char *provider_identity,
     turbo_flow_provider_candidate_v1_t *out,
     turbo_flow_config_error_t *error);
 
-/** Explicit deployment/control-plane resolver; never a process-global registry. */
+/** Explicit deployment/control-plane alias resolver; never a runtime registry. */
 typedef struct turbo_flow_provider_resolver_v1_s {
   size_t size;
   void *ctx;
@@ -51,16 +48,16 @@ typedef struct turbo_flow_provider_resolver_v1_s {
 typedef struct turbo_flow_provider_binding_s turbo_flow_provider_binding_t;
 
 /**
- * Resolve and retain one exact canonical provider-factory Interface export.
+ * Resolve one exact provider-factory Interface from a generation-owned
+ * Component scope.
  *
- * Success owns one Salts Plugin lease until release. Provider metadata,
- * DataBind Message artifacts, Interface vtables and callbacks remain borrowed
- * from the provider DSO under that lease.
- *
- * Normal failures leave *out NULL. If rejection cleanup cannot return the
- * acquired lease, *out receives a cleanup binding for explicit release retry.
+ * Success borrows provider metadata, DataBind artifacts, Interface vtable and
+ * callbacks from component_scope. The binding owns no Plugin lease. The scope
+ * must outlive the binding and every provider/session/result produced from it.
+ * All failures leave *out NULL.
  */
 TURBO_FLOW_C_API int turbo_flow_provider_binding_acquire(
+    const salts_component_plugin_scope *component_scope,
     const turbo_flow_provider_resolver_v1_t *resolver,
     const char *provider_identity,
     turbo_flow_provider_binding_t **out,
@@ -85,10 +82,7 @@ TURBO_FLOW_C_API int turbo_flow_provider_binding_materialize(
     turbo_flow_runtime_owner *owner_out,
     turbo_flow_config_error_t *error);
 
-/**
- * Release provider module lease and destroy binding.
- * On registry release failure, *binding_io remains live for explicit retry.
- */
+/** Destroy the local binding. Module lifetime remains owned by Component scope. */
 TURBO_FLOW_C_API int turbo_flow_provider_binding_release(
     turbo_flow_provider_binding_t **binding_io);
 
