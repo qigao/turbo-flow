@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-typedef struct turbo_flow_provider_resolver_v1_s
+typedef struct turbo_flow_provider_resolver_v2_s
     turbo_flow_provider_resolver_v2_t;
 typedef struct turbo_flow_resource_resolver_v1_s
     turbo_flow_resource_resolver_v1_t;
