@@ -3,6 +3,7 @@
 #include "salts_resource_fixture.h"
 #include "provider_config_native.h"
 
+#include <salts/component_plugin_abi.h>
 #include <salts/plugin.h>
 #include <salts/thread.h>
 
@@ -153,11 +154,6 @@ static int fixture_register_exact_stage_adapter(
   stage = turbo_flow_stage_at(flow, (size_t)stage_index);
   if (!stage) return SALTS_EPROTO;
 
-  /*
-   * Buffer providers own a separate buffer binding contract. This generic
-   * fixture only publishes exact adapter-stage registrations so the canonical
-   * generation integration test can reach Graph compile.
-   */
   if (stage->is_buffer) return SALTS_OK;
   if (!stage->adapter_name ||
       strcmp(stage->adapter_name, "fixture.provider") != 0)
@@ -219,39 +215,134 @@ CMETA_IMPLEMENTS(turbo_flow_provider_factory, fixture_provider_factory, 0u,
                  .preflight = fixture_preflight,
                  .materialize = fixture_materialize);
 
-static turbo_flow_provider_factory fixture_factory;
-static salts_plugin_export fixture_export;
-static salts_plugin_manifest fixture_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+/* Component instance stores one typed provider-state pointer value. */
+static const unsigned char fixture_component_shape = 1u;
+static const cmeta_data_desc fixture_component_object_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "turbo_flow.fixture.provider_state_ptr",
+    .display_name = "TurboFlow fixture provider state pointer",
+    .kind = CMETA_DATA_CUSTOM,
+    .storage_type = &cmeta_type_void_ptr,
+    .shape = &fixture_component_shape,
+};
+static fixture_provider_state_t *fixture_component_state = &fixture_state;
+
+cmeta_component(TurboFlowFixtureProvider,
+    cmeta_provides(turbo_flow_provider_factory));
+
+static cmeta_status fixture_component_project(
+    void *context,
+    const cmeta_object_ref *object,
+    const cmeta_interface_desc *expected,
+    cmeta_interface_projection *out) {
+  fixture_provider_state_t *state;
+  (void)context;
+
+  if (!cmeta_object_ref_valid(object) || out == NULL ||
+      object->object == NULL)
+    return CMETA_INVALID_ARGUMENT;
+  if (!cmeta_interface_desc_equal(
+          expected, turbo_flow_provider_factory_interface()))
+    return CMETA_TRAIT_MISSING;
+
+  state = *(fixture_provider_state_t **)object->object;
+  if (state == NULL) return CMETA_INVALID_ARGUMENT;
+
+  out->size = sizeof(*out);
+  out->interface = turbo_flow_provider_factory_interface();
+  out->self = state;
+  out->dispatch = &fixture_provider_factory_vtable;
+  return CMETA_OK;
+}
+
+static const cmeta_object_interface_provider fixture_component_interfaces = {
+    sizeof(cmeta_object_interface_provider),
+    NULL,
+    fixture_component_project,
+};
+
+static cmeta_status SALTS_COMPONENT_CALL fixture_component_create(
+    void *provider_context,
+    const cmeta_data_desc *config_data,
+    const void *config_value,
+    const salts_component_dependency *dependencies,
+    size_t dependency_count,
+    cmeta_object_ref *out_instance) {
+  fixture_provider_state_t *state =
+      (fixture_provider_state_t *)provider_context;
+
+  if (!state || config_data != NULL || config_value != NULL ||
+      dependencies != NULL || dependency_count != 0u || out_instance == NULL)
+    return CMETA_INVALID_ARGUMENT;
+
+  fixture_component_state = state;
+  return cmeta_object_borrow(
+      out_instance,
+      &fixture_component_state,
+      &fixture_component_object_data,
+      NULL);
+}
+
+static const salts_component_provider_binding fixture_component_binding = {
+    sizeof(salts_component_provider_binding),
+    SALTS_COMPONENT_PROVIDER_BINDING_ABI_VERSION,
+    cmeta_component_meta(TurboFlowFixtureProvider),
+    &fixture_state,
+    &fixture_component_interfaces,
+    fixture_component_create,
+    NULL,
+    NULL,
+};
+
+static const salts_component_provider_binding *
+fixture_component_get_binding(void *self) {
+  (void)self;
+  return &fixture_component_binding;
+}
+
+CMETA_IMPLEMENTS(
+    salts_component_provider,
+    fixture_component_provider_impl,
+    0u,
+    .get_binding = fixture_component_get_binding);
+
+static salts_component_provider fixture_component_provider;
+
+static cmeta_plugin_export fixture_export;
+static cmeta_plugin_manifest fixture_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.turboflow.provider",
     .version = {1u, 0u, 0u},
     .self = &fixture_state,
 };
-static salts_once_t fixture_once = SALTS_ONCE_INIT;
+static cmeta_once_t fixture_once = SALTS_ONCE_INIT;
 
 static void fixture_init(void) {
-  fixture_factory =
-      fixture_provider_factory_as_turbo_flow_provider_factory(&fixture_state);
-  fixture_export = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
-      .contract_version = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
+  fixture_component_provider =
+      fixture_component_provider_impl_as_salts_component_provider(
+          (void *)&fixture_component_binding);
+
+  fixture_export = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
+      .contract_version = SALTS_COMPONENT_PROVIDER_CONTRACT_VERSION,
       .capabilities = 0u,
       .export_id = "fixture.provider",
-      .contract_id = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
+      .contract_id = SALTS_COMPONENT_PROVIDER_CONTRACT_ID,
       .value.interface = {
-          .desc = turbo_flow_provider_factory_interface(),
-          .value = &fixture_factory,
+          .desc = salts_component_provider_interface(),
+          .value = &fixture_component_provider,
       },
   };
   fixture_manifest.exports = &fixture_export;
   fixture_manifest.export_count = 1u;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_start(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = false;
   state->started = true;
   state->owner_quiesce_calls = 0u;
@@ -259,35 +350,35 @@ static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
   state->owner_shutdown_calls = 0u;
   state->owner_poll_calls = 0u;
   state->owner_destroy_calls = 0u;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_request_stop(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_request_stop(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = true;
   state->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL fixture_is_quiescent(const void *self) {
+static bool CMETA_PLUGIN_CALL fixture_is_quiescent(const void *self) {
   const fixture_provider_state_t *state =
       (const fixture_provider_state_t *)self;
   return state && state->stopping;
 }
 
-static void SALTS_PLUGIN_CALL fixture_destroy(void *self) {
+static void CMETA_PLUGIN_CALL fixture_destroy(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
   if (!state) return;
   state->started = false;
   state->stopping = true;
 }
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&fixture_once, fixture_init);
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
+  cmeta_once(&fixture_once, fixture_init);
   fixture_manifest.start = fixture_start;
   fixture_manifest.request_stop = fixture_request_stop;
   fixture_manifest.is_quiescent = fixture_is_quiescent;
