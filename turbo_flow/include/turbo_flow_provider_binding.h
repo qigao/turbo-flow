@@ -21,7 +21,7 @@ extern "C" {
  * No Plugin registry/ref/lease is exposed here: module lifetime is pinned by
  * the generation-owned Component scope.
  */
-typedef struct turbo_flow_provider_candidate_v1_s {
+typedef struct turbo_flow_provider_candidate_v2_s {
   size_t size;
   const char *module_identity;
   const char *component_identity;
@@ -36,7 +36,7 @@ typedef int (*turbo_flow_provider_resolve_v2_fn)(
     turbo_flow_config_error_t *error);
 
 /** Explicit deployment/control-plane alias resolver; never a runtime registry. */
-typedef struct turbo_flow_provider_resolver_v1_s {
+typedef struct turbo_flow_provider_resolver_v2_s {
   size_t size;
   void *ctx;
   turbo_flow_provider_resolve_v2_fn resolve;
