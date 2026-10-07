@@ -115,14 +115,23 @@ jobs:
           cmake --build build/component-runtime --target \
             test_flow_provider_binding \
             test_flow_provider_generation \
-            test_flow_plugin_generation -j2
+            test_flow_component_generation -j2
 
       - name: Run focused provider/generation contracts
         shell: bash
         run: |
           set -euxo pipefail
           ctest --test-dir build/component-runtime \
-            -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_plugin_generation)$' \
+            -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_component_generation) \
+            --no-tests=error --output-on-failure
+
+      - name: Verify exact integration branch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "feature/component-runtime-conformance"
+ \
             --no-tests=error --output-on-failure
 
       - name: Verify exact integration branch
