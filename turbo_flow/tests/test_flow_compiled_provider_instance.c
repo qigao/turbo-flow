@@ -31,7 +31,7 @@ typedef struct resource_resolver_fixture_s {
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   provider_resolver_fixture_t *fixture =
       (provider_resolver_fixture_t *)ctx;
@@ -106,8 +106,8 @@ spec("compiled provider instance") {
     salts_plugin_ref resource_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t provider_resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_resource_resolver_v1_t resource_resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     flow_compiled_provider_instance_t *compiled = NULL;
@@ -262,8 +262,8 @@ spec("compiled provider instance") {
     salts_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t provider_resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_resource_resolver_v1_t resource_resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     flow_compiled_provider_instance_t *compiled = NULL;
@@ -316,8 +316,8 @@ spec("compiled provider instance") {
     salts_plugin_registry_config registry_config = {1u};
     salts_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t provider_resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     flow_compiled_provider_instance_t *compiled = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_t *flow = turbo_flow_create();
