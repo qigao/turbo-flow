@@ -8,42 +8,42 @@ struct turbo_flow_resource_binding_s {
   char *reference_name;
   char *identity;
   char *export_id;
-  salts_plugin_registry *registry;
-  salts_plugin_lease lease;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_lease lease;
   const cmeta_interface_desc *interface_desc;
   void *interface_value;
 };
 
-static int resource_plugin_status(salts_plugin_status status) {
+static int resource_plugin_status(cmeta_plugin_status status) {
   switch (status) {
-    case SALTS_PLUGIN_OK:
+    case CMETA_PLUGIN_OK:
       return SALTS_OK;
-    case SALTS_PLUGIN_INVALID_ARGUMENT:
+    case CMETA_PLUGIN_INVALID_ARGUMENT:
       return SALTS_EINVAL;
-    case SALTS_PLUGIN_UNKNOWN_EXPORT:
-    case SALTS_PLUGIN_UNKNOWN_PLUGIN:
-    case SALTS_PLUGIN_STALE:
+    case CMETA_PLUGIN_UNKNOWN_EXPORT:
+    case CMETA_PLUGIN_UNKNOWN_PLUGIN:
+    case CMETA_PLUGIN_STALE:
       return SALTS_ENOENT;
-    case SALTS_PLUGIN_CAPACITY_EXCEEDED:
+    case CMETA_PLUGIN_CAPACITY_EXCEEDED:
       return SALTS_ENOSPC;
-    case SALTS_PLUGIN_ALLOCATION_FAILED:
+    case CMETA_PLUGIN_ALLOCATION_FAILED:
       return SALTS_ENOMEM;
-    case SALTS_PLUGIN_ALREADY:
+    case CMETA_PLUGIN_ALREADY:
       return SALTS_EALREADY;
-    case SALTS_PLUGIN_BUSY:
+    case CMETA_PLUGIN_BUSY:
       return SALTS_EBUSY;
-    case SALTS_PLUGIN_UNSUPPORTED_ABI:
-    case SALTS_PLUGIN_INVALID_MANIFEST:
-    case SALTS_PLUGIN_INCOMPATIBLE_CONTRACT:
-    case SALTS_PLUGIN_QUERY_MISSING:
-    case SALTS_PLUGIN_QUERY_REJECTED:
-    case SALTS_PLUGIN_INVALID_STATE:
+    case CMETA_PLUGIN_UNSUPPORTED_ABI:
+    case CMETA_PLUGIN_INVALID_MANIFEST:
+    case CMETA_PLUGIN_INCOMPATIBLE_CONTRACT:
+    case CMETA_PLUGIN_QUERY_MISSING:
+    case CMETA_PLUGIN_QUERY_REJECTED:
+    case CMETA_PLUGIN_INVALID_STATE:
       return SALTS_EPROTO;
-    case SALTS_PLUGIN_LOAD_FAILED:
-    case SALTS_PLUGIN_UNLOAD_FAILED:
+    case CMETA_PLUGIN_LOAD_FAILED:
+    case CMETA_PLUGIN_UNLOAD_FAILED:
       return SALTS_EIO;
-    case SALTS_PLUGIN_DUPLICATE_PLUGIN_ID:
-    case SALTS_PLUGIN_DUPLICATE_EXPORT:
+    case CMETA_PLUGIN_DUPLICATE_PLUGIN_ID:
+    case CMETA_PLUGIN_DUPLICATE_EXPORT:
       return SALTS_EALREADY;
   }
   return SALTS_EPROTO;
@@ -89,7 +89,7 @@ static int resource_candidate_valid(
          candidate->size == sizeof(*candidate) &&
          candidate->identity && candidate->identity[0] &&
          candidate->registry &&
-         salts_plugin_ref_valid(candidate->plugin) &&
+         cmeta_plugin_ref_valid(candidate->plugin) &&
          candidate->export_id && candidate->export_id[0];
 }
 
@@ -100,8 +100,8 @@ static int resource_binding_cleanup_failed_acquire(
     const char *resource_name,
     int original_status,
     const char *message) {
-  salts_plugin_status released;
-  if (!binding || !salts_plugin_lease_valid(binding->lease)) {
+  cmeta_plugin_status released;
+  if (!binding || !cmeta_plugin_lease_valid(binding->lease)) {
     free(binding ? binding->reference_name : NULL);
     free(binding ? binding->identity : NULL);
     free(binding ? binding->export_id : NULL);
@@ -109,8 +109,8 @@ static int resource_binding_cleanup_failed_acquire(
     return resource_error(error, original_status, resource_name, message);
   }
 
-  released = salts_plugin_registry_release(binding->registry, &binding->lease);
-  if (released != SALTS_PLUGIN_OK) {
+  released = cmeta_plugin_registry_release(binding->registry, &binding->lease);
+  if (released != CMETA_PLUGIN_OK) {
     *out = binding;
     return resource_error(error, resource_plugin_status(released), resource_name,
                           "resource lease cleanup failed after binding rejection");
@@ -132,9 +132,9 @@ int turbo_flow_resource_binding_acquire(
   turbo_flow_resource_candidate_v1_t candidate =
       TURBO_FLOW_RESOURCE_CANDIDATE_V1_INIT;
   turbo_flow_resource_binding_t *binding = NULL;
-  const salts_plugin_manifest *manifest = NULL;
-  const salts_plugin_export *entry = NULL;
-  salts_plugin_status plugin_status;
+  const cmeta_plugin_manifest *manifest = NULL;
+  const cmeta_plugin_export *entry = NULL;
+  cmeta_plugin_status plugin_status;
   int status;
 
   if (out) *out = NULL;
@@ -176,9 +176,9 @@ int turbo_flow_resource_binding_acquire(
                           "resource identity allocation failed");
   }
 
-  plugin_status = salts_plugin_registry_acquire(
+  plugin_status = cmeta_plugin_registry_acquire(
       binding->registry, candidate.plugin, &binding->lease, &manifest);
-  if (plugin_status != SALTS_PLUGIN_OK) {
+  if (plugin_status != CMETA_PLUGIN_OK) {
     status = resource_plugin_status(plugin_status);
     free(binding->reference_name);
     free(binding->identity);
@@ -188,19 +188,19 @@ int turbo_flow_resource_binding_acquire(
                           "resource plugin lease acquisition failed");
   }
 
-  plugin_status = salts_plugin_manifest_find_export(
+  plugin_status = cmeta_plugin_manifest_find_export(
       manifest, binding->export_id, &entry);
-  if (plugin_status != SALTS_PLUGIN_OK) {
+  if (plugin_status != CMETA_PLUGIN_OK) {
     status = resource_plugin_status(plugin_status);
     return resource_binding_cleanup_failed_acquire(
         binding, out, error, resource_name, status,
         "resource Interface export was not found");
   }
 
-  plugin_status = salts_plugin_export_require_interface(
+  plugin_status = cmeta_plugin_export_require_interface(
       entry, requirement->contract_id, requirement->contract_version,
       requirement->required_capabilities, requirement->expected_interface);
-  if (plugin_status != SALTS_PLUGIN_OK) {
+  if (plugin_status != CMETA_PLUGIN_OK) {
     status = resource_plugin_status(plugin_status);
     return resource_binding_cleanup_failed_acquire(
         binding, out, error, resource_name, status,
@@ -218,7 +218,7 @@ int turbo_flow_resource_binding_view(
     turbo_flow_provider_resource_view_v1_t *out) {
   if (!binding || !out || out->size != sizeof(*out) ||
       !binding->reference_name || !binding->identity || !binding->export_id ||
-      !salts_plugin_lease_valid(binding->lease) ||
+      !cmeta_plugin_lease_valid(binding->lease) ||
       !cmeta_interface_desc_valid(binding->interface_desc) ||
       !binding->interface_value)
     return SALTS_EINVAL;
@@ -236,15 +236,15 @@ int turbo_flow_resource_binding_view(
 int turbo_flow_resource_binding_release(
     turbo_flow_resource_binding_t **binding_io) {
   turbo_flow_resource_binding_t *binding;
-  salts_plugin_status status;
+  cmeta_plugin_status status;
 
   if (!binding_io || !*binding_io) return SALTS_EINVAL;
   binding = *binding_io;
-  if (!binding->registry || !salts_plugin_lease_valid(binding->lease))
+  if (!binding->registry || !cmeta_plugin_lease_valid(binding->lease))
     return SALTS_EINVAL;
 
-  status = salts_plugin_registry_release(binding->registry, &binding->lease);
-  if (status != SALTS_PLUGIN_OK) return resource_plugin_status(status);
+  status = cmeta_plugin_registry_release(binding->registry, &binding->lease);
+  if (status != CMETA_PLUGIN_OK) return resource_plugin_status(status);
 
   free(binding->reference_name);
   free(binding->identity);
