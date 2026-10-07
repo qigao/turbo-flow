@@ -25,25 +25,25 @@ typedef struct turbo_flow_provider_candidate_v1_s {
   size_t size;
   const char *module_identity;
   const char *component_identity;
-} turbo_flow_provider_candidate_v1_t;
+} turbo_flow_provider_candidate_v2_t;
 
-#define TURBO_FLOW_PROVIDER_CANDIDATE_V1_INIT \
-  {sizeof(turbo_flow_provider_candidate_v1_t), NULL, NULL}
+#define TURBO_FLOW_PROVIDER_CANDIDATE_V2_INIT \
+  {sizeof(turbo_flow_provider_candidate_v2_t), NULL, NULL}
 
-typedef int (*turbo_flow_provider_resolve_fn)(
+typedef int (*turbo_flow_provider_resolve_v2_fn)(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error);
 
 /** Explicit deployment/control-plane alias resolver; never a runtime registry. */
 typedef struct turbo_flow_provider_resolver_v1_s {
   size_t size;
   void *ctx;
-  turbo_flow_provider_resolve_fn resolve;
-} turbo_flow_provider_resolver_v1_t;
+  turbo_flow_provider_resolve_v2_fn resolve;
+} turbo_flow_provider_resolver_v2_t;
 
-#define TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT \
-  {sizeof(turbo_flow_provider_resolver_v1_t), NULL, NULL}
+#define TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT \
+  {sizeof(turbo_flow_provider_resolver_v2_t), NULL, NULL}
 
 typedef struct turbo_flow_provider_binding_s turbo_flow_provider_binding_t;
 
@@ -58,7 +58,7 @@ typedef struct turbo_flow_provider_binding_s turbo_flow_provider_binding_t;
  */
 TURBO_FLOW_C_API int turbo_flow_provider_binding_acquire(
     const salts_component_plugin_scope *component_scope,
-    const turbo_flow_provider_resolver_v1_t *resolver,
+    const turbo_flow_provider_resolver_v2_t *resolver,
     const char *provider_identity,
     turbo_flow_provider_binding_t **out,
     turbo_flow_config_error_t *error);
