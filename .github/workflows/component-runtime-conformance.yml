@@ -87,13 +87,14 @@ jobs:
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$salts_root/include/salts/component_plugin.h"
           echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$salts_root/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Configure TurboFlow against Component integration SDK
         shell: bash
         run: |
           set -euxo pipefail
           cmake -S . -B build/component-runtime -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTING=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
