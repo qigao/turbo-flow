@@ -122,6 +122,7 @@ static int compiled_provider_fail(
 int flow_compiled_provider_instance_prepare(
     turbo_flow_t *flow,
     size_t stage_index,
+    const salts_component_plugin_scope *component_scope,
     const turbo_flow_provider_resolver_v1_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     flow_compiled_provider_instance_t **out,
@@ -136,7 +137,9 @@ int flow_compiled_provider_instance_prepare(
   int rc;
 
   if (out) *out = NULL;
-  if (!flow || !provider_resolver || !out)
+  if (!flow || !component_scope ||
+      salts_component_plugin_scope_generation_id(component_scope) == UINT64_C(0) ||
+      !provider_resolver || !out)
     return compiled_provider_error(
         error, SALTS_EINVAL, NULL, NULL,
         "invalid compiled provider arguments");
@@ -170,7 +173,7 @@ int flow_compiled_provider_instance_prepare(
       (turbo_flow_provider_instance_v1_t)TURBO_FLOW_PROVIDER_INSTANCE_V1_INIT;
 
   rc = turbo_flow_provider_binding_acquire(
-      provider_resolver, provider_identity,
+      component_scope, provider_resolver, provider_identity,
       &compiled->provider_binding, error);
   if (rc != SALTS_OK) {
     if (compiled->provider_binding) {
