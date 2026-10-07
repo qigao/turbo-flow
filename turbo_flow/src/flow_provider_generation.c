@@ -27,7 +27,30 @@ typedef struct flow_provider_generation_entry_s {
 struct flow_provider_generation_s {
   vec_t entries;
   size_t poll_cursor;
+  salts_component_plugin_scope component_scope;
+  uint64_t component_generation_id;
+  int component_scope_live;
 };
+
+static int provider_component_status(
+    salts_component_plugin_status status) {
+  switch (status) {
+    case SALTS_COMPONENT_PLUGIN_OK:
+      return SALTS_OK;
+    case SALTS_COMPONENT_PLUGIN_INVALID_ARGUMENT:
+      return SALTS_EINVAL;
+    case SALTS_COMPONENT_PLUGIN_CAPACITY_EXCEEDED:
+      return SALTS_ENOSPC;
+    case SALTS_COMPONENT_PLUGIN_BUSY:
+      return SALTS_EBUSY;
+    case SALTS_COMPONENT_PLUGIN_PLUGIN_ERROR:
+    case SALTS_COMPONENT_PLUGIN_PROVIDER_ERROR:
+    case SALTS_COMPONENT_PLUGIN_COMPONENT_ERROR:
+    case SALTS_COMPONENT_PLUGIN_INVALID_STATE:
+      return SALTS_EPROTO;
+  }
+  return SALTS_EPROTO;
+}
 
 static int provider_generation_error(
     turbo_flow_config_error_t *error, int status,
@@ -154,6 +177,7 @@ static void provider_generation_free_empty(
 
 int flow_provider_generation_prepare(
     turbo_flow_t *flow,
+    salts_component_plugin_runtime *component_runtime,
     const turbo_flow_provider_resolver_v1_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     size_t owner_capacity,
@@ -184,7 +208,8 @@ int flow_provider_generation_prepare(
         error, SALTS_ENOSPC, NULL, "capacity",
         "provider owner capacity is exhausted");
   if (roots != 0u &&
-      (!provider_resolver ||
+      (!component_runtime ||
+       !provider_resolver ||
        provider_resolver->size != sizeof(*provider_resolver) ||
        !provider_resolver->resolve))
     return provider_generation_error(
@@ -208,6 +233,31 @@ int flow_provider_generation_prepare(
     return provider_generation_error(
         error, rc, NULL, "allocate",
         "provider generation entry allocation failed");
+  }
+
+  if (roots != 0u) {
+    salts_component_plugin_status component_status =
+        salts_component_plugin_scope_acquire(
+            component_runtime, &generation->component_scope);
+    if (component_status != SALTS_COMPONENT_PLUGIN_OK) {
+      rc = provider_component_status(component_status);
+      provider_generation_free_empty(generation);
+      return provider_generation_error(
+          error, rc, NULL, "component",
+          "published Component generation is unavailable");
+    }
+    generation->component_generation_id =
+        salts_component_plugin_scope_generation_id(
+            &generation->component_scope);
+    if (generation->component_generation_id == UINT64_C(0)) {
+      (void)salts_component_plugin_scope_release(
+          &generation->component_scope);
+      provider_generation_free_empty(generation);
+      return provider_generation_error(
+          error, SALTS_EPROTO, NULL, "component",
+          "Component scope did not publish a generation identity");
+    }
+    generation->component_scope_live = 1;
   }
 
   for (size_t i = 0u; i < turbo_flow_stage_count(flow); ++i) {
@@ -237,7 +287,8 @@ int flow_provider_generation_prepare(
     }
 
     rc = flow_compiled_provider_instance_prepare(
-        flow, i, provider_resolver, resource_resolver,
+        flow, i, &generation->component_scope,
+        provider_resolver, resource_resolver,
         &entry.compiled, error);
     if (rc != SALTS_OK) {
       /*
@@ -285,6 +336,16 @@ int flow_provider_generation_prepare(
 fail:
   {
     int cleanup = provider_generation_release_prepared(generation);
+    if (cleanup == SALTS_OK && generation->component_scope_live) {
+      salts_component_plugin_status scope_status =
+          salts_component_plugin_scope_release(
+              &generation->component_scope);
+      cleanup = provider_component_status(scope_status);
+      if (cleanup == SALTS_OK) {
+        generation->component_scope_live = 0;
+        generation->component_generation_id = UINT64_C(0);
+      }
+    }
     if (cleanup == SALTS_OK) {
       provider_generation_free_empty(generation);
       return rc;
@@ -340,6 +401,13 @@ int flow_provider_generation_materialize(
 size_t flow_provider_generation_count(
     const flow_provider_generation_t *generation) {
   return generation ? vec_size(&generation->entries) : 0u;
+}
+
+uint64_t flow_provider_generation_component_generation_id(
+    const flow_provider_generation_t *generation) {
+  return generation && generation->component_scope_live
+      ? generation->component_generation_id
+      : UINT64_C(0);
 }
 
 int flow_provider_generation_poll(
@@ -527,7 +595,7 @@ int flow_provider_generation_release(
         first = rc;
         provider_generation_error(
             error, rc, entry->name, "release",
-            "provider/resource lease release failed");
+            "provider/resource cleanup failed");
       }
       continue;
     }
@@ -537,6 +605,19 @@ int flow_provider_generation_release(
   }
 
   if (first != SALTS_OK) return first;
+
+  if (generation->component_scope_live) {
+    salts_component_plugin_status scope_status =
+        salts_component_plugin_scope_release(
+            &generation->component_scope);
+    first = provider_component_status(scope_status);
+    if (first != SALTS_OK)
+      return provider_generation_error(
+          error, first, NULL, "component",
+          "Component generation scope release failed");
+    generation->component_scope_live = 0;
+    generation->component_generation_id = UINT64_C(0);
+  }
 
   provider_generation_free_empty(generation);
   *generation_io = NULL;
