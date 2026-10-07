@@ -123,7 +123,7 @@ int flow_compiled_provider_instance_prepare(
     turbo_flow_t *flow,
     size_t stage_index,
     const salts_component_plugin_scope *component_scope,
-    const turbo_flow_provider_resolver_v1_t *provider_resolver,
+    const turbo_flow_provider_resolver_v2_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     flow_compiled_provider_instance_t **out,
     turbo_flow_config_error_t *error) {
