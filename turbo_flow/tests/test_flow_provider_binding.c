@@ -150,7 +150,7 @@ static int resolve_resource(
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   provider_resolver_fixture_t *fixture =
       (provider_resolver_fixture_t *)ctx;
@@ -197,8 +197,8 @@ spec("TurboFlow Component provider binding") {
     component_fixture_t component = {0};
     provider_resolver_fixture_t fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
-    turbo_flow_provider_resolver_v1_t resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_resource_resolver_v1_t resource_resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     turbo_flow_provider_binding_t *binding = NULL;
@@ -339,8 +339,8 @@ spec("TurboFlow Component provider binding") {
     cmeta_plugin_ref provider_ref = {0};
     component_fixture_t component = {0};
     provider_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_provider_binding_t *binding = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
@@ -377,8 +377,8 @@ spec("TurboFlow Component provider binding") {
     cmeta_plugin_ref provider_ref = {0};
     component_fixture_t component = {0};
     provider_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t resolver =
+        TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_provider_binding_t *binding = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
 
