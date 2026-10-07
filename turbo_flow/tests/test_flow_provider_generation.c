@@ -112,7 +112,7 @@ static int component_generation_close(
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   generation_resolver_fixture_t *fixture =
       (generation_resolver_fixture_t *)ctx;
@@ -163,11 +163,11 @@ static int resolve_resource(
 
 static void setup_resolvers(
     generation_resolver_fixture_t *fixture,
-    turbo_flow_provider_resolver_v1_t *provider_resolver,
+    turbo_flow_provider_resolver_v2_t *provider_resolver,
     turbo_flow_resource_resolver_v1_t *resource_resolver) {
   *provider_resolver =
-      (turbo_flow_provider_resolver_v1_t)
-          TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+      (turbo_flow_provider_resolver_v2_t)
+          TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   provider_resolver->ctx = fixture;
   provider_resolver->resolve = resolve_provider;
 
@@ -306,7 +306,7 @@ spec("Component-backed provider generation aggregate") {
     cmeta_plugin_ref resource_ref = {0};
     component_generation_fixture_t component = {0};
     generation_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver;
+    turbo_flow_provider_resolver_v2_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
     flow_provider_generation_t *generation = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -443,7 +443,7 @@ spec("Component-backed provider generation aggregate") {
     cmeta_plugin_ref resource_ref = {0};
     component_generation_fixture_t component = {0};
     generation_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver;
+    turbo_flow_provider_resolver_v2_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
     flow_provider_generation_t *generation = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -507,7 +507,7 @@ spec("Component-backed provider generation aggregate") {
     cmeta_plugin_ref resource_ref = {0};
     component_generation_fixture_t component = {0};
     generation_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver;
+    turbo_flow_provider_resolver_v2_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
     flow_provider_generation_t *generation = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -564,7 +564,7 @@ spec("Component-backed provider generation aggregate") {
     cmeta_plugin_ref resource_ref = {0};
     component_generation_fixture_t component = {0};
     generation_resolver_fixture_t fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver;
+    turbo_flow_provider_resolver_v2_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
     flow_provider_generation_t *generation = NULL;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
