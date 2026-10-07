@@ -90,6 +90,11 @@ if(NOT TARGET Salts::DataBind)
           "resolved SaltsUtils package is missing required target Salts::DataBind")
 endif()
 
+if(NOT TARGET Salts::ComponentPlugin)
+  message(FATAL_ERROR
+          "resolved Salts package is missing required integration target Salts::ComponentPlugin")
+endif()
+
 include(TurboFlowRequireCNet)
 turbo_flow_require_cnet_stop_drain_contract()
 include(TurboFlowRequireCHTTP)
