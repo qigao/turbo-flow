@@ -1,0 +1,88 @@
+name: Component runtime conformance
+
+on:
+  push:
+    branches:
+      - feature/component-runtime-conformance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turbo-flow-component-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  component-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout TurboFlow integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/component-runtime-conformance
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up released dependency graph
+        uses: ./.github/actions/setup-salts-sdk
+
+      - name: Checkout Salts Component integration branch
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: feature/cmeta-pattern-component-runtime
+          path: .integration/salts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and install Salts Component integration SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-component-sdk"
+          cmake --preset release-linux-ninja \
+            -S .integration/salts \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
+            -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_OVERLAY_TRIPLETS"
+          cmake --build .integration/salts/build/linux-gcc-release -j2
+          cmake --install .integration/salts/build/linux-gcc-release \
+            --prefix "$salts_root"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$salts_root/include/salts/component_plugin.h"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+
+      - name: Configure TurboFlow against Component integration SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset ci-linux-debug-user
+
+      - name: Build focused provider/generation contracts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target \
+            test_flow_provider_binding \
+            test_flow_provider_generation \
+            test_flow_plugin_generation -j2
+
+      - name: Run focused provider/generation contracts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_plugin_generation)$' \
+            --no-tests=error --output-on-failure
+
+      - name: Verify exact integration branch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "feature/component-runtime-conformance"
