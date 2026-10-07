@@ -2,6 +2,7 @@
 #define TURBO_FLOW_PLUGIN_GENERATION_H
 
 #include "turbo_flow_plugin.h"
+#include <salts/component_plugin.h>
 
 #include <string.h>
 
@@ -181,7 +182,9 @@ typedef struct turbo_flow_plugin_generation_config_s {
   uint32_t abi_minor;
   size_t owner_capacity;
   size_t operation_memory_budget_bytes;
-  /** Explicit canonical provider resolver for .flow provider identities. */
+  /** Published Component runtime used to pin exactly one provider generation. */
+  salts_component_plugin_runtime *component_runtime;
+  /** Explicit deployment alias resolver for .flow provider identities. */
   const turbo_flow_provider_resolver_v1_t *provider_resolver;
   /** Explicit deployment-resource resolver for provider resource requirements. */
   const turbo_flow_resource_resolver_v1_t *resource_resolver;
@@ -192,7 +195,7 @@ enum { TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT = 67108864u };
 #define TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT                                                   \
   {sizeof(turbo_flow_plugin_generation_config_t), TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,             \
    TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR, 256u, TURBO_FLOW_PLUGIN_OPERATION_MEMORY_BUDGET_DEFAULT,   \
-   NULL, NULL}
+   NULL, NULL, NULL}
 
 /**
  * Fill a caller-owned immutable transactional Product catalog view.
@@ -213,8 +216,9 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * @param resolved Immutable resolved configuration borrowed for the duration of this call.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
  * @param config Initialized size/versioned capacity plus explicit canonical
- * provider/resource resolvers. Resolvers are borrowed for create/preflight only;
- * acquired provider/resource leases are retained by the generation.
+ * Component runtime plus provider/resource resolvers. The generation acquires
+ * one Component scope before provider binding and keeps it through every
+ * provider owner callback. Resource bindings remain TurboFlow-owned.
  * @param result_domain Caller-owned READY domain with the same snapshot; required for operations.
  * @param generation_out Receives the owned generation on success and NULL on failure.
  * @param cleanup_out Required distinct output retaining failed retirement. Retry recoverable
@@ -250,6 +254,10 @@ TURBO_FLOW_C_API turbo_flow_plugin_generation_state_t
 turbo_flow_plugin_generation_state(const turbo_flow_plugin_generation_t *generation);
 TURBO_FLOW_C_API size_t
 turbo_flow_plugin_generation_owner_count(const turbo_flow_plugin_generation_t *generation);
+
+/** Exact published Salts Component generation pinned by provider bindings. */
+TURBO_FLOW_C_API uint64_t turbo_flow_plugin_generation_component_generation_id(
+    const turbo_flow_plugin_generation_t *generation);
 
 /**
  * Return the number of compiled schema-level materializer bindings.
