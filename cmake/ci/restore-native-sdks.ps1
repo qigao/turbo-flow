@@ -151,8 +151,8 @@ $dataBindHeader = Get-Content -LiteralPath (Join-Path $saltsUtilsRoot "include/d
 if ($dataBindHeader -notmatch '#define\s+DATA_BIND_VERSION_MAJOR\s+3') {
   throw "latest SaltsUtils.Native does not expose DataBind 3"
 }
-if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+9') {
-  throw "latest SaltsUtils.Native does not expose DataBind ABI 9"
+if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
+  throw "latest SaltsUtils.Native does not expose DataBind ABI 10"
 }
 
 "SALTS_ROOT=$saltsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
@@ -202,4 +202,41 @@ if ($WithTurboDB) {
 }
 if ($WithCHttp) {
   Write-Host "Restored latest $($cHttp.Id) -> $($cHttp.Version) -> $cHttpRoot"
+}
+
+# Floating latest-stable dependencies are deliberate (TurboFlow #226). Capture
+# the concrete, reproducible resolution for THIS CI run; never substitute a
+# fallback SDK/root if a published dependency is missing or incompatible.
+$resolutionPath = Join-Path $env:RUNNER_TEMP "turboflow-native-sdk-resolution.json"
+$resolution = [ordered]@{
+  rid = $Rid
+  source_sha = [Environment]::GetEnvironmentVariable("EXPECTED_SHA")
+  salts = [ordered]@{ package = $salts.Id; version = $salts.Version; root = $saltsRoot }
+  salts_utils = [ordered]@{ package = $saltsUtils.Id; version = $saltsUtils.Version; root = $saltsUtilsRoot; data_bind_abi = 10 }
+}
+if ($WithRulesForge) {
+  $resolution.rules_forge = [ordered]@{ package = $rulesForge.Id; version = $rulesForge.Version; root = $rulesForgeRoot }
+}
+if ($WithTurboDB) {
+  $resolution.turbo_db = [ordered]@{ package = $turboDb.Id; version = $turboDb.Version; root = $turboDbRoot }
+}
+if ($WithCHttp) {
+  $resolution.chttp = [ordered]@{ package = $cHttp.Id; version = $cHttp.Version; root = $cHttpRoot }
+}
+$resolution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $resolutionPath -Encoding utf8NoBOM
+"TURBO_FLOW_NATIVE_SDK_RESOLUTION=$resolutionPath" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+Write-Host "Exact native SDK resolution recorded: $resolutionPath"
+Get-Content -LiteralPath $resolutionPath | Write-Host
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+  @(
+    "### TurboFlow native SDK resolution",
+    "",
+    "- Source: \u0060$([Environment]::GetEnvironmentVariable('EXPECTED_SHA'))\u0060",
+    "- RID: \u0060$Rid\u0060",
+    "- Salts.Native: \u0060$($salts.Version)\u0060",
+    "- SaltsUtils.Native: \u0060$($saltsUtils.Version)\u0060 (DataBind ABI 10)"
+  ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+  if ($WithCHttp) {
+    "- CHttp.Native: \u0060$($cHttp.Version)\u0060" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+  }
 }
