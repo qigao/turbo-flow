@@ -241,7 +241,7 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
   int rc = SALTS_OK;
 
   if (!flow) return SALTS_EINVAL;
-  started_at = salts_hrtime();
+  started_at = cmeta_hrtime();
   timeout_ns = timeout_ms == UINT64_MAX || timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : timeout_ms * UINT64_C(1000000);
@@ -270,14 +270,14 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
       cmeta_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
-    elapsed = salts_hrtime() - started_at;
+    elapsed = cmeta_hrtime() - started_at;
     if (elapsed >= timeout_ns) {
       rc = SALTS_ETIMEDOUT;
       break;
     }
     if (cmeta_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex, timeout_ns - elapsed) !=
             0 &&
-        salts_hrtime() - started_at >= timeout_ns) {
+        cmeta_hrtime() - started_at >= timeout_ns) {
       rc = SALTS_ETIMEDOUT;
       break;
     }
@@ -394,7 +394,7 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
     return flow_set_error_keep_state(flow, rc, 0, 0, "resize target pool was not found");
   }
 
-  started_at = salts_hrtime();
+  started_at = cmeta_hrtime();
   timeout_ns = command->drain_timeout_ms == UINT64_MAX ||
                        command->drain_timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
@@ -433,10 +433,10 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
       cmeta_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
-    elapsed = salts_hrtime() - started_at;
+    elapsed = cmeta_hrtime() - started_at;
     if (elapsed >= timeout_ns || (cmeta_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex,
                                                        timeout_ns - elapsed) != 0 &&
-                                  salts_hrtime() - started_at >= timeout_ns)) {
+                                  cmeta_hrtime() - started_at >= timeout_ns)) {
       flow->admission_state = FLOW_ADMISSION_PAUSED;
       cmeta_mutex_unlock(&flow->runtime_mutex);
       return SALTS_ETIMEDOUT;
@@ -937,7 +937,7 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   }
   if (flow->observer_ops.message_complete) {
     flow->observer_ops.message_complete(flow->observer_ctx, source_name, local,
-                                        salts_hrtime() - observe_start, rc);
+                                        cmeta_hrtime() - observe_start, rc);
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_FLOW_COMPLETE;
@@ -946,7 +946,7 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
   event.status = rc;
   event.selected = -1;
   event.edge_kind = -1;
-  event.duration_ns = observe_start != 0u ? salts_hrtime() - observe_start : 0u;
+  event.duration_ns = observe_start != 0u ? cmeta_hrtime() - observe_start : 0u;
   flow_observer_emit(flow, &event);
   result->status = rc;
   return rc;
@@ -984,7 +984,7 @@ int flow_publish_message_entered(turbo_flow_t *flow, const char *source_name,
   int async_sealed = 0;
   int rc;
 
-  if (flow_observer_has_handlers(flow)) observe_start = salts_hrtime();
+  if (flow_observer_has_handlers(flow)) observe_start = cmeta_hrtime();
   flow_clear_error(flow);
   if (flow_msg_payload_validate(msg) != SALTS_OK) {
     rc = flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,

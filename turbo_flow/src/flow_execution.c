@@ -13,7 +13,7 @@ static int flow_execution_task_cancel_status(flow_execution_task_t *task) {
     return SALTS_ETIMEDOUT;
   }
   deadline_at_ns = atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
-  if (deadline_at_ns != 0u && salts_hrtime() >= deadline_at_ns) {
+  if (deadline_at_ns != 0u && cmeta_hrtime() >= deadline_at_ns) {
     atomic_store_explicit(&task->deadline_expired, 1, memory_order_release);
     atomic_store_explicit(&task->cancel_requested, 1, memory_order_release);
     return SALTS_ETIMEDOUT;
@@ -96,7 +96,7 @@ void flow_execution_task_run(flow_execution_task_t *task) {
   if (task->deadline_ms != 0u) {
     cmeta_mutex_lock(&task->mutex);
     atomic_store_explicit(&task->deadline_at_ns,
-                          salts_hrtime() + task->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND,
+                          cmeta_hrtime() + task->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND,
                           memory_order_release);
     task->completion.entry.deadline_at_ns =
         atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
@@ -140,7 +140,7 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
     uint64_t deadline_at_ns = atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
     if (deadline_at_ns != 0u &&
         !atomic_load_explicit(&task->deadline_expired, memory_order_acquire)) {
-      uint64_t now = salts_hrtime();
+      uint64_t now = cmeta_hrtime();
       if (now >= deadline_at_ns ||
           cmeta_cond_timedwait(&task->cond, &task->mutex, deadline_at_ns - now) != 0) {
         atomic_store_explicit(&task->deadline_expired, 1, memory_order_release);

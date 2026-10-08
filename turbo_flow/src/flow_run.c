@@ -282,7 +282,7 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
     cmeta_mutex_unlock(&run->mutex);
     publication = flow_async_publication_create(
         flow, run->source_name, (const turbo_flow_msg_t *)value,
-        flow_observer_has_handlers(flow) ? salts_hrtime() : 0u, flow_run_async_value_finish, run);
+        flow_observer_has_handlers(flow) ? cmeta_hrtime() : 0u, flow_run_async_value_finish, run);
     if (!publication) {
       cmeta_mutex_lock(&run->mutex);
       --run->pending_values;
@@ -710,7 +710,7 @@ int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand) {
 }
 
 int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
-  const uint64_t started = salts_hrtime();
+  const uint64_t started = cmeta_hrtime();
   int rc = turbo_flow_pause(flow);
   if (rc != SALTS_OK) return rc;
   for (;;) {
@@ -736,7 +736,7 @@ int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
     if (active < subscriptions) return SALTS_EPROTO;
     if (active == subscriptions) return SALTS_OK;
     if (timeout_ms != UINT64_MAX &&
-        (salts_hrtime() - started) / UINT64_C(1000000) >= timeout_ms)
+        (cmeta_hrtime() - started) / UINT64_C(1000000) >= timeout_ms)
       return SALTS_ETIMEDOUT;
     cmeta_sleep_ms(1u);
   }
@@ -768,7 +768,7 @@ int turbo_flow_run_wait(turbo_flow_run_t *run, uint64_t timeout_ms,
   int terminal;
   int status;
   if (!run || !flow_run_result_valid(result)) return SALTS_EINVAL;
-  started_at = salts_hrtime();
+  started_at = cmeta_hrtime();
   timeout_ns = timeout_ms == UINT64_MAX || timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : timeout_ms * UINT64_C(1000000);
@@ -780,7 +780,7 @@ int turbo_flow_run_wait(turbo_flow_run_t *run, uint64_t timeout_ms,
       cmeta_cond_wait(&run->cond, &run->mutex);
       continue;
     }
-    elapsed = salts_hrtime() - started_at;
+    elapsed = cmeta_hrtime() - started_at;
     if (elapsed >= timeout_ns ||
         cmeta_cond_timedwait(&run->cond, &run->mutex, timeout_ns - elapsed) != 0) {
       break;

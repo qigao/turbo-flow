@@ -2,7 +2,7 @@
 
 #include <cflow/scheduler.h>
 #include <cstl/queue.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -85,7 +85,7 @@ static void packet_source_fail(turbo_flow_cnet_packet_source_t *source, int stat
   packet_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
   (void)snprintf(source->publisher_error, sizeof(source->publisher_error),
                  "CNet packet source failed at %s: %s (%d)", source->error_stage,
-                 salts_strerror(source->status), source->status);
+                 cmeta_strerror(source->status), source->status);
   packet_source_wake(&source->value_waker);
   packet_source_wake(&source->terminal_waker);
 }

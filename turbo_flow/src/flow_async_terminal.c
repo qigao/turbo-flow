@@ -56,7 +56,7 @@ static void flow_async_publication_finalize(flow_async_publication_t *publicatio
   if (flow->observer_ops.message_complete) {
     flow->observer_ops.message_complete(
         flow->observer_ctx, publication->source_name, &publication->message,
-        publication->observe_start != 0u ? salts_hrtime() - publication->observe_start : 0u,
+        publication->observe_start != 0u ? cmeta_hrtime() - publication->observe_start : 0u,
         result.status);
   }
   memset(&event, 0, sizeof(event));
@@ -67,7 +67,7 @@ static void flow_async_publication_finalize(flow_async_publication_t *publicatio
   event.selected = -1;
   event.edge_kind = -1;
   event.duration_ns =
-      publication->observe_start != 0u ? salts_hrtime() - publication->observe_start : 0u;
+      publication->observe_start != 0u ? cmeta_hrtime() - publication->observe_start : 0u;
   flow_observer_emit(flow, &event);
   if (publication->finish) publication->finish(publication->finish_ctx, &result);
   turbo_flow_msg_cleanup(&publication->message);
@@ -166,7 +166,7 @@ static void flow_async_terminal_observe(flow_async_terminal_claim_impl_t *impl, 
       flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
-                          ? salts_hrtime() - impl->completion.async_started_at
+                          ? cmeta_hrtime() - impl->completion.async_started_at
                           : 0u;
   if (impl->flow->observer_ops.stage_complete) {
     impl->flow->observer_ops.stage_complete(impl->flow->observer_ctx, stage ? stage->name : NULL,
@@ -254,7 +254,7 @@ static void flow_async_emit_observe(flow_async_emit_claim_impl_t *impl, int stat
       flow_compiled_stage_view(impl->flow, impl->stage_index);
   turbo_flow_observe_event_t event;
   uint64_t duration = impl->completion.async_started_at != 0u
-                          ? salts_hrtime() - impl->completion.async_started_at
+                          ? cmeta_hrtime() - impl->completion.async_started_at
                           : 0u;
   if (impl->flow->observer_ops.stage_complete) {
     impl->flow->observer_ops.stage_complete(impl->flow->observer_ctx, stage ? stage->name : NULL,

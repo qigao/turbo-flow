@@ -235,7 +235,7 @@ static void flow_durable_latency_claim_end(void *ctx, int observed,
       const flow_durable_latency_pending_t *entry =
           (const flow_durable_latency_pending_t *)vec_at_const(
               &binding->latency_pending, index);
-      const uint64_t now = salts_hrtime();
+      const uint64_t now = cmeta_hrtime();
       const uint64_t latency =
           entry && now >= entry->admitted_ns ? now - entry->admitted_ns : 0u;
       if (binding->latency_claim_samples != UINT64_MAX) {
@@ -283,7 +283,7 @@ static int flow_durable_buffer_admit_observed(
     } else if (after.admitted == before.admitted + UINT64_C(1) &&
                after.pending_records == before.pending_records + 1u) {
       flow_durable_latency_pending_t entry = {
-          receipt->record_id, salts_hrtime()};
+          receipt->record_id, cmeta_hrtime()};
       if (turbo_flow_stl_error(vec_push(&binding->latency_pending, &entry)) != SALTS_OK)
         binding->latency_tracking_uncertain = 1;
     } else if (after.admitted != before.admitted ||
@@ -572,7 +572,7 @@ int turbo_flow_durable_buffer_bind(
   atomic_init(&binding->rejected_closed, 0u);
   atomic_init(&binding->rejected_provider, 0u);
   atomic_init(&binding->rejected_message, 0u);
-  binding->runtime_started_ns = salts_hrtime();
+  binding->runtime_started_ns = cmeta_hrtime();
   binding->baseline_admitted = snapshot.admitted;
   binding->baseline_completed = snapshot.completed;
   binding->baseline_failed = snapshot.failed;
@@ -864,13 +864,13 @@ static int flow_durable_buffer_failed_status(turbo_flow_durable_buffer_binding_t
 static uint64_t flow_durable_remaining_ms(uint64_t started, uint64_t timeout_ms) {
   uint64_t elapsed;
   if (timeout_ms == UINT64_MAX) return UINT64_MAX;
-  elapsed = (salts_hrtime() - started) / UINT64_C(1000000);
+  elapsed = (cmeta_hrtime() - started) / UINT64_C(1000000);
   return elapsed >= timeout_ms ? 0u : timeout_ms - elapsed;
 }
 
 int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding,
                                      uint64_t timeout_ms) {
-  const uint64_t started = salts_hrtime();
+  const uint64_t started = cmeta_hrtime();
   int rc;
   if (!binding || !binding->bound || !binding->flow) return SALTS_EINVAL;
   for (;;) {
@@ -930,7 +930,7 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
 int turbo_flow_durable_buffer_close_and_drain(
     turbo_flow_t *flow, const char *resource_name, uint64_t timeout_ms) {
   turbo_flow_durable_buffer_binding_t *binding;
-  const uint64_t started = salts_hrtime();
+  const uint64_t started = cmeta_hrtime();
   int rc;
   if (!flow || !resource_name || resource_name[0] == '\0') return SALTS_EINVAL;
   binding = flow_durable_buffer_find_binding(flow, resource_name, NULL);
@@ -1243,7 +1243,7 @@ int turbo_flow_durable_buffer_runtime_snapshot(
       provider.discarded < binding->baseline_discarded)
     return SALTS_EPROTO;
 
-  now = salts_hrtime();
+  now = cmeta_hrtime();
   observed.elapsed_ns = now >= binding->runtime_started_ns
                             ? now - binding->runtime_started_ns
                             : 0u;
@@ -1279,7 +1279,7 @@ int turbo_flow_durable_buffer_completion_snapshot(
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
 
-  now = salts_hrtime();
+  now = cmeta_hrtime();
   observed.elapsed_ns =
       now >= binding->runtime_started_ns ? now - binding->runtime_started_ns : 0u;
   observed.graph_completed =
@@ -1327,7 +1327,7 @@ int turbo_flow_durable_buffer_latency_snapshot(
     cmeta_mutex_unlock(&binding->latency_mutex);
     return rc;
   }
-  now = salts_hrtime();
+  now = cmeta_hrtime();
   if (!atomic_load_explicit(&binding->latency_enabled, memory_order_relaxed)) {
     binding->latency_started_ns = now;
     binding->latency_claim_samples = 0u;
@@ -1441,7 +1441,7 @@ int turbo_flow_durable_buffer_forget(turbo_flow_t *flow, const char *resource_na
 }
 
 int flow_durable_buffers_prepare_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
-  const uint64_t started = salts_hrtime();
+  const uint64_t started = cmeta_hrtime();
   size_t *indegree = NULL;
   uint32_t *order = NULL;
   const size_t binding_count = flow ? vec_size(&flow->durable_buffer_bindings) : 0u;
