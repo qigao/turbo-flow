@@ -246,10 +246,12 @@ ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
 CI selects Component and adjacent business suites from the full configured graph
 and uploads consumer/dependency identities, JUnit results, and CTest logs as
 `component-acceptance-linux-x64`. The root CTest command above runs the broader
-suite. The CNet and CHTTP factory tests also adapt their existing plugin exports into
+suite. The CNet, CHTTP, and durable-memory factory tests also adapt their existing
+plugin exports into
 local Component deployments; the outer plugin lease outlives the graph, owner,
-bindings, and Component scope. These tests exercise provider materialization,
-not network payload delivery. A green Linux Release run establishes only this
+bindings, and Component scope. The IO tests exercise provider materialization;
+the durable-memory suite also verifies payload delivery, replay deduplication,
+capacity limits, and backlog retirement before Graph stop. A green Linux Release run establishes only this
 profile's acceptance;
 sanitizer qualification and Windows/macOS downstream runs remain separate release
 gates. This workflow neither merges nor publishes a stable release.

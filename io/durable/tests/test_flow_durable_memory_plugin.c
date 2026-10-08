@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../../turbo_flow/tests/adapter_component_fixture.h"
 #include "durable_provider_conformance.h"
 #include "tinytest.h"
 #include "turbo_flow_durable_buffer.h"
@@ -8,6 +9,7 @@
 #include "turbo_flow_resource.h"
 
 #include <salts/clock.h>
+#include <salts/thread.h>
 #include <salts/plugin.h>
 
 #include <stdatomic.h>
@@ -64,8 +66,9 @@ typedef struct fixture_s {
   int plugin_loaded;
   int plugin_started;
 
+  adapter_component_fixture_t component;
   resolver_state_t resolver;
-  turbo_flow_provider_resolver_v1_t provider_resolver;
+  turbo_flow_provider_resolver_v2_t provider_resolver;
   turbo_flow_resource_resolver_v1_t resource_resolver;
 
   atomic_size_t delivered;
@@ -84,7 +87,7 @@ static int output(turbo_flow_msg_t *msg, void *ctx) {
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   resolver_state_t *state = (resolver_state_t *)ctx;
   if (!state || !provider_identity || !out ||
@@ -99,8 +102,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "turbo-flow.durable.memory";
-  out->registry = state->registry;
-  out->plugin = state->plugin;
+  out->component_identity = "AdapterProviderFixture";
   return SALTS_OK;
 }
 
@@ -216,12 +218,15 @@ static int open_fixture(
           &f->registry, f->plugin_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->plugin_started = 1;
+  rc = adapter_component_open(&f->component, &f->registry, f->plugin_ref,
+      "flow.durable.memory");
+  if (rc != SALTS_OK) return rc;
 
   f->resolver.registry = &f->registry;
   f->resolver.plugin = f->plugin_ref;
   f->provider_resolver =
-      (turbo_flow_provider_resolver_v1_t)
-          TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+      (turbo_flow_provider_resolver_v2_t)
+          TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   f->provider_resolver.ctx = &f->resolver;
   f->provider_resolver.resolve = resolve_provider;
   f->resource_resolver =
@@ -272,6 +277,7 @@ static void close_fixture(fixture_t *f) {
         SALTS_OK);
     f->host = NULL;
   }
+  check_equal(adapter_component_close(&f->component), SALTS_OK);
   stop_unload(f);
 }
 
@@ -282,6 +288,7 @@ static int create_generation(fixture_t *f) {
       TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   int rc;
 
+  config.component_runtime = &f->component.component.runtime;
   config.provider_resolver = &f->provider_resolver;
   config.resource_resolver = &f->resource_resolver;
   rc = turbo_flow_plugin_generation_create(
