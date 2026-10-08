@@ -2040,7 +2040,7 @@ spec("Turbo Flow Bench") {
       atomic_init(&jobs.completed, 0u);
       check_not_null(adapter);
       for (uint32_t i = 0; i < 4; ++i)
-        check_equal(salts_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
+        check_equal(cmeta_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
       while (atomic_load_explicit(&jobs.started, memory_order_acquire) == 0u)
         cmeta_sleep_ms(1);
       check_equal(cmeta_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);

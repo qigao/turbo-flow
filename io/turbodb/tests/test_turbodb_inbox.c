@@ -1032,8 +1032,8 @@ spec("TurboDB durable inbox v3") {
     check_equal(envelope.protocolVersion, "v");
     check_equal(envelope.deviceId, "d");
     check_equal(envelope.operation, "o");
-    check_equal(tbe_bytes_t_size(&envelope.payload), sizeof(payload));
-    check_equal(tbe_bytes_t_data_const(&envelope.payload), payload, sizeof(payload));
+    check_equal(stl_byte_buffer_size(&envelope.payload), sizeof(payload));
+    check_equal(stl_byte_buffer_data_const(&envelope.payload), payload, sizeof(payload));
     data_bind_free(codec);
     ProtocolInboxEnvelope_clear(&envelope);
     check_equal(turbo_flow_inbox_complete(&recovered_inbox, &claim), SALTS_OK);
