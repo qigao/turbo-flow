@@ -393,7 +393,7 @@ spec("canonical bounded memory durable provider") {
           turbo_flow_plugin_generation_flow(f.generation);
       turbo_flow_durable_provider_conformance_v1_t contract = {
           &f, flow, conformance_publish_stable,
-          conformance_progress, conformance_delivered};
+          conformance_progress, conformance_delivered, "intake_store"};
       check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_durable_provider_conformance_capacity_and_replay(
           &contract);

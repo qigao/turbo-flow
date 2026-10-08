@@ -18,6 +18,7 @@ typedef struct turbo_flow_durable_provider_conformance_v1_s {
   int (*publish_stable)(void *ctx, const char *admission_id);
   int (*progress)(void *ctx);
   size_t (*delivered)(void *ctx);
+  const char *resource_name;
 } turbo_flow_durable_provider_conformance_v1_t;
 
 static void turbo_flow_durable_provider_conformance_capacity_and_replay(
@@ -30,6 +31,7 @@ static void turbo_flow_durable_provider_conformance_capacity_and_replay(
   check_not_null(p->publish_stable);
   check_not_null(p->progress);
   check_not_null(p->delivered);
+  check_not_null(p->resource_name);
 
   /* Stable replay is one logical admission and must not consume capacity twice. */
   check_equal(p->publish_stable(p->ctx, "parity-one"), SALTS_OK);
@@ -52,12 +54,12 @@ static void turbo_flow_durable_provider_conformance_capacity_and_replay(
    */
   check_equal(p->publish_stable(p->ctx, "parity-three"), SALTS_ENOSPC);
   check_equal(turbo_flow_durable_buffer_scan_history(
-                  p->flow, "intake.store", 0u, &history, 1u, &count),
+                  p->flow, p->resource_name, 0u, &history, 1u, &count),
               SALTS_OK);
   check_equal(count, (size_t)1u);
   check_equal(history.kind, TURBO_FLOW_INBOX_TERMINAL_COMPLETED);
   check_equal(turbo_flow_durable_buffer_forget(
-                  p->flow, "intake.store", history.record_id),
+                  p->flow, p->resource_name, history.record_id),
               SALTS_OK);
   check_equal(p->publish_stable(p->ctx, "parity-three"), SALTS_OK);
 }

@@ -503,6 +503,9 @@ spec("Component-backed Graph generation") {
         cmeta_plugin_registry_unload(
             &test.registry, test.provider_ref),
         CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
+        &test.registry, test.resource_ref, &quiescent), CMETA_PLUGIN_OK);
+    check_true(quiescent);
     check_equal(
         cmeta_plugin_registry_unload(
             &test.registry, test.resource_ref),
