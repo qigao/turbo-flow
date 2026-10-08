@@ -323,9 +323,9 @@ int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
 
 int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
                                       turbo_flow_observe_graph_snapshot_t *out) {
-  salts_platform_cpu_info_t cpu;
-  salts_platform_memory_info_t memory;
-  salts_platform_load_average_t load;
+  cmeta_platform_cpu_info_t cpu;
+  cmeta_platform_memory_info_t memory;
+  cmeta_platform_load_average_t load;
   size_t pool_count;
   size_t resource_count;
   int rc;
@@ -404,15 +404,15 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
       break;
     }
   }
-  if (salts_platform_cpu_info(&cpu) == SALTS_OK) {
+  if (cmeta_platform_cpu_info(&cpu) == SALTS_OK) {
     out->system.cpu_cores = cpu.core_count;
     out->system.cpu_speed_mhz = cpu.speed_mhz;
   }
-  if (salts_platform_memory_info(&memory) == SALTS_OK) {
+  if (cmeta_platform_memory_info(&memory) == SALTS_OK) {
     out->system.total_memory_bytes = memory.total_memory;
     out->system.available_memory_bytes = memory.available_memory;
   }
-  if (salts_platform_load_average(&load) == SALTS_OK) {
+  if (cmeta_platform_load_average(&load) == SALTS_OK) {
     out->system.load_1m = load.one_minute;
     out->system.load_5m = load.five_minutes;
     out->system.load_15m = load.fifteen_minutes;
