@@ -215,13 +215,13 @@ $resolution = [ordered]@{
   salts_utils = [ordered]@{ package = $saltsUtils.Id; version = $saltsUtils.Version; root = $saltsUtilsRoot; data_bind_abi = 10 }
 }
 if ($WithRulesForge) {
-  $resolution.rules_forge = [ordered]@{ package = $rulesForge.Id; version = $rulesForge.Version; root = $rulesForgeRoot }
+  $resolution['rules_forge'] = [ordered]@{ package = $rulesForge.Id; version = $rulesForge.Version; root = $rulesForgeRoot }
 }
 if ($WithTurboDB) {
-  $resolution.turbo_db = [ordered]@{ package = $turboDb.Id; version = $turboDb.Version; root = $turboDbRoot }
+  $resolution['turbo_db'] = [ordered]@{ package = $turboDb.Id; version = $turboDb.Version; root = $turboDbRoot }
 }
 if ($WithCHttp) {
-  $resolution.chttp = [ordered]@{ package = $cHttp.Id; version = $cHttp.Version; root = $cHttpRoot }
+  $resolution['chttp'] = [ordered]@{ package = $cHttp.Id; version = $cHttp.Version; root = $cHttpRoot }
 }
 $resolution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $resolutionPath -Encoding utf8NoBOM
 "TURBO_FLOW_NATIVE_SDK_RESOLUTION=$resolutionPath" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
