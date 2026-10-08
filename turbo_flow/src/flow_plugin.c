@@ -6,6 +6,7 @@
 
 #include "turbo_flow_stl_error_internal.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -685,6 +686,21 @@ static int flow_plugin_add_schema(void *ctx, const turbo_flow_plugin_schema_v1_t
   return rc;
 }
 
+/* Match the fundamental object alignment of the installed Salts SDK.
+ * MSVC's C standard headers do not provide max_align_t. */
+static size_t flow_plugin_max_alignment(void) {
+#if defined(_MSC_VER)
+  typedef union {
+    long double floating;
+    long long integer;
+    void *pointer;
+  } flow_plugin_fundamental_align_t;
+  return _Alignof(flow_plugin_fundamental_align_t);
+#else
+  return _Alignof(max_align_t);
+#endif
+}
+
 static int flow_plugin_materializer_valid(const turbo_flow_plugin_materializer_v1_t *m) {
   int rc;
   if (!m || m->size != sizeof(*m) ||
@@ -706,7 +722,7 @@ static int flow_plugin_materializer_valid(const turbo_flow_plugin_materializer_v
       m->max_encoded_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||
       !m->native_bytes || m->native_bytes > TURBO_FLOW_PLUGIN_MATERIALIZER_MAX_BYTES ||
       m->native_bytes != m->data->storage_type->size ||
-      m->data->storage_type->align > _Alignof(max_align_t) ||
+      m->data->storage_type->align > flow_plugin_max_alignment() ||
       m->threading != TURBO_FLOW_PLUGIN_MATERIALIZER_THREAD_SAFE ||
       m->ownership != TURBO_FLOW_PLUGIN_MATERIALIZER_CALLER_BUFFER ||
       !m->materialize)
