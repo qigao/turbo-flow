@@ -111,6 +111,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64 -WithTurboDB -WithCHttp
 
+      - name: Record latest stable SDK resolution and DataBind ABI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f "$TURBO_FLOW_NATIVE_SDK_RESOLUTION"
+          cp "$TURBO_FLOW_NATIVE_SDK_RESOLUTION" "$RUNNER_TEMP/task4-runtime-evidence/native-sdk-resolution.json"
+          test -f "$HTTP_SERVICES_ROOT/lib/cmake/Chttp/ChttpConfig.cmake"
+          grep -Eq '^#define[[:space:]]+DATA_BIND_ABI_VERSION[[:space:]]+10([[:space:]]|$)' "$SALTS_UTILS_ROOT/include/data_bind.h"
+          cat "$RUNNER_TEMP/task4-runtime-evidence/native-sdk-resolution.json"
+
       - name: Verify published dependency boundary
         shell: bash
         run: |
@@ -166,7 +176,8 @@ jobs:
           test -n "$plugin"
           exports="$(nm -D --defined-only "$plugin" | awk '$2 ~ /^[TW]$/ {print $3}' | sort -u)"
           printf '%s\n' "$exports" | tee "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider-exports.txt"
-          test "$exports" = "salts_plugin_query"
+          test "$exports" = "cmeta_plugin_query"
+          ! printf '%s\\n' "$exports" | grep -Fx 'salts_plugin_query'
           ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
           printf '%s\n' "$plugin" > "$RUNNER_TEMP/task4-runtime-evidence/chttp-provider.txt"
 
