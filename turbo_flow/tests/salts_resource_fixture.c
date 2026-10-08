@@ -82,7 +82,7 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&resource_once, resource_init);
+  cmeta_once(&resource_once, resource_init);
   resource_manifest.start = resource_start;
   resource_manifest.request_stop = resource_request_stop;
   resource_manifest.is_quiescent = resource_is_quiescent;

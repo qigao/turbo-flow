@@ -213,7 +213,7 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&fixture_once, fixture_init);
+  cmeta_once(&fixture_once, fixture_init);
   manifest.start = fixture_start;
   manifest.request_stop = fixture_request_stop;
   manifest.is_quiescent = fixture_is_quiescent;
