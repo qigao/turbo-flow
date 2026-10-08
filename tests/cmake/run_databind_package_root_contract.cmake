@@ -38,8 +38,8 @@ endif()
 ]=])
 write_basic_package_version_file(
   "${salts_root}/lib/cmake/Salts/SaltsConfigVersion.cmake"
-  VERSION 1.8.3
-  COMPATIBILITY ExactVersion)
+  VERSION 3.0.0
+  COMPATIBILITY SameMajorVersion)
 
 file(WRITE "${salts_utils_root}/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake" [=[
 if(NOT TARGET Salts::JsonParser)

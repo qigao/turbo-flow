@@ -102,6 +102,7 @@ jobs:
           cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> "$root/component-dependency-manifest.txt"
           cat "$root/component-dependency-manifest.txt" >> "$GITHUB_STEP_SUMMARY"
           echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_HOST_ROOT=$root" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
 
       - name: Checkout CHTTP dependency source
