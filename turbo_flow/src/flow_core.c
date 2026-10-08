@@ -2,6 +2,8 @@
 #include "flow_provider_config_internal.h"
 #include "turbo_flow_provider_adapter.h"
 
+#include <cmeta_error.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +27,7 @@ int flow_set_error(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : cmeta_strerror(code));
   flow->state = TURBO_FLOW_STATE_FAILED;
   return code;
 }
@@ -38,7 +40,7 @@ int flow_set_error_keep_state(turbo_flow_t *flow, int code, uint32_t line, uint3
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : cmeta_strerror(code));
   return code;
 }
 
@@ -2178,7 +2180,7 @@ void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *ev
   mask = TURBO_FLOW_OBSERVE_EVENT_MASK(event->kind);
   view = *event;
   view.size = sizeof(view);
-  if (view.timestamp_ns == 0u) view.timestamp_ns = salts_hrtime();
+  if (view.timestamp_ns == 0u) view.timestamp_ns = cmeta_hrtime();
   if (view.kind == TURBO_FLOW_OBSERVE_SINK_COMPLETE &&
       flow_current_sink_completion_observer.fn) {
     flow_current_sink_completion_observer.fn(
