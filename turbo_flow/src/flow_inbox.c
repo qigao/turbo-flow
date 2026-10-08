@@ -3,9 +3,9 @@
 #include "turbo_flow_stl_error_internal.h"
 
 #include <cstl/vec.h>
-#include <salts_buffer.h>
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <cmeta_buffer.h>
+#include <salts/error_codes.h>
+#include <cmeta_thread.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,7 +37,7 @@ typedef struct flow_inbox_memory_slot_s {
 } flow_inbox_memory_slot_t;
 
 typedef struct flow_inbox_memory_s {
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   vec_t records;
   turbo_flow_inbox_memory_config_t config;
   size_t retained_bytes;
@@ -318,7 +318,7 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
       retained_bytes += source->payload.len;
   }
 
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   existing = flow_inbox_memory_find_admission(memory, source);
   if (existing) {
     rc = flow_inbox_record_equal(&existing->view, source) ? SALTS_OK : SALTS_EPROTO;
@@ -346,7 +346,7 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
       }
     }
     if (reserved_slot_index == SIZE_MAX) {
-      salts_mutex_unlock(&memory->mutex);
+      cmeta_mutex_unlock(&memory->mutex);
       return SALTS_EPROTO;
     }
     reserved_record_id = memory->next_record_id;
@@ -355,19 +355,19 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
     ++memory->reserved_records;
     memory->reserved_bytes += retained_bytes;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   if (rc != SALTS_OK || reserved_record_id == 0u) return rc;
 
   rc = flow_inbox_memory_record_copy(source, retained_bytes, &record);
   if (rc != SALTS_OK) {
-    salts_mutex_lock(&memory->mutex);
+    cmeta_mutex_lock(&memory->mutex);
     flow_inbox_memory_release_reservation(memory, reserved_slot_index, retained_bytes);
-    salts_mutex_unlock(&memory->mutex);
+    cmeta_mutex_unlock(&memory->mutex);
     return rc;
   }
   record->record_id = reserved_record_id;
 
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   existing = flow_inbox_memory_find_admission(memory, source);
   if (existing) {
     rc = flow_inbox_record_equal(&existing->view, source) ? SALTS_OK : SALTS_EPROTO;
@@ -387,7 +387,7 @@ static int flow_inbox_memory_admit(void *ctx, const turbo_flow_inbox_record_t *s
     }
   }
   flow_inbox_memory_release_reservation(memory, reserved_slot_index, retained_bytes);
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   flow_inbox_memory_record_destroy(record);
   return rc;
 }
@@ -399,7 +399,7 @@ static int flow_inbox_memory_claim_select(
   flow_inbox_memory_record_t *record = NULL;
   int rc = SALTS_ENOENT;
   if (!flow_inbox_claim_request_valid(request)) return SALTS_EINVAL;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   for (size_t index = 0u; index < vec_size(&memory->records); ++index) {
     flow_inbox_memory_slot_t *slot = (flow_inbox_memory_slot_t *)vec_at(&memory->records, index);
     if (slot && slot->record && slot->record->phase == FLOW_INBOX_RECORD_PENDING &&
@@ -421,7 +421,7 @@ static int flow_inbox_memory_claim_select(
     claim->record = record->view;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
@@ -440,7 +440,7 @@ static int flow_inbox_memory_complete(void *ctx, uint64_t record_id, uint64_t cl
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   flow_inbox_memory_record_t *record;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   record = flow_inbox_memory_find(memory, record_id, NULL);
   if (!record || record->phase != FLOW_INBOX_RECORD_CLAIMED || record->claim_token != claim_token) {
     rc = SALTS_EALREADY;
@@ -456,7 +456,7 @@ static int flow_inbox_memory_complete(void *ctx, uint64_t record_id, uint64_t cl
     ++memory->completed;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
@@ -464,7 +464,7 @@ static int flow_inbox_memory_fail(void *ctx, uint64_t record_id, uint64_t claim_
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   flow_inbox_memory_record_t *record;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   record = flow_inbox_memory_find(memory, record_id, NULL);
   if (!record || record->phase != FLOW_INBOX_RECORD_CLAIMED || record->claim_token != claim_token) {
     rc = SALTS_EALREADY;
@@ -478,7 +478,7 @@ static int flow_inbox_memory_fail(void *ctx, uint64_t record_id, uint64_t claim_
     ++memory->failed;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
@@ -486,7 +486,7 @@ static int flow_inbox_memory_retry(void *ctx, uint64_t record_id) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   flow_inbox_memory_record_t *record;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   record = flow_inbox_memory_find(memory, record_id, NULL);
   if (!record) rc = SALTS_ENOENT;
   else if (record->phase != FLOW_INBOX_RECORD_FAILED) rc = SALTS_EBUSY;
@@ -498,7 +498,7 @@ static int flow_inbox_memory_retry(void *ctx, uint64_t record_id) {
     ++memory->retried;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
@@ -506,7 +506,7 @@ static int flow_inbox_memory_discard(void *ctx, uint64_t record_id) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   flow_inbox_memory_record_t *record;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   record = flow_inbox_memory_find(memory, record_id, NULL);
   if (!record) rc = SALTS_ENOENT;
   else if (record->phase != FLOW_INBOX_RECORD_FAILED) rc = SALTS_EBUSY;
@@ -519,7 +519,7 @@ static int flow_inbox_memory_discard(void *ctx, uint64_t record_id) {
     ++memory->discarded;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
@@ -528,7 +528,7 @@ static int flow_inbox_memory_forget(void *ctx, uint64_t record_id) {
   flow_inbox_memory_record_t *record;
   size_t index = 0u;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   record = flow_inbox_memory_find(memory, record_id, &index);
   if (!record) rc = SALTS_ENOENT;
   else if (record->phase != FLOW_INBOX_RECORD_TOMBSTONE) rc = SALTS_EBUSY;
@@ -543,7 +543,7 @@ static int flow_inbox_memory_forget(void *ctx, uint64_t record_id) {
       rc = SALTS_OK;
     }
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   if (rc == SALTS_OK) flow_inbox_memory_record_destroy(record);
   return rc;
 }
@@ -553,7 +553,7 @@ static int flow_inbox_memory_scan_failed(void *ctx, uint64_t after_record_id,
                                          size_t *out_count) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   size_t count = 0u;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   while (count < capacity) {
     flow_inbox_memory_record_t *next = NULL;
     for (size_t index = 0u; index < vec_size(&memory->records); ++index) {
@@ -571,7 +571,7 @@ static int flow_inbox_memory_scan_failed(void *ctx, uint64_t after_record_id,
     after_record_id = next->record_id;
     ++count;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   *out_count = count;
   return SALTS_OK;
 }
@@ -581,7 +581,7 @@ static int flow_inbox_memory_scan_history(void *ctx, uint64_t after_record_id,
                                           size_t capacity, size_t *out_count) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   size_t count = 0u;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   while (count < capacity) {
     flow_inbox_memory_record_t *next = NULL;
     for (size_t index = 0u; index < vec_size(&memory->records); ++index) {
@@ -598,7 +598,7 @@ static int flow_inbox_memory_scan_history(void *ctx, uint64_t after_record_id,
     after_record_id = next->record_id;
     ++count;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   *out_count = count;
   return SALTS_OK;
 }
@@ -606,20 +606,20 @@ static int flow_inbox_memory_scan_history(void *ctx, uint64_t after_record_id,
 static int flow_inbox_memory_close(void *ctx) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   if (memory->reserved_records != 0u) {
     rc = SALTS_EBUSY;
   } else {
     memory->accepting = false;
     rc = SALTS_OK;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return rc;
 }
 
 static int flow_inbox_memory_snapshot(void *ctx, turbo_flow_inbox_snapshot_t *snapshot) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   snapshot->generation = 1u;
   snapshot->accepting = memory->accepting ? 1 : 0;
   snapshot->records = memory->live_records;
@@ -637,26 +637,26 @@ static int flow_inbox_memory_snapshot(void *ctx, turbo_flow_inbox_snapshot_t *sn
     if (slot->record->phase == FLOW_INBOX_RECORD_PENDING) ++snapshot->pending_records;
     else if (slot->record->phase == FLOW_INBOX_RECORD_FAILED) ++snapshot->failed_records;
   }
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   return SALTS_OK;
 }
 
 static int flow_inbox_memory_destroy(void *ctx) {
   flow_inbox_memory_t *memory = (flow_inbox_memory_t *)ctx;
   int rc;
-  salts_mutex_lock(&memory->mutex);
+  cmeta_mutex_lock(&memory->mutex);
   rc = memory->accepting || memory->live_records != 0u || memory->reserved_records != 0u ||
                memory->in_flight_claims != 0u
            ? SALTS_EBUSY
            : SALTS_OK;
-  salts_mutex_unlock(&memory->mutex);
+  cmeta_mutex_unlock(&memory->mutex);
   if (rc != SALTS_OK) return rc;
   for (size_t index = 0u; index < vec_size(&memory->records); ++index) {
     flow_inbox_memory_slot_t *slot = (flow_inbox_memory_slot_t *)vec_at(&memory->records, index);
     if (slot) flow_inbox_memory_record_destroy(slot->record);
   }
   vec_destroy(&memory->records);
-  salts_mutex_destroy(&memory->mutex);
+  cmeta_mutex_destroy(&memory->mutex);
   free(memory);
   return SALTS_OK;
 }
@@ -691,7 +691,7 @@ int turbo_flow_inbox_memory_create(const turbo_flow_inbox_memory_config_t *confi
   memory->accepting = true;
   memory->next_record_id = 1u;
   memory->next_claim_token = 1u;
-  salts_mutex_init(&memory->mutex);
+  cmeta_mutex_init(&memory->mutex);
   if (!memory->mutex) {
     free(memory);
     return SALTS_ENOMEM;
@@ -701,7 +701,7 @@ int turbo_flow_inbox_memory_create(const turbo_flow_inbox_memory_config_t *confi
                                           config->max_records)) != SALTS_OK ||
       turbo_flow_stl_error(vec_resize(&memory->records, config->max_records)) != SALTS_OK) {
     vec_destroy(&memory->records);
-    salts_mutex_destroy(&memory->mutex);
+    cmeta_mutex_destroy(&memory->mutex);
     free(memory);
     return SALTS_ENOMEM;
   }

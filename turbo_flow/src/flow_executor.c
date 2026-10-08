@@ -8,8 +8,8 @@ typedef struct flow_threadpool_task_s {
   flow_execution_task_t execution;
   turbo_flow_t *flow;
   flow_pool_record_t *pool_record;
-  salts_mutex_t worker_mutex;
-  salts_cond_t worker_cond;
+  cmeta_mutex_t worker_mutex;
+  cmeta_cond_t worker_cond;
   int worker_finished;
 } flow_threadpool_task_t;
 
@@ -35,10 +35,10 @@ static void flow_threadpool_task_run(void *arg) {
     flow_execution_task_fail(&task->execution, SALTS_EPROTO);
   }
   flow_pool_record_finished(task->pool_record, task->execution.status);
-  salts_mutex_lock(&task->worker_mutex);
+  cmeta_mutex_lock(&task->worker_mutex);
   task->worker_finished = 1;
-  salts_cond_broadcast(&task->worker_cond);
-  salts_mutex_unlock(&task->worker_mutex);
+  cmeta_cond_broadcast(&task->worker_cond);
+  cmeta_mutex_unlock(&task->worker_mutex);
 }
 
 static void flow_coro_task_run(coro_t *co, void *arg) {
@@ -66,10 +66,10 @@ static void flow_coro_adapter_destroy(flow_coro_adapter_t *adapter) {
       adapter->schedulers[i] = NULL;
     }
     if (adapter->pools && adapter->pools[i]) {
-      salts_coro_pool_destroy(adapter->pools[i]);
+      coro_pool_destroy(adapter->pools[i]);
       adapter->pools[i] = NULL;
     }
-    if (adapter->lane_mutexes) salts_mutex_destroy(&adapter->lane_mutexes[i]);
+    if (adapter->lane_mutexes) cmeta_mutex_destroy(&adapter->lane_mutexes[i]);
   }
   if (adapter->schedulers) {
     free(adapter->schedulers);
@@ -91,25 +91,25 @@ static int flow_coro_adapter_init(flow_coro_adapter_t *adapter,
   adapter->lanes = lanes;
   atomic_init(&adapter->next_lane, 0u);
   adapter->schedulers = (coro_scheduler_t **)calloc(lanes, sizeof(*adapter->schedulers));
-  adapter->pools = (salts_coro_pool_t **)calloc(lanes, sizeof(*adapter->pools));
-  adapter->lane_mutexes = (salts_mutex_t *)calloc(lanes, sizeof(*adapter->lane_mutexes));
+  adapter->pools = (coro_pool_t **)calloc(lanes, sizeof(*adapter->pools));
+  adapter->lane_mutexes = (cmeta_mutex_t *)calloc(lanes, sizeof(*adapter->lane_mutexes));
   if (!adapter->schedulers || !adapter->pools || !adapter->lane_mutexes) {
     flow_coro_adapter_destroy(adapter);
     return SALTS_ENOMEM;
   }
 
   for (uint32_t i = 0; i < lanes; ++i) {
-    salts_mutex_init(&adapter->lane_mutexes[i]);
+    cmeta_mutex_init(&adapter->lane_mutexes[i]);
     adapter->schedulers[i] = coro_scheduler_create();
     if (!adapter->lane_mutexes[i] || !adapter->schedulers[i]) {
       flow_coro_adapter_destroy(adapter);
       return SALTS_ENOMEM;
     }
     if (executor->exec.pool_capacity > 0u) {
-      salts_coro_pool_config_t config = SALTS_CORO_POOL_CONFIG_DEFAULT;
+      coro_pool_config_t config = CORO_POOL_CONFIG_DEFAULT;
       config.initial_capacity = executor->exec.pool_capacity;
       config.max_capacity = executor->exec.pool_capacity;
-      adapter->pools[i] = salts_coro_pool_create(&config);
+      adapter->pools[i] = coro_pool_create(&config);
       if (!adapter->pools[i]) {
         flow_coro_adapter_destroy(adapter);
         return SALTS_ENOMEM;
@@ -141,7 +141,7 @@ void flow_stop_runtime_executor_adapters(turbo_flow_t *flow) {
     flow_pool_record_t *record = flow_pool_record_at(flow, adapter->pool_record_index);
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_DRAINING);
     if (adapter->pool) {
-      salts_threadpool_destroy(adapter->pool);
+      cmeta_threadpool_destroy(adapter->pool);
       adapter->pool = NULL;
     }
     flow_pool_record_set_state(record, TURBO_FLOW_POOL_STOPPED);
@@ -230,19 +230,19 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
 
     adapter.stage_index = executor->stage_index;
     adapter.workers = 0u;
-    adapter.pool = salts_threadpool_create((int)runtime_config->thread_workers);
+    adapter.pool = cmeta_threadpool_create((int)runtime_config->thread_workers);
     if (!adapter.pool) {
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0,
                                        "failed to create thread executor");
     }
-    adapter.workers = (uint32_t)salts_threadpool_size(adapter.pool);
+    adapter.workers = (uint32_t)cmeta_threadpool_size(adapter.pool);
     {
       int rc = flow_pool_record_add(flow, TURBO_FLOW_POOL_THREAD, executor->stage_index,
-                                    adapter.workers, salts_threadpool_capacity(adapter.pool), 0u,
+                                    adapter.workers, cmeta_threadpool_capacity(adapter.pool), 0u,
                                     &adapter.pool_record_index);
       if (rc != SALTS_OK) {
-        salts_threadpool_destroy(adapter.pool);
+        cmeta_threadpool_destroy(adapter.pool);
         flow_stop_runtime_executor_adapters(flow);
         return flow_set_error_keep_state(flow, rc, 0, 0,
                                          "failed to create thread pool state");
@@ -251,7 +251,7 @@ int flow_start_executor_adapters(turbo_flow_t *flow) {
     if (turbo_flow_stl_error(vec_push(&flow->threadpool_adapters, &adapter)) != SALTS_OK) {
       flow_pool_record_set_state(flow_pool_record_at(flow, adapter.pool_record_index),
                                  TURBO_FLOW_POOL_FAILED);
-      salts_threadpool_destroy(adapter.pool);
+      cmeta_threadpool_destroy(adapter.pool);
       flow_stop_runtime_executor_adapters(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, 0, 0, "out of memory");
     }
@@ -312,29 +312,29 @@ int flow_execute_threadpool_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *st
   }
   task.pool_record = record;
   task.flow = flow;
-  salts_mutex_init(&task.worker_mutex);
-  salts_cond_init(&task.worker_cond);
+  cmeta_mutex_init(&task.worker_mutex);
+  cmeta_cond_init(&task.worker_cond);
   task.worker_finished = 0;
   flow_pool_record_submitted(record);
 
-  if (salts_threadpool_submit(adapter->pool, flow_threadpool_task_run, &task) != SALTS_OK) {
+  if (cmeta_threadpool_submit(adapter->pool, flow_threadpool_task_run, &task) != SALTS_OK) {
     flow_pool_record_rejected(record);
     turbo_flow_msg_move(msg, &task.execution.msg);
     flow_execution_task_cleanup(&task.execution);
-    salts_cond_destroy(&task.worker_cond);
-    salts_mutex_destroy(&task.worker_mutex);
+    cmeta_cond_destroy(&task.worker_cond);
+    cmeta_mutex_destroy(&task.worker_mutex);
     completion->status = SALTS_ENOSPC;
     return flow_set_error_keep_state(flow, SALTS_ENOSPC, stage->line, stage->column,
                                      "thread executor rejected task");
   }
 
   rc = flow_execution_task_wait(&task.execution, msg, completion);
-  salts_mutex_lock(&task.worker_mutex);
-  while (!task.worker_finished) salts_cond_wait(&task.worker_cond, &task.worker_mutex);
-  salts_mutex_unlock(&task.worker_mutex);
+  cmeta_mutex_lock(&task.worker_mutex);
+  while (!task.worker_finished) cmeta_cond_wait(&task.worker_cond, &task.worker_mutex);
+  cmeta_mutex_unlock(&task.worker_mutex);
   flow_execution_task_cleanup(&task.execution);
-  salts_cond_destroy(&task.worker_cond);
-  salts_mutex_destroy(&task.worker_mutex);
+  cmeta_cond_destroy(&task.worker_cond);
+  cmeta_mutex_destroy(&task.worker_mutex);
   return rc;
 }
 
@@ -368,7 +368,7 @@ static int flow_execute_coro_stage_locked(turbo_flow_t *flow, flow_stage_plan_im
 
   if (adapter->pools[lane]) {
     task.pooled = 1;
-    co = salts_coro_spawn_pooled(scheduler, adapter->pools[lane], flow_coro_task_run, &task);
+    co = coro_spawn_pooled(scheduler, adapter->pools[lane], flow_coro_task_run, &task);
     if (!co) {
       rc = turbo_flow_msg_move(msg, &task.execution.msg);
       flow_execution_task_cleanup(&task.execution);
@@ -426,10 +426,10 @@ int flow_execute_coro_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *stage,
   lane = atomic_fetch_add_explicit(&adapter->next_lane, 1u, memory_order_relaxed) % adapter->lanes;
   record = flow_pool_record_at(flow, adapter->pool_record_index);
   flow_pool_record_submitted(record);
-  salts_mutex_lock(&adapter->lane_mutexes[lane]);
+  cmeta_mutex_lock(&adapter->lane_mutexes[lane]);
   flow_pool_record_started(record);
   rc = flow_execute_coro_stage_locked(flow, stage, executor, adapter, lane, msg, completion);
   flow_pool_record_finished(record, rc);
-  salts_mutex_unlock(&adapter->lane_mutexes[lane]);
+  cmeta_mutex_unlock(&adapter->lane_mutexes[lane]);
   return rc;
 }

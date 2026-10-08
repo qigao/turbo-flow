@@ -1,7 +1,7 @@
 #include "turbo_flow_inbox_source.h"
 #include "flow_inbox_driver_internal.h"
 
-#include <salts_error.h>
+#include <salts/error_codes.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>

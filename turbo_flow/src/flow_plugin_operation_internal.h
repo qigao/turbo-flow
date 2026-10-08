@@ -46,7 +46,7 @@ typedef struct flow_plugin_operation_binding_s {
   void *session;
   const turbo_flow_plugin_materializer_binding_t *materializer;
   atomic_uint admission;
-  salts_mutex_t error_mutex;
+  cmeta_mutex_t error_mutex;
   turbo_flow_plugin_operation_error_v3_t error;
 } flow_plugin_operation_binding_t;
 int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapshot,
@@ -61,8 +61,8 @@ int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *e
 void flow_plugin_operations_free(vec_t *bindings);
 
 typedef struct flow_plugin_cflow_function_binding_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   const char *export_id;
   const char *contract_id;
   uint32_t contract_version;

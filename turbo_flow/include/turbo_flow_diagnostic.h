@@ -1,7 +1,7 @@
 #ifndef TURBO_FLOW_DIAGNOSTIC_H
 #define TURBO_FLOW_DIAGNOSTIC_H
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 
 #include <stddef.h>
 

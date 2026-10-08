@@ -7,10 +7,10 @@
 #include "turbo_flow_projection.h"
 
 #include "disruptor.h"
-#include "salts_coro.h"
-#include "salts_coro_pool.h"
+#include <coro.h>
+#include <coro_pool.h>
 #include "turbo_flow_stl_error_internal.h"
-#include "salts_thread.h"
+#include <cmeta_thread.h>
 
 #include <cflow/cflow.h>
 #include <cflow/function_projection.h>
@@ -573,8 +573,8 @@ typedef struct flow_execution_task_s {
   void *ctx;
   turbo_flow_msg_t msg;
   flow_stage_completion_t completion;
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
   atomic_int state;
   atomic_int cancel_requested;
   atomic_int deadline_expired;
@@ -589,7 +589,7 @@ typedef struct flow_threadpool_adapter_s {
   uint32_t stage_index;
   uint32_t workers;
   size_t pool_record_index;
-  salts_threadpool_t *pool;
+  cmeta_threadpool_t *pool;
 } flow_threadpool_adapter_t;
 
 typedef struct flow_coro_adapter_s {
@@ -598,8 +598,8 @@ typedef struct flow_coro_adapter_s {
   size_t pool_record_index;
   atomic_uint next_lane;
   coro_scheduler_t **schedulers;
-  salts_coro_pool_t **pools;
-  salts_mutex_t *lane_mutexes;
+  coro_pool_t **pools;
+  cmeta_mutex_t *lane_mutexes;
 } flow_coro_adapter_t;
 
 typedef struct flow_broadcast_consumer_s {
@@ -618,7 +618,7 @@ typedef struct flow_worker_pool_adapter_s {
   flow_stage_plan_impl_t *stage;
   const flow_executor_plan_t *executor;
   disruptor_t *ring;
-  salts_thread_t *workers;
+  cmeta_thread_t *workers;
   void *worker_contexts;
   atomic_int accepting;
   atomic_int running;
@@ -688,7 +688,7 @@ struct turbo_flow_durable_buffer_binding_s {
   atomic_uint_fast64_t graph_failed;
   atomic_uint_fast64_t sink_completed;
   atomic_uint_fast64_t sink_failed;
-  salts_mutex_t latency_mutex;
+  cmeta_mutex_t latency_mutex;
   vec_t latency_pending;
   atomic_int latency_enabled;
   uint64_t latency_started_ns;
@@ -721,8 +721,8 @@ typedef struct flow_reorder_state_s {
   int canceled_sequences_initialized;
   int active;
   int stopping;
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
 } flow_reorder_state_t;
 
 typedef struct flow_event_observer_registration_s {
@@ -817,11 +817,11 @@ struct turbo_flow_s {
   uint64_t runtime_generation;
   atomic_uint_fast64_t next_sequence;
   atomic_uint_fast64_t observer_failures;
-  salts_mutex_t runtime_mutex;
-  salts_cond_t runtime_cond;
-  salts_mutex_t broadcast_mutex;
-  salts_mutex_t async_ingress_mutex;
-  salts_threadpool_t *async_ingress_pool;
+  cmeta_mutex_t runtime_mutex;
+  cmeta_cond_t runtime_cond;
+  cmeta_mutex_t broadcast_mutex;
+  cmeta_mutex_t async_ingress_mutex;
+  cmeta_threadpool_t *async_ingress_pool;
   turbo_flow_async_ingress_config_t async_ingress_config;
   size_t async_ingress_inflight_bytes;
   uint32_t active_publishes;

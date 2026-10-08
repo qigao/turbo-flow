@@ -116,7 +116,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
   int status;
   flow_stage_completion_t *previous_settlement;
 
-  if (runtime && runtime->deadline_ms != 0u) started_at = salts_hrtime();
+  if (runtime && runtime->deadline_ms != 0u) started_at = cmeta_hrtime();
   previous_settlement = flow_settlement_scope_enter(completion);
   if (adapter && !executor->fn) {
     if (adapter->async_terminal_ops.submit) {
@@ -131,7 +131,7 @@ static int flow_dispatch_sync_stage(turbo_flow_t *flow, flow_stage_plan_impl_t *
   }
   flow_settlement_scope_leave(previous_settlement);
   if (started_at != 0u &&
-      salts_hrtime() - started_at >= runtime->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND) {
+      cmeta_hrtime() - started_at >= runtime->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND) {
     return SALTS_ETIMEDOUT;
   }
   return status;
@@ -232,7 +232,7 @@ int flow_dispatch_stage(turbo_flow_t *flow, uint32_t stage_index, turbo_flow_msg
   if (!stage || !stage_view) return SALTS_EPROTO;
   if (flow->observer_ops.stage_complete ||
       flow_observer_event_enabled(flow, TURBO_FLOW_OBSERVE_STAGE_END)) {
-    observe_start = salts_hrtime();
+    observe_start = cmeta_hrtime();
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_STAGE_BEGIN;
@@ -323,7 +323,7 @@ observe:
   if (flow->observer_ops.stage_complete) {
     flow->observer_ops.stage_complete(flow->observer_ctx, stage_view->name,
                                       stage_view->adapter_name, msg,
-                                      salts_hrtime() - observe_start, result);
+                                      cmeta_hrtime() - observe_start, result);
   }
   memset(&event, 0, sizeof(event));
   event.kind = TURBO_FLOW_OBSERVE_STAGE_END;
@@ -335,7 +335,7 @@ observe:
   event.selected = -1;
   event.edge_kind = -1;
   event.attempt = msg->execution_attempt;
-  event.duration_ns = observe_start != 0u ? salts_hrtime() - observe_start : 0u;
+  event.duration_ns = observe_start != 0u ? cmeta_hrtime() - observe_start : 0u;
   flow_observer_emit(flow, &event);
   return result;
 }

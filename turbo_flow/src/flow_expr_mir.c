@@ -2,8 +2,8 @@
 
 #include "mir-gen.h"
 #include "mir.h"
-#include "salts_error.h"
-#include "salts_thread.h"
+#include <salts/error_codes.h>
+#include <cmeta_thread.h>
 
 #include <limits.h>
 #include <stdint.h>
@@ -39,7 +39,7 @@ struct flow_expr_mir_program_s {
   MIR_module_t module;
   MIR_item_t function;
   flow_expr_mir_jit_fn jit_fn;
-  salts_mutex_t interp_mutex;
+  cmeta_mutex_t interp_mutex;
   int interp_mutex_initialized;
   int gen_initialized;
 };
@@ -617,7 +617,7 @@ int flow_expr_mir_compile(turbo_flow_expr_t *expr, turbo_flow_expr_backend_t req
     free(program);
     return flow_expr_mir_set_error(error, SALTS_ENOMEM, NULL, "failed to create MIR context");
   }
-  salts_mutex_init(&program->interp_mutex);
+  cmeta_mutex_init(&program->interp_mutex);
   program->interp_mutex_initialized = 1;
   program->module = MIR_new_module(program->context, "turbo_flow_expr");
   memset(&emitter, 0, sizeof(emitter));
@@ -693,7 +693,7 @@ void flow_expr_mir_destroy(flow_expr_mir_program_t *program) {
   if (!program) return;
   if (program->gen_initialized) MIR_gen_finish(program->context);
   if (program->context) MIR_finish(program->context);
-  if (program->interp_mutex_initialized) salts_mutex_destroy(&program->interp_mutex);
+  if (program->interp_mutex_initialized) cmeta_mutex_destroy(&program->interp_mutex);
   free(program);
 }
 
@@ -717,9 +717,9 @@ int flow_expr_mir_evaluate(const turbo_flow_expr_t *expr,
     MIR_val_t result;
     argument.a = &frame;
     result.i = SALTS_EINVAL;
-    salts_mutex_lock(&expr->mir->interp_mutex);
+    cmeta_mutex_lock(&expr->mir->interp_mutex);
     MIR_interp_arr(expr->mir->context, expr->mir->function, &result, 1, &argument);
-    salts_mutex_unlock(&expr->mir->interp_mutex);
+    cmeta_mutex_unlock(&expr->mir->interp_mutex);
     status = result.i;
   }
   if (status != SALTS_OK) return (int)status;

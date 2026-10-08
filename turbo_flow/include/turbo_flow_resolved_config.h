@@ -2,7 +2,7 @@
 #define TURBO_FLOW_RESOLVED_CONFIG_H
 
 #include "platform.h"
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include "turbo_flow_config_limits.h"
 #include "turbo_flow_diagnostic.h"
 #include "turbo_flow_export.h"
