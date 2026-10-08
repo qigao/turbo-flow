@@ -231,12 +231,12 @@ if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
   @(
     "### TurboFlow native SDK resolution",
     "",
-    "- Source: \u0060$([Environment]::GetEnvironmentVariable('EXPECTED_SHA'))\u0060",
-    "- RID: \u0060$Rid\u0060",
-    "- Salts.Native: \u0060$($salts.Version)\u0060",
-    "- SaltsUtils.Native: \u0060$($saltsUtils.Version)\u0060 (DataBind ABI 10)"
+    "- Source: $([Environment]::GetEnvironmentVariable('EXPECTED_SHA'))",
+    "- RID: $Rid",
+    "- Salts.Native: $($salts.Version)",
+    "- SaltsUtils.Native: $($saltsUtils.Version) (DataBind ABI 10)"
   ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
   if ($WithCHttp) {
-    "- CHttp.Native: \u0060$($cHttp.Version)\u0060" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+    "- CHttp.Native: $($cHttp.Version)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
   }
 }
