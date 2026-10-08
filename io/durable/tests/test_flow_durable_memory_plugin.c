@@ -524,7 +524,7 @@ spec("canonical bounded memory durable provider") {
     close_fixture(&f);
   }
 
-  it("releases prepared memory leases when operation preflight fails") {
+  it("releases materialized memory owners and leases after Graph compile failure") {
     static const char graph[] =
         "source input\n"
         "buffer intake provider flow.durable.memory {\n"
@@ -547,11 +547,15 @@ spec("canonical bounded memory durable provider") {
 
     check_equal(open_fixture(&f, graph, &error), SALTS_OK);
     {
-      turbo_flow_t *original = f.flow;
+      cmeta_plugin_lifecycle_info lifecycle;
       check_not_equal(create_generation(&f), SALTS_OK);
-      check_true(f.flow == original);
+      /* Graph ownership moves after preflight; compile failure destroys it. */
+      check_null(f.flow);
       check_null(f.generation);
       check_null(f.cleanup);
+      check_equal(cmeta_plugin_registry_get_lifecycle(
+          &f.registry, f.plugin_ref, &lifecycle), CMETA_PLUGIN_OK);
+      check_equal(lifecycle.active_leases, (size_t)1u);
     }
     close_fixture(&f);
   }

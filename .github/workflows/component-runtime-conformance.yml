@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: 9de20e8aa3d333543f4c691150300b0dbfd07b8c
+          ref: 1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b
           path: _deps/salts-utils
           persist-credentials: false
 
@@ -130,9 +130,14 @@ jobs:
         working-directory: _deps/salts-utils
         run: |
           set -euo pipefail
-          cmake --preset ci-sdk-release-user
-          cmake --build --preset ci-sdk-release-user -j2
-          cmake --build --preset install-ci-sdk-release-user -j2
+          cmake --preset ci-component-release-user
+          cmake --build --preset ci-component-release-user -j2
+          mkdir -p "$GITHUB_WORKSPACE/build/component-runtime"
+          ctest --preset ci-component-release-user \
+            -R '^(test_generated_message_plan|test_data_bind_object_message_plan|test_data_bind_object_message_plan_public_cpp)$' \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/dependency-results.xml"
+          cmake --build --preset install-ci-component-release-user -j2
           root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
           printf 'source=%s\nsalts_commit=%s\nsalts_package_sha256=%s\nrid=linux-x64\nprofile=release\n' \
             "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > "$root/component-dependency-manifest.txt"
@@ -225,5 +230,7 @@ jobs:
             build/component-runtime/acceptance.txt
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
+            build/component-runtime/dependency-results.xml
+            _deps/salts-utils/build/ci-sdk/Testing/Temporary/LastTest.log
             build/component-runtime/Testing/Temporary/LastTest.log
             tests/install_consumer/component/build/component-installed/Testing/Temporary/LastTest.log

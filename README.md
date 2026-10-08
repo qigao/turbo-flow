@@ -222,7 +222,7 @@ consumer event SHA and restores the exact Salts 3.0 prerelease
 It verifies package SHA256
 `682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
 and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
-`9de20e8aa3d333543f4c691150300b0dbfd07b8c` is rebuilt against that SDK;
+`1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b` is rebuilt against that SDK;
 CHTTP source `0c8919bb9d4732133ecdec8befd3eb5d5d543235` is rebuilt as well.
 the workflow does not use stable first-party binaries for this candidate.
 
@@ -244,7 +244,8 @@ ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
 ```
 
 CI selects Component and adjacent business suites from the full configured graph
-and uploads consumer/dependency identities, JUnit results, and CTest logs as
+and runs the rebuilt SaltsUtils MessagePlan regression suites. It uploads
+consumer/dependency identities, JUnit results, and CTest logs as
 `component-acceptance-linux-x64`. The root CTest command above runs the broader
 suite. The CNet, CHTTP, and durable-memory factory tests also adapt their existing
 plugin exports into
