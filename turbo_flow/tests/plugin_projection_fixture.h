@@ -8,8 +8,8 @@ enum { PROJECTION_TEST_VALUE = 73, PROJECTION_TEST_CAPACITY = 4,
        PROJECTION_CONTEXT_RELEASE = 101 };
 /* 仅测试协议：存储由测试拥有并存活到 host 卸载；所有共享访问持同一 mutex。 */
 typedef struct projection_observer_s {
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
   int events[PROJECTION_TEST_EVENTS];
   size_t count;
   int clone_error;

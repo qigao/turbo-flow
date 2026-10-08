@@ -7,8 +7,8 @@ enum { TEST_VALUE = 41, TEST_CAPACITY = 2 };
 int flow_projection_cpp_example(void);
 enum { CLONE_NORMAL, CLONE_ERROR_VALUE, CLONE_NULL, CLONE_ALIAS, CLONE_ERROR_ALIAS };
 typedef struct callback_gate_s {
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
   int entered;
   int released;
   int block_destroy;
@@ -21,11 +21,11 @@ typedef struct projection_counts_s {
   callback_gate_t *gate;
 } projection_counts_t;
 static void gate_enter(callback_gate_t *gate) {
-  salts_mutex_lock(&gate->mutex);
+  cmeta_mutex_lock(&gate->mutex);
   ++gate->entered;
-  salts_cond_broadcast(&gate->cond);
-  while (!gate->released) salts_cond_wait(&gate->cond, &gate->mutex);
-  salts_mutex_unlock(&gate->mutex);
+  cmeta_cond_broadcast(&gate->cond);
+  while (!gate->released) cmeta_cond_wait(&gate->cond, &gate->mutex);
+  cmeta_mutex_unlock(&gate->mutex);
 }
 static const turbo_flow_data_schema_t schema = {
     sizeof(turbo_flow_data_schema_t), TURBO_FLOW_DOMAIN_DATA,
@@ -51,9 +51,9 @@ static int clone_value(const void *value, void *ctx, void **out) {
 static void destroy_value(void *value, void *ctx) {
   projection_counts_t *counts = (projection_counts_t *)ctx;
   if (counts->gate && counts->gate->block_destroy) gate_enter(counts->gate);
-  if (counts->gate) salts_mutex_lock(&counts->gate->mutex);
+  if (counts->gate) cmeta_mutex_lock(&counts->gate->mutex);
   ++counts->payloads;
-  if (counts->gate) salts_mutex_unlock(&counts->gate->mutex);
+  if (counts->gate) cmeta_mutex_unlock(&counts->gate->mutex);
   free(value);
 }
 static int release_context(void *ctx) {
@@ -185,10 +185,10 @@ spec("retained projection owner") {
     turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_msg_t sources[WORKERS];
-    salts_thread_t threads[WORKERS] = {0};
+    cmeta_thread_t threads[WORKERS] = {0};
     projection_worker_t workers[WORKERS] = {0};
-    salts_mutex_init(&gate.mutex);
-    salts_cond_init(&gate.cond);
+    cmeta_mutex_init(&gate.mutex);
+    cmeta_cond_init(&gate.cond);
     check_not_null(gate.mutex);
     check_not_null(gate.cond);
     counts.gate = &gate;
@@ -201,24 +201,24 @@ spec("retained projection owner") {
       turbo_flow_msg_init(&sources[i]);
       check_equal(turbo_flow_msg_bind_retained_projection(&sources[i], owner, value), SALTS_OK);
       workers[i].source = &sources[i];
-      check_equal(salts_thread_create(&threads[i], projection_worker, &workers[i]), 0);
+      check_equal(cmeta_thread_create(&threads[i], projection_worker, &workers[i]), 0);
     }
-    salts_mutex_lock(&gate.mutex);
-    while (gate.entered != WORKERS) salts_cond_wait(&gate.cond, &gate.mutex);
-    salts_mutex_unlock(&gate.mutex);
+    cmeta_mutex_lock(&gate.mutex);
+    while (gate.entered != WORKERS) cmeta_cond_wait(&gate.cond, &gate.mutex);
+    cmeta_mutex_unlock(&gate.mutex);
     check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
     check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
     check_equal(state.outstanding, (size_t)CONCURRENT_CAPACITY);
     check_equal(state.retained_bytes, CONCURRENT_CAPACITY * sizeof(int));
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_EBUSY);
     check_equal(counts.contexts, 0);
-    salts_mutex_lock(&gate.mutex);
+    cmeta_mutex_lock(&gate.mutex);
     gate.released = 1;
-    salts_cond_broadcast(&gate.cond);
-    salts_mutex_unlock(&gate.mutex);
+    cmeta_cond_broadcast(&gate.cond);
+    cmeta_mutex_unlock(&gate.mutex);
     for (int i = 0; i < WORKERS; ++i) {
-      check_equal(salts_thread_join(&threads[i]), 0);
-      salts_thread_destroy(&threads[i]);
+      check_equal(cmeta_thread_join(&threads[i]), 0);
+      cmeta_thread_destroy(&threads[i]);
       check_equal(workers[i].rc, SALTS_OK);
       check_equal(workers[i].observed, TEST_VALUE);
       turbo_flow_msg_cleanup(&sources[i]);
@@ -229,8 +229,8 @@ spec("retained projection owner") {
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
     check_equal(counts.payloads, CONCURRENT_CAPACITY);
     check_equal(counts.contexts, 1);
-    salts_cond_destroy(&gate.cond);
-    salts_mutex_destroy(&gate.mutex);
+    cmeta_cond_destroy(&gate.cond);
+    cmeta_mutex_destroy(&gate.mutex);
   }
 
   it("keeps the final lease busy until payload destroy returns") {
@@ -240,12 +240,12 @@ spec("retained projection owner") {
     turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_msg_t source;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     projection_worker_t worker = {0};
     int *value = new_value();
     check_not_null(value);
-    salts_mutex_init(&gate.mutex);
-    salts_cond_init(&gate.cond);
+    cmeta_mutex_init(&gate.mutex);
+    cmeta_cond_init(&gate.cond);
     check_not_null(gate.mutex);
     check_not_null(gate.cond);
     gate.block_destroy = 1;
@@ -255,28 +255,28 @@ spec("retained projection owner") {
     check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, value), SALTS_OK);
     worker.source = &source;
     worker.cleanup_only = 1;
-    check_equal(salts_thread_create(&thread, projection_worker, &worker), 0);
-    salts_mutex_lock(&gate.mutex);
-    while (!gate.entered) salts_cond_wait(&gate.cond, &gate.mutex);
-    salts_mutex_unlock(&gate.mutex);
+    check_equal(cmeta_thread_create(&thread, projection_worker, &worker), 0);
+    cmeta_mutex_lock(&gate.mutex);
+    while (!gate.entered) cmeta_cond_wait(&gate.cond, &gate.mutex);
+    cmeta_mutex_unlock(&gate.mutex);
     check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
     check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
     check_equal(state.outstanding, (size_t)1);
     check_equal(state.retained_bytes, sizeof(int));
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_EBUSY);
     check_equal(counts.contexts, 0);
-    salts_mutex_lock(&gate.mutex);
+    cmeta_mutex_lock(&gate.mutex);
     gate.released = 1;
-    salts_cond_signal(&gate.cond);
-    salts_mutex_unlock(&gate.mutex);
-    check_equal(salts_thread_join(&thread), 0);
-    salts_thread_destroy(&thread);
+    cmeta_cond_signal(&gate.cond);
+    cmeta_mutex_unlock(&gate.mutex);
+    check_equal(cmeta_thread_join(&thread), 0);
+    cmeta_thread_destroy(&thread);
     check_equal(worker.rc, SALTS_OK);
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
     check_equal(counts.payloads, 1);
     check_equal(counts.contexts, 1);
-    salts_cond_destroy(&gate.cond);
-    salts_mutex_destroy(&gate.mutex);
+    cmeta_cond_destroy(&gate.cond);
+    cmeta_mutex_destroy(&gate.mutex);
   }
 
   it("rejects malformed configs without consuming context") {

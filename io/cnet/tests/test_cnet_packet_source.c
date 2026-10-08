@@ -151,8 +151,8 @@ static void packet_source_round_trip(cnet_packet_protocol protocol, uint32_t con
   check_equal(left_info.conversation, conversation);
   check_equal(turbo_flow_cnet_packet_source_send(left, left_session, message, sizeof(message)),
               SALTS_OK);
-  deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-  while (right_snapshot.messages_received == 0u && salts_monotonic_ms() < deadline) {
+  deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+  while (right_snapshot.messages_received == 0u && cmeta_monotonic_ms() < deadline) {
     check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
     check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot), SALTS_OK);
   }
@@ -268,8 +268,8 @@ spec("CNet packet source owner") {
     check_equal(turbo_flow_cnet_packet_source_send(left, left_session, request, sizeof(request)),
                 SALTS_OK);
 
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (right_probe.count == 0u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (right_probe.count == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot), SALTS_OK);
     }
@@ -288,8 +288,8 @@ spec("CNet packet source owner") {
                     right, right_session, reply_payload, sizeof(reply_payload), UINT64_C(41)),
                 SALTS_OK);
 
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (left_probe.count == 0u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (left_probe.count == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, NULL), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
     }
@@ -420,8 +420,8 @@ spec("CNet packet source owner") {
     check_equal(turbo_flow_cnet_packet_source_session_open(left, &peer, 0u, &session), SALTS_OK);
     check_equal(turbo_flow_cnet_packet_source_send(left, session, "one", 3u), SALTS_OK);
     check_equal(turbo_flow_cnet_packet_source_send(left, session, "two", 3u), SALTS_OK);
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (poll_status == SALTS_OK && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (poll_status == SALTS_OK && cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
       poll_status = turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot);
     }
@@ -469,8 +469,8 @@ spec("CNet packet source owner") {
     peer = packet_source_peer(right_snapshot.bound_port);
     check_equal(turbo_flow_cnet_packet_source_session_open(left, &peer, 0u, &session), SALTS_OK);
     check_equal(turbo_flow_cnet_packet_source_send(left, session, "large", 5u), SALTS_OK);
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (poll_status == SALTS_OK && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (poll_status == SALTS_OK && cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
       poll_status = turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot);
     }
@@ -521,9 +521,9 @@ spec("CNet packet source owner") {
     check_equal(turbo_flow_cnet_packet_source_session_open(left, &peer, 0u, &session), SALTS_OK);
     check_equal(turbo_flow_cnet_packet_source_send(left, session, message, sizeof(message)),
                 SALTS_EBUSY);
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
     while ((left_snapshot.sessions_opened == 0u || right_snapshot.sessions_opened == 0u) &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, &left_snapshot), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot), SALTS_OK);
     }
@@ -532,8 +532,8 @@ spec("CNet packet source owner") {
     check_equal(right_snapshot.sessions_opened, 1u);
     check_equal(turbo_flow_cnet_packet_source_send(left, session, message, sizeof(message)),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (right_snapshot.messages_received == 0u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (right_snapshot.messages_received == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, &left_snapshot), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &right_snapshot), SALTS_OK);
     }
@@ -653,8 +653,8 @@ spec("CNet packet source owner") {
     check_equal(cnet_datagram_init(&datagram, &datagram_config), SALTS_OK);
     peer = packet_source_peer(snapshot.bound_port);
     check_equal(cnet_datagram_send(&datagram, &peer, malformed, sizeof(malformed), 1u), SALTS_OK);
-    deadline = salts_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
-    while (poll_status == SALTS_OK && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (poll_status == SALTS_OK && cmeta_monotonic_ms() < deadline) {
       check_equal(cnet_datagram_poll(&datagram, 1u, &events), SALTS_OK);
       poll_status = turbo_flow_cnet_packet_source_poll(source, 1u, &snapshot);
     }

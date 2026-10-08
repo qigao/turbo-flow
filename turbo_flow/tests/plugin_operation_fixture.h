@@ -63,8 +63,8 @@ typedef struct operation_fixture_s {
   int error_fault, error_status, fail_session_release, fail_context_release;
   atomic_uint sessions, contexts, preflights, session_creates, context_creates;
   atomic_uint executes, clones, destroys, session_releases, context_releases;
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
   int barrier, entered, proceed;
   turbo_flow_data_schema_t fault_schema;
 } operation_fixture_t;

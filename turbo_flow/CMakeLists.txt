@@ -168,7 +168,8 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_flow_product
-  PUBLIC TurboFlow::Graph TurboFlow::Config Salts::DataBind Salts::Plugin
+  PUBLIC TurboFlow::Graph TurboFlow::Config Salts::DataBind
+         Salts::ComponentPlugin Salts::Plugin
   PRIVATE Salts::JsonParser)
 
 add_library(turbo_flow_plugin_host SHARED

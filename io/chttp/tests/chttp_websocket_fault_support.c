@@ -17,16 +17,16 @@ static void *chttp_test_websocket_calloc(size_t count, size_t size) {
 }
 
 void chttp_test_websocket_failure_finalization_unlocked(void);
-static void chttp_test_websocket_mutex_unlock(salts_mutex_t *mutex);
+static void chttp_test_websocket_mutex_unlock(cmeta_mutex_t *mutex);
 
 #define calloc chttp_test_websocket_calloc
-#define salts_mutex_unlock chttp_test_websocket_mutex_unlock
+#define cmeta_mutex_unlock chttp_test_websocket_mutex_unlock
 #include "../src/turbo_flow_chttp_websocket_server.c"
-#undef salts_mutex_unlock
+#undef cmeta_mutex_unlock
 #undef calloc
 
-static void chttp_test_websocket_mutex_unlock(salts_mutex_t *mutex) {
-  salts_mutex_unlock(mutex);
+static void chttp_test_websocket_mutex_unlock(cmeta_mutex_t *mutex) {
+  cmeta_mutex_unlock(mutex);
   chttp_test_websocket_failure_finalization_unlocked();
 }
 
@@ -42,18 +42,18 @@ int chttp_test_delayed_completion_close(turbo_flow_chttp_websocket_server_t *ser
 int chttp_test_websocket_set_managed_generation(
     turbo_flow_chttp_websocket_server_t *server, uint64_t generation) {
   if (!server || generation == 0u) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->managed_generation = generation;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
 int chttp_test_websocket_set_control_state(turbo_flow_chttp_websocket_server_t *server,
                                            turbo_flow_chttp_websocket_server_state_t state) {
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->state = state;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
@@ -69,7 +69,7 @@ int chttp_test_websocket_set_snapshot_state(turbo_flow_chttp_websocket_server_t 
                                             uint64_t completed) {
   if (!server || server->session_capacity == 0u || server->frame_capacity == 0u)
     return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->active_sessions = active_sessions;
   server->in_flight_frames = in_flight_frames;
   server->sessions[0].active = active_sessions != 0u;
@@ -78,7 +78,7 @@ int chttp_test_websocket_set_snapshot_state(turbo_flow_chttp_websocket_server_t 
   server->pending_publications = pending_publications;
   server->managed_accepted = accepted;
   server->managed_completed = completed;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
@@ -86,11 +86,11 @@ int chttp_test_websocket_set_managed_counters(turbo_flow_chttp_websocket_server_
                                               uint64_t accepted, uint64_t completed,
                                               uint64_t rejected) {
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->managed_accepted = accepted;
   server->managed_completed = completed;
   server->managed_rejected = rejected;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 

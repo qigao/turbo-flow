@@ -278,7 +278,10 @@ spec("CHTTP canonical typed provider contracts") {
 
     fill_client(&typed);
     check_equal(
-        CHttpClientConfig_headers_vec_t_resize(&typed.headers, 2u),
+        CHttpClientConfig_headers_vec_t_push(&typed.headers, (CHttpHeader_t){0}),
+        STL_OK);
+    check_equal(
+        CHttpClientConfig_headers_vec_t_push(&typed.headers, (CHttpHeader_t){0}),
         STL_OK);
     header = CHttpClientConfig_headers_vec_t_at(&typed.headers, 0u);
     check_not_null(header);
@@ -424,7 +427,7 @@ spec("CHTTP canonical typed provider contracts") {
 
     typed.network_command_capacity = 8u;
     check_equal(
-        CHttpClientConfig_headers_vec_t_resize(&typed.headers, 1u),
+        CHttpClientConfig_headers_vec_t_push(&typed.headers, (CHttpHeader_t){0}),
         STL_OK);
     header = CHttpClientConfig_headers_vec_t_at(&typed.headers, 0u);
     check_not_null(header);

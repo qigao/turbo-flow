@@ -1,0 +1,198 @@
+name: Component runtime conformance
+
+on:
+  push:
+    branches:
+      - codex/salts-3-integration
+  pull_request:
+    paths:
+      - "turbo_flow/**"
+      - "io/**"
+      - "CMakeLists.txt"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - ".github/workflows/component-runtime-conformance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turbo-flow-component-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  component-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout TurboFlow integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Use empty vcpkg L1 cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cache="$RUNNER_TEMP/component-runtime-empty-l1"
+          rm -rf "$cache"
+          mkdir -p "$cache"
+          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+
+      - name: Restore released native SDK graph
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid linux-x64
+
+      - name: Checkout SaltsUtils dependency source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: e1beece2094aaade9765a1ded1c800c43e636f6c
+          path: _deps/salts-utils
+          persist-credentials: false
+
+      - name: Prepare Utils build dependencies
+        uses: ./_deps/salts-utils/.github/actions/setup-build-host
+
+      - name: Build unfinished Utils against released Salts 3
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QIGAO_TARGET_TRIPLET: x64-linux
+          QIGAO_SDK_RID: linux-x64
+        working-directory: _deps/salts-utils
+        run: |
+          set -euo pipefail
+          cmake --preset ci-native-release-user
+          cmake --build --preset ci-native-release-user -j2
+          mkdir -p "$GITHUB_WORKSPACE/build/component-runtime"
+          ctest --preset ci-native-release-user \
+            -R '^(test_generated_message_plan|test_data_bind_object_message_plan|test_data_bind_object_message_plan_public_cpp)$' \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/dependency-results.xml"
+          cmake --build --preset install-ci-native-release-user -j2
+          root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
+          printf 'source=%s\nrid=linux-x64\nprofile=development-integration\n' \
+            "$(git rev-parse HEAD)" > "$root/component-dependency-manifest.txt"
+          cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> "$root/component-dependency-manifest.txt"
+          cat "$root/component-dependency-manifest.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
+
+      - name: Checkout CHTTP dependency source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: 6565e40c3050435f81ce1f696b777861a569a9af
+          path: _deps/chttp
+          persist-credentials: false
+
+      - name: Rebuild CHTTP against the same SDK graph
+        shell: bash
+        working-directory: _deps/chttp
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QIGAO_TARGET_TRIPLET: x64-linux
+          QIGAO_HOST_TRIPLET: x64-linux
+          QIGAO_SDK_RID: linux-x64
+        run: |
+          set -euo pipefail
+          cmake --preset ci-sdk-release-user
+          cmake --build --preset ci-sdk-release-user -j2
+          cmake --build --preset install-ci-sdk-release-user -j2
+          root="$GITHUB_WORKSPACE/_deps/chttp/stage/sdk/linux-x64"
+          printf 'source=%s\nrid=linux-x64\nprofile=development-integration\n' \
+            "$(git rev-parse HEAD)" > "$root/component-dependency-manifest.txt"
+          cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> "$root/component-dependency-manifest.txt"
+          echo "HTTP_SERVICES_ROOT=$root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
+
+      - name: Configure the complete conformance graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cmake --preset ci-component-release-user
+
+      - name: Build the complete conformance graph
+        run: cmake --build --preset ci-component-release-user -j2
+
+      - name: Run Component and adjacent business tests
+        run: >-
+          ctest --preset ci-component-release-user
+          -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_component_generation|test_flow_plugin_materializer_generation|test_flow_provider_interface|test_flow_provider_adapter_binding|test_flow_salts_provider_binding|test_flow_compiled_provider_instance|test_flow_provider_typed_config|test_cnet_provider_interface|test_chttp_provider_interface|test_flow_durable_memory_plugin|test_flow_databind_service_plan|test_protocol_business_ocpp201_core_schema|test_chttp_typed_contract)$'
+          --no-tests=error --output-on-failure
+          --output-junit "$GITHUB_WORKSPACE/build/component-runtime/component-results.xml"
+
+      - name: Install the qualified consumer SDK
+        run: cmake --build --preset install-ci-component-release-user -j2
+
+      - name: Verify the installed SDK consumer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        working-directory: tests/install_consumer/component
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-installed-user
+          cmake --build --preset ci-component-installed-user -j2
+          ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
+
+      - name: Record acceptance identities
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)" > build/component-runtime/acceptance.txt
+          if [ -n "${SALTS_ROOT:-}" ]; then
+            cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> build/component-runtime/acceptance.txt
+          fi
+          if [ -n "${SALTS_UTILS_ROOT:-}" ]; then
+            printf 'dependency=SaltsUtils\n' >> build/component-runtime/acceptance.txt
+            cat "$SALTS_UTILS_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
+          fi
+          if [ -n "${HTTP_SERVICES_ROOT:-}" ]; then
+            printf 'dependency=CHTTP\n' >> build/component-runtime/acceptance.txt
+            cat "$HTTP_SERVICES_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
+          fi
+          printf 'runner_os=%s\nrunner_arch=%s\ncompiler=%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$(gcc -dumpfullversion)" >> build/component-runtime/acceptance.txt
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-acceptance-linux-x64
+          path: |
+            build/component-runtime/acceptance.txt
+            build/component-runtime/component-results.xml
+            build/component-runtime/installed-results.xml
+            build/component-runtime/dependency-results.xml
+            _deps/salts-utils/build/ci-native-release/Testing/Temporary/LastTest.log
+            build/component-runtime/Testing/Temporary/LastTest.log
+            tests/install_consumer/component/build/component-installed/Testing/Temporary/LastTest.log

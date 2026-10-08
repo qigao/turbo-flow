@@ -50,8 +50,8 @@ typedef struct chttp_runtime_owner_s {
 
 static chttp_provider_root_t provider_root;
 static turbo_flow_provider_factory provider_factories[CHTTP_PROVIDER_COUNT];
-static salts_plugin_export provider_exports[CHTTP_PROVIDER_COUNT];
-static salts_once_t provider_once = SALTS_ONCE_INIT;
+static cmeta_plugin_export provider_exports[CHTTP_PROVIDER_COUNT];
+static cmeta_once_t provider_once = SALTS_ONCE_INIT;
 
 static const char *provider_identity(unsigned kind) {
   switch (kind) {
@@ -605,9 +605,9 @@ static void provider_init(void) {
     provider_factories[i] =
         chttp_provider_factory_impl_as_turbo_flow_provider_factory(
             &provider_root.slots[i]);
-    provider_exports[i] = (salts_plugin_export){
-        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-        .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+    provider_exports[i] = (cmeta_plugin_export){
+        .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+        .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
         .contract_version =
             TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
         .capabilities = 0u,
@@ -621,50 +621,50 @@ static void provider_init(void) {
   }
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL provider_start(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL provider_start(void *self) {
   chttp_provider_root_t *root = (chttp_provider_root_t *)self;
-  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
-  if (root->owners != 0u) return SALTS_PLUGIN_BUSY;
+  if (!root) return CMETA_PLUGIN_INVALID_ARGUMENT;
+  if (root->owners != 0u) return CMETA_PLUGIN_BUSY;
   root->stopping = false;
   root->started = true;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL
+static cmeta_plugin_status CMETA_PLUGIN_CALL
 provider_request_stop(void *self) {
   chttp_provider_root_t *root = (chttp_provider_root_t *)self;
-  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!root) return CMETA_PLUGIN_INVALID_ARGUMENT;
   root->stopping = true;
   root->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL provider_is_quiescent(const void *self) {
+static bool CMETA_PLUGIN_CALL provider_is_quiescent(const void *self) {
   const chttp_provider_root_t *root =
       (const chttp_provider_root_t *)self;
   return root && root->stopping && root->owners == 0u;
 }
 
-static void SALTS_PLUGIN_CALL provider_destroy(void *self) {
+static void CMETA_PLUGIN_CALL provider_destroy(void *self) {
   chttp_provider_root_t *root = (chttp_provider_root_t *)self;
   if (!root || root->owners != 0u) return;
   root->started = false;
   root->stopping = true;
 }
 
-static salts_plugin_manifest provider_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_manifest provider_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "turbo-flow.chttp",
     .version = {2u, 0u, 0u},
     .self = &provider_root,
 };
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&provider_once, provider_init);
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
+  cmeta_once(&provider_once, provider_init);
   provider_manifest.exports = provider_exports;
   provider_manifest.export_count = CHTTP_PROVIDER_COUNT;
   provider_manifest.start = provider_start;

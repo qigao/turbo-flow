@@ -270,9 +270,9 @@ static void pump_until(turbo_flow_plugin_generation_t *generation,
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
   turbo_flow_protocol_network_intake_snapshot_t coap_snapshot =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
-  uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
+  uint64_t deadline = cmeta_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
   while ((decision->count < expected || output->count < expected) &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     size_t events = 0u;
     check_equal(cnet_client_poll(tcp, 1u, &events), SALTS_OK);
     check_equal(cnet_packet_poll(udp_peer, 1u, &events), SALTS_OK);
@@ -852,8 +852,8 @@ spec("RulesForge real network composition") {
                                        .user = &tcp_probe};
     check_equal(cnet_connect(&tcp, &connect, &tcp_connection), SALTS_OK);
     {
-      uint64_t deadline = salts_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
-      while (tcp_probe.connected == 0u && salts_monotonic_ms() < deadline) {
+      uint64_t deadline = cmeta_monotonic_ms() + COMPOSITION_TIMEOUT_MS;
+      while (tcp_probe.connected == 0u && cmeta_monotonic_ms() < deadline) {
         size_t events = 0u;
         jtt_snapshot =
             (turbo_flow_protocol_network_intake_snapshot_t)

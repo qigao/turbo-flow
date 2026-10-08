@@ -795,12 +795,12 @@ spec("ABI3 generation operation runtime") {
   it("retains DLL state across execute, clone and destroy callback barriers until join") {
     for (int point = OP_BARRIER_EXECUTE; point <= OP_BARRIER_DESTROY; ++point) {
       runtime_test_t t;
-      salts_thread_t thread;
+      cmeta_thread_t thread;
       turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       runtime_worker_t worker = {&t, point, SALTS_EIO, 0};
       runtime_worker_t second = {&t, OP_BARRIER_EXECUTE, SALTS_EIO, 0};
-      salts_thread_t second_thread;
+      cmeta_thread_t second_thread;
       int second_started = 0, admission_status = SALTS_OK;
       int second_create = 0, generation_destroy = SALTS_OK;
       unsigned session_releases = 0;
@@ -824,22 +824,22 @@ spec("ABI3 generation operation runtime") {
       check(t.control_thread == &runtime_thread_identity);
       turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
       t.snapshot = NULL;
-      salts_mutex_lock(&t.observer->mutex);
+      cmeta_mutex_lock(&t.observer->mutex);
       t.observer->barrier = point;
-      salts_mutex_unlock(&t.observer->mutex);
-      check_equal(salts_thread_create(&thread, runtime_worker, &worker), 0);
-      salts_mutex_lock(&t.observer->mutex);
-      uint64_t barrier_deadline = salts_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
-      while (!t.observer->entered && salts_monotonic_ms() < barrier_deadline)
-        salts_cond_timedwait(&t.observer->cond, &t.observer->mutex, UINT64_C(1000000));
+      cmeta_mutex_unlock(&t.observer->mutex);
+      check_equal(cmeta_thread_create(&thread, runtime_worker, &worker), 0);
+      cmeta_mutex_lock(&t.observer->mutex);
+      uint64_t barrier_deadline = cmeta_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
+      while (!t.observer->entered && cmeta_monotonic_ms() < barrier_deadline)
+        cmeta_cond_timedwait(&t.observer->cond, &t.observer->mutex, UINT64_C(1000000));
       int entered = t.observer->entered;
-      salts_mutex_unlock(&t.observer->mutex);
+      cmeta_mutex_unlock(&t.observer->mutex);
       if (!entered) {
-        salts_mutex_lock(&t.observer->mutex);
+        cmeta_mutex_lock(&t.observer->mutex);
         t.observer->proceed = 1;
-        salts_cond_broadcast(&t.observer->cond);
-        salts_mutex_unlock(&t.observer->mutex);
-        check_equal(salts_thread_join(&thread), 0);
+        cmeta_cond_broadcast(&t.observer->cond);
+        cmeta_mutex_unlock(&t.observer->mutex);
+        check_equal(cmeta_thread_join(&thread), 0);
         check_equal(entered, 1);
       }
       const int domain_destroy = turbo_flow_plugin_result_domain_destroy(t.domain, &pe);
@@ -850,9 +850,9 @@ spec("ABI3 generation operation runtime") {
       if (point == OP_BARRIER_EXECUTE) {
         turbo_flow_plugin_operation_error_v3_t recent;
         turbo_flow_plugin_operation_error_v3_init(&recent);
-        second_create = salts_thread_create(&second_thread, runtime_worker, &second);
+        second_create = cmeta_thread_create(&second_thread, runtime_worker, &second);
         second_started = second_create == 0;
-        uint64_t deadline = salts_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
+        uint64_t deadline = cmeta_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
         do {
           int query_rc = turbo_flow_plugin_generation_operation_error(t.generation, 0, &recent);
           if (query_rc != SALTS_OK) {
@@ -860,17 +860,17 @@ spec("ABI3 generation operation runtime") {
             break;
           }
           admission_status = recent.status;
-          if (admission_status == SALTS_OK) salts_sleep_ms(1u);
-        } while (second_started && admission_status == SALTS_OK && salts_monotonic_ms() < deadline);
+          if (admission_status == SALTS_OK) cmeta_sleep_ms(1u);
+        } while (second_started && admission_status == SALTS_OK && cmeta_monotonic_ms() < deadline);
         generation_destroy = turbo_flow_plugin_generation_destroy(t.generation, 0, &t.error);
         session_releases = atomic_load(&t.observer->session_releases);
       }
-      salts_mutex_lock(&t.observer->mutex);
+      cmeta_mutex_lock(&t.observer->mutex);
       t.observer->proceed = 1;
-      salts_cond_broadcast(&t.observer->cond);
-      salts_mutex_unlock(&t.observer->mutex);
-      const int first_join = salts_thread_join(&thread);
-      const int second_join = second_started ? salts_thread_join(&second_thread) : 0;
+      cmeta_cond_broadcast(&t.observer->cond);
+      cmeta_mutex_unlock(&t.observer->mutex);
+      const int first_join = cmeta_thread_join(&thread);
+      const int second_join = second_started ? cmeta_thread_join(&second_thread) : 0;
       /* All worker joins precede assertions that may leave this test through TinyTest. */
       check_equal(first_join, 0);
       check_equal(second_join, 0);

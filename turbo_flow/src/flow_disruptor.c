@@ -109,7 +109,7 @@ static void flow_worker_pool_stop(flow_worker_pool_adapter_t *adapter) {
   if (adapter->ring) disruptor_worker_wake_all(adapter->ring);
   if (adapter->workers) {
     for (uint32_t i = 0; i < adapter->width; ++i) {
-      if (adapter->workers[i]) (void)salts_thread_join(&adapter->workers[i]);
+      if (adapter->workers[i]) (void)cmeta_thread_join(&adapter->workers[i]);
     }
     free(adapter->workers);
     adapter->workers = NULL;
@@ -126,7 +126,7 @@ static void flow_worker_pool_stop(flow_worker_pool_adapter_t *adapter) {
 static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
   flow_worker_context_t *contexts;
   if (!adapter || !adapter->ring || adapter->width == 0u) return SALTS_EINVAL;
-  adapter->workers = (salts_thread_t *)calloc(adapter->width, sizeof(*adapter->workers));
+  adapter->workers = (cmeta_thread_t *)calloc(adapter->width, sizeof(*adapter->workers));
   contexts = (flow_worker_context_t *)calloc(adapter->width, sizeof(*contexts));
   if (!adapter->workers || !contexts) {
     free(adapter->workers);
@@ -140,7 +140,7 @@ static int flow_worker_pool_start(flow_worker_pool_adapter_t *adapter) {
   for (uint32_t i = 0; i < adapter->width; ++i) {
     contexts[i].adapter = adapter;
     contexts[i].lane = i;
-    if (salts_thread_create(&adapter->workers[i], flow_worker_pool_run, &contexts[i]) != SALTS_OK) {
+    if (cmeta_thread_create(&adapter->workers[i], flow_worker_pool_run, &contexts[i]) != SALTS_OK) {
       adapter->width = i;
       flow_worker_pool_stop(adapter);
       return SALTS_ENOMEM;

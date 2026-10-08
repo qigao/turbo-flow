@@ -376,7 +376,7 @@ spec("flow_run") {
     check_equal(turbo_flow_run_open(flow, "input", &stop_publisher, NULL, &stop_run), SALTS_OK);
     check_equal(turbo_flow_run_request(stop_run, 1u), SALTS_OK);
     for (size_t i = 0u; i < 2000u && atomic_load(&stop_source.arms) == 0u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&stop_source.arms), 1u);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     result = (turbo_flow_run_result_t)TURBO_FLOW_RUN_RESULT_INIT;

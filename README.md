@@ -213,3 +213,50 @@ Linux uses the corresponding `linux-*` presets.
 ---
 
 **Salts provides the typed execution foundation. TurboFlow composes it into provider-neutral business graphs and durable workflows.**
+
+## Salts 3 development integration
+
+This branch requires Salts 3.x in source and installed package admission. Provider
+bindings use the Component resolver v2; one generation scope retains all provider
+roots, their metadata and callbacks through Graph shutdown and owner destruction.
+Rebuild providers and installed consumers with the same complete SDK and regenerated
+IDL artifacts. Rollback restores the previous SDK, provider binaries and contracts
+as one deployment.
+
+The existing Component conformance workflow resolves the latest released Salts SDK,
+records its actual manifest, and rebuilds exact development revisions of SaltsUtils
+and CHTTP against that SDK. These dependencies are unfinished and are not new
+published SDKs. Release/version selection and merge remain deferred; Linux source
+qualification does not establish the optional TurboDB/RulesForge, Windows/macOS or
+full release graph. The optional graphs must be qualified separately when enabled.
+
+The Graph test creates two live generations backed by separate provider DSOs and observes their message-consumption counters and markers. Graph owners retain their generation scope through provider shutdown. Adjacent provider tests cover capacity rejection and cleanup rollback. Thread and Plugin calls use the canonical CMeta SDK names; obsolete Salts compatibility names are not restored.
+
+With the workflow's installed dependency roots and shared vcpkg/re2c environment,
+run the complete configured build and CTest suites, then verify the installed
+consumer independently:
+
+```sh
+cmake --preset ci-component-release-user
+cmake --build --preset ci-component-release-user -j2
+ctest --preset ci-component-release-user --no-tests=error --output-on-failure
+cmake --build --preset install-ci-component-release-user -j2
+cd tests/install_consumer/component
+cmake --preset ci-component-installed-user
+cmake --build --preset ci-component-installed-user -j2
+ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
+```
+
+CI selects Component and adjacent business suites from the full configured graph
+and runs the rebuilt SaltsUtils MessagePlan regression suites. It uploads
+consumer/dependency identities, JUnit results, and CTest logs as
+`component-acceptance-linux-x64`. The root CTest command above runs the broader
+suite. The CNet, CHTTP, and durable-memory factory tests also adapt their existing
+plugin exports into
+local Component deployments; the outer plugin lease outlives the graph, owner,
+bindings, and Component scope. The IO tests exercise provider materialization;
+the durable-memory suite also verifies payload delivery, replay deduplication,
+capacity limits, and backlog retirement before Graph stop. A green Linux Release run establishes only this
+profile's acceptance;
+sanitizer qualification and Windows/macOS downstream runs remain separate release
+gates. This workflow neither merges nor publishes a stable release.

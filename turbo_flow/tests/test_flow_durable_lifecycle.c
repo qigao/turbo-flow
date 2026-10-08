@@ -315,7 +315,7 @@ static void close_fixture(lifecycle_fixture_t *f) {
 static void progress_until_settled(lifecycle_fixture_t *f, uint64_t completed) {
   for (size_t i = 0; i < 1000u && snapshot(f).completed < completed; ++i) {
     check_equal(turbo_flow_durable_buffer_progress(f->binding), SALTS_OK);
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
   check_equal(snapshot(f).completed, completed);
 }
@@ -338,7 +338,7 @@ spec("durable buffer lifecycle") {
       if (completion.graph_completed == UINT64_C(1) &&
           atomic_load_explicit(&f.emit_ready, memory_order_acquire))
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(completion.graph_completed, UINT64_C(1));
     check_equal(completion.graph_failed, UINT64_C(0));
@@ -361,7 +361,7 @@ spec("durable buffer lifecycle") {
       if (completion.sink_completed == UINT64_C(1) &&
           atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)1u)
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(completion.graph_completed, UINT64_C(1));
     check_equal(completion.sink_completed, UINT64_C(1));
@@ -395,7 +395,7 @@ spec("durable buffer lifecycle") {
       if (completion.graph_completed == UINT64_C(1) &&
           atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)1u)
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
 
     provider = snapshot(&f);
@@ -417,7 +417,7 @@ spec("durable buffer lifecycle") {
       check_equal(turbo_flow_durable_buffer_completion_snapshot(
                       f.flow, "intake.store", &completion), SALTS_OK);
       if (completion.sink_completed == UINT64_C(1)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(completion.graph_completed, UINT64_C(1));
     check_equal(completion.sink_completed, UINT64_C(1));
@@ -467,7 +467,7 @@ spec("durable buffer lifecycle") {
       if (completion.graph_completed == UINT64_C(2) &&
           atomic_load_explicit(&f.sinks, memory_order_acquire) == (size_t)2u)
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(completion.graph_completed, UINT64_C(2));
     check_equal(completion.graph_failed, UINT64_C(0));
@@ -487,7 +487,7 @@ spec("durable buffer lifecycle") {
       if (completion.sink_completed == UINT64_C(1) &&
           completion.sink_failed == UINT64_C(1))
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(completion.graph_completed, UINT64_C(2));
     check_equal(completion.graph_failed, UINT64_C(0));
@@ -506,7 +506,7 @@ spec("durable buffer lifecycle") {
           observed_failure = 1;
         else
           check_equal(rc, SALTS_OK);
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check(observed_failure);
     }
@@ -595,7 +595,7 @@ spec("durable buffer lifecycle") {
                                              "b-1", 3u), SALTS_OK);
       check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
       for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
 
       check_equal(atomic_load(&f.sinks), (size_t)2u);
       check_equal(snapshot(&f).pending_records, (size_t)1u);
@@ -608,7 +608,7 @@ spec("durable buffer lifecycle") {
       for (size_t i = 0u; i < 1000u && snapshot(&f).completed < 3u; ++i) {
         complete_ready_terminals(&f);
         check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       complete_ready_terminals(&f);
       check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
@@ -656,7 +656,7 @@ spec("durable buffer lifecycle") {
 
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 1u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)1u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
     check_equal(snapshot(&f).pending_records, (size_t)1u);
@@ -675,7 +675,7 @@ spec("durable buffer lifecycle") {
 
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
@@ -713,7 +713,7 @@ spec("durable buffer lifecycle") {
       current = snapshot(&f);
       check(current.in_flight_claims <= config.max_in_flight);
       check(current.records <= record_count);
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     complete_ready_terminals(&f);
     progress_until_settled(&f, record_count);
@@ -744,7 +744,7 @@ spec("durable buffer lifecycle") {
     publish_source(&f, "source-B", "healthy-b", 1u);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
 
@@ -832,7 +832,7 @@ spec("durable buffer lifecycle") {
     publish_source(&f, "source-B", "b-1", 1u);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 2u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)2u);
     check_equal(snapshot(&f).pending_records, (size_t)1u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)2u);
@@ -858,7 +858,7 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_async_terminal_complete(&f.terminal2, SALTS_OK, NULL), SALTS_OK);
     progress_until_settled(&f, 2u);
     for (size_t i = 0u; i < 1000u && atomic_load(&f.sinks) < 3u; ++i)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load(&f.sinks), (size_t)3u);
     check_equal(snapshot(&f).in_flight_claims, (size_t)1u);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
@@ -882,7 +882,7 @@ spec("durable buffer lifecycle") {
   it("keeps an async claim pending and returns timeout without claiming the next record") {
     lifecycle_fixture_t f; open_fixture(&f, 1); publish(&f); publish(&f);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
-    for (size_t i=0; i<1000u && !f.sinks; ++i) salts_sleep_ms(1u);
+    for (size_t i=0; i<1000u && !f.sinks; ++i) cmeta_sleep_ms(1u);
     check_equal(f.sinks, 1u);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
     check_equal(snapshot(&f).in_flight_claims, 1u);
@@ -897,7 +897,7 @@ spec("durable buffer lifecycle") {
     turbo_flow_inbox_source_result_t result = TURBO_FLOW_INBOX_SOURCE_RESULT_INIT;
     open_fixture(&f, 1); publish(&f);
     check_equal(turbo_flow_durable_buffer_progress(f.binding), SALTS_OK);
-    for (size_t i=0; i<1000u && !f.sinks; ++i) salts_sleep_ms(1u);
+    for (size_t i=0; i<1000u && !f.sinks; ++i) cmeta_sleep_ms(1u);
     check_equal(f.sinks, 1u);
     check_equal(flow_inbox_driver_cancel(f.binding->driver, &result), SALTS_OK);
     check_equal(result.state, TURBO_FLOW_INBOX_SOURCE_GRAPH_ACTIVE);
@@ -1027,7 +1027,7 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_durable_buffer_pause_drain(
                     f.flow, "intake.store"), SALTS_OK);
     publish(&f);
-    salts_sleep_ms(2u);
+    cmeta_sleep_ms(2u);
     latency = (turbo_flow_durable_buffer_latency_snapshot_t)
         TURBO_FLOW_DURABLE_BUFFER_LATENCY_SNAPSHOT_INIT;
     check_equal(turbo_flow_durable_buffer_latency_snapshot(
@@ -1062,7 +1062,7 @@ spec("durable buffer lifecycle") {
     check_equal(turbo_flow_durable_buffer_pause_drain(
                     f.flow, "intake.store"), SALTS_OK);
     publish(&f);
-    salts_sleep_ms(2u);
+    cmeta_sleep_ms(2u);
 
     check_equal(turbo_flow_durable_buffer_latency_snapshot(
                     f.flow, "intake.store", &latency), SALTS_OK);
@@ -1117,7 +1117,7 @@ spec("durable buffer lifecycle") {
                     f.flow, "missing.store", 1000u), SALTS_ENOENT);
     check_equal(turbo_flow_durable_buffer_close_and_drain(
                     f.flow, "intake.store", 0u), SALTS_ETIMEDOUT);
-    for (size_t i = 0u; i < 1000u && !f.sinks; ++i) salts_sleep_ms(1u);
+    for (size_t i = 0u; i < 1000u && !f.sinks; ++i) cmeta_sleep_ms(1u);
     check_equal(f.sinks, (size_t)1u);
     check_equal(turbo_flow_async_terminal_complete(&f.terminal, SALTS_OK, NULL), SALTS_OK);
     check_equal(turbo_flow_durable_buffer_drain(f.binding, 1000u), SALTS_OK);

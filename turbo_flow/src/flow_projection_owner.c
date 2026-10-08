@@ -5,7 +5,7 @@
 struct turbo_flow_projection_owner_s {
   turbo_flow_projection_owner_config_t config;
   turbo_flow_data_schema_t schema;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   turbo_flow_projection_owner_snapshot_t state;
 };
 
@@ -45,7 +45,7 @@ int turbo_flow_projection_owner_create(const turbo_flow_projection_owner_config_
   if (rc != SALTS_OK) return rc;
   owner = (turbo_flow_projection_owner_t *)calloc(1, sizeof(*owner));
   if (!owner) return SALTS_ENOMEM;
-  salts_mutex_init(&owner->mutex);
+  cmeta_mutex_init(&owner->mutex);
   if (!owner->mutex) {
     free(owner);
     return SALTS_ENOMEM;
@@ -63,9 +63,9 @@ int turbo_flow_projection_owner_create(const turbo_flow_projection_owner_config_
 
 int turbo_flow_projection_owner_stop(turbo_flow_projection_owner_t *owner) {
   if (!owner) return SALTS_EINVAL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   owner->state.accepting = 0;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return SALTS_OK;
 }
 
@@ -74,9 +74,9 @@ int turbo_flow_projection_owner_snapshot(turbo_flow_projection_owner_t *owner,
   if (!owner || !out || out->size < sizeof(*out) ||
       out->abi_major != TURBO_FLOW_PROJECTION_ABI_MAJOR ||
       out->abi_minor != TURBO_FLOW_PROJECTION_ABI_MINOR) return SALTS_EINVAL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   *out = owner->state;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return SALTS_OK;
 }
 
@@ -84,20 +84,20 @@ int turbo_flow_projection_owner_destroy(turbo_flow_projection_owner_t *owner) {
   int busy;
   int rc;
   if (!owner) return SALTS_EINVAL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   busy = owner->state.accepting || owner->state.outstanding != 0u;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   if (busy) return SALTS_EBUSY;
   rc = owner->config.release_context(owner->config.ctx);
   if (rc != SALTS_OK) return rc;
-  salts_mutex_destroy(&owner->mutex);
+  cmeta_mutex_destroy(&owner->mutex);
   free(owner);
   return SALTS_OK;
 }
 
 int flow_projection_owner_reserve(turbo_flow_projection_owner_t *owner) {
   int rc = SALTS_OK;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   if (!owner->state.accepting) {
     rc = SALTS_ECANCELED;
     goto done;
@@ -114,15 +114,15 @@ int flow_projection_owner_reserve(turbo_flow_projection_owner_t *owner) {
   if (owner->state.retained_bytes > owner->state.peak_retained_bytes)
     owner->state.peak_retained_bytes = owner->state.retained_bytes;
 done:
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return rc;
 }
 
 void flow_projection_owner_release(turbo_flow_projection_owner_t *owner) {
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   --owner->state.outstanding;
   owner->state.retained_bytes -= owner->config.max_result_bytes;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
 }
 
 const turbo_flow_projection_owner_config_t *

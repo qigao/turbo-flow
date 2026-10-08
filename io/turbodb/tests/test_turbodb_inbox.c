@@ -5,8 +5,8 @@
 #include "turbo_flow_turbodb.h"
 #include "turbodb_test_runtime.h"
 
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <cmeta_error.h>
+#include <cmeta_thread.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1319,7 +1319,7 @@ spec("TurboDB durable inbox v3") {
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     inbox_settle_worker_t workers[2] = {0};
-    salts_thread_t threads[2] = {NULL, NULL};
+    cmeta_thread_t threads[2] = {NULL, NULL};
     orm_error_t error;
 
     inbox_db_fixture_init(&fixture);
@@ -1334,12 +1334,12 @@ spec("TurboDB durable inbox v3") {
       workers[index].inbox = &inbox;
       workers[index].claim = claim;
       workers[index].status = SALTS_EIO;
-      check_equal(salts_thread_create(&threads[index], inbox_complete_worker, &workers[index]),
+      check_equal(cmeta_thread_create(&threads[index], inbox_complete_worker, &workers[index]),
                   SALTS_OK);
     }
     for (size_t index = 0u; index < 2u; ++index) {
-      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
-      salts_thread_destroy(&threads[index]);
+      check_equal(cmeta_thread_join(&threads[index]), SALTS_OK);
+      cmeta_thread_destroy(&threads[index]);
     }
     check_true((workers[0].status == SALTS_OK && workers[1].status == SALTS_EALREADY) ||
                (workers[1].status == SALTS_OK && workers[0].status == SALTS_EALREADY));

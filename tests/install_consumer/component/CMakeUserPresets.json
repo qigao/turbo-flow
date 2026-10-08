@@ -4,6 +4,24 @@
     "../../../CMakeUserPresets.json"
   ],
   "configurePresets": [
+{
+  "name": "ci-component-installed-user",
+  "inherits": "ci-component-release-user",
+  "binaryDir": "${sourceDir}/build/component-installed",
+  "cacheVariables": {
+    "VCPKG_MANIFEST_DIR": "${sourceDir}/../../..",
+    "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+    "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+    "TURBO_FLOW_TEST_COMPONENT": "Graph",
+    "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
+  },
+  "environment": {
+    "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+    "TURBO_FLOW_ROOT": "${sourceDir}/../../../stage/sdk/linux-x64",
+    "RULES_FORGE_ROOT": null,
+    "LD_LIBRARY_PATH": "$env{TURBO_FLOW_ROOT}/lib${pathListSep}$env{TURBO_FLOW_ROOT}/bin${pathListSep}$penv{LD_LIBRARY_PATH}"
+  }
+},
     {
       "name": "component-win-dev-base",
       "hidden": true,
@@ -207,11 +225,11 @@
       "inherits": "component-win-dev-base",
       "binaryDir": "${sourceDir}/build/graph-missing-root-win-dev-user",
       "environment": {
-        "RULES_FORGE_ROOT": ""
+        "SALTS_UTILS_ROOT": ""
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Graph",
-        "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
+        "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true
       }
     },
     {
@@ -219,11 +237,11 @@
       "inherits": "component-win-release-base",
       "binaryDir": "${sourceDir}/build/graph-missing-root-win-release-user",
       "environment": {
-        "RULES_FORGE_ROOT": ""
+        "SALTS_UTILS_ROOT": ""
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Graph",
-        "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
+        "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true
       }
     },
     {
@@ -629,11 +647,11 @@
       "inherits": "component-linux-dev-base",
       "binaryDir": "${sourceDir}/build/graph-missing-root-linux-dev-user",
       "environment": {
-        "RULES_FORGE_ROOT": ""
+        "SALTS_UTILS_ROOT": ""
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Graph",
-        "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
+        "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true
       }
     },
     {
@@ -641,11 +659,11 @@
       "inherits": "component-linux-release-base",
       "binaryDir": "${sourceDir}/build/graph-missing-root-linux-release-user",
       "environment": {
-        "RULES_FORGE_ROOT": ""
+        "SALTS_UTILS_ROOT": ""
       },
       "cacheVariables": {
         "TURBO_FLOW_TEST_COMPONENT": "Graph",
-        "CMAKE_DISABLE_FIND_PACKAGE_RulesForge": true
+        "CMAKE_DISABLE_FIND_PACKAGE_SaltsUtils": true
       }
     },
     {
@@ -898,6 +916,10 @@
     }
   ],
   "buildPresets": [
+{
+  "name": "ci-component-installed-user",
+  "configurePreset": "ci-component-installed-user"
+},
     {
       "name": "component-config-win-dev-user",
       "configurePreset": "component-config-win-dev-user"
@@ -996,6 +1018,16 @@
     }
   ],
   "testPresets": [
+{
+  "name": "ci-component-installed-user",
+  "configurePreset": "ci-component-installed-user",
+  "output": {
+    "outputOnFailure": true
+  },
+  "execution": {
+    "noTestsAction": "error"
+  }
+},
     {
       "name": "component-config-win-dev-user",
       "inherits": "base-test",

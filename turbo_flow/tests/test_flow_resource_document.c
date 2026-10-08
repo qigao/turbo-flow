@@ -594,7 +594,7 @@ spec("Turbo Flow resource document") {
     check_equal(fixture.command_calls, 1);
 
     command.expected_generation = 5u;
-    command.deadline_ns = salts_hrtime();
+    command.deadline_ns = cmeta_hrtime();
     memcpy(command.idempotency_key, "resume-expired", sizeof("resume-expired"));
     check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_ETIMEDOUT);
     check_equal(fixture.command_calls, 1);
@@ -648,7 +648,7 @@ spec("Turbo Flow resource document") {
     memcpy(command.target_uid, metadata.uid, strlen(metadata.uid) + 1u);
     memcpy(command.idempotency_key, "resize-1", sizeof("resize-1"));
     command.expected_generation = metadata.generation;
-    command.deadline_ns = salts_hrtime() + UINT64_C(1000000000);
+    command.deadline_ns = cmeta_hrtime() + UINT64_C(1000000000);
     command.parallelism = 2u;
     check_equal(turbo_flow_resource_command(flow, &command, &result), SALTS_OK);
     check_equal(result.generation_before, metadata.generation);

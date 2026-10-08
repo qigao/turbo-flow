@@ -2,7 +2,7 @@
 
 #include "flow_databind_internal.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 
 static int flow_product_databind_status(DataBindStatus status) {
   switch (status) {

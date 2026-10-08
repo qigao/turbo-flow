@@ -33,9 +33,9 @@ enum { PROTOCOL_NETWORK_E2E_TIMEOUT_MS = 5000 };
 static void protocol_network_wait_first_fragment(protocol_network_e2e_fixture_t *fixture,
                                                  size_t sent_before,
                                                  turbo_flow_protocol_network_intake_snapshot_t *snap) {
-  uint64_t deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
+  uint64_t deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
   while ((fixture->tcp.sent == sent_before || snap->active_sessions == 0u) &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     check_equal(protocol_network_e2e_poll(fixture, 1u, snap), SALTS_OK);
   }
   check_true(fixture->tcp.sent > sent_before);
@@ -45,8 +45,8 @@ static void protocol_network_wait_first_fragment(protocol_network_e2e_fixture_t 
 static void protocol_network_wait_admitted_frame(
     protocol_network_e2e_fixture_t *fixture,
     turbo_flow_protocol_network_intake_snapshot_t *snap) {
-  uint64_t deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
-  while (snap->frames_admitted == 0u && salts_monotonic_ms() < deadline)
+  uint64_t deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
+  while (snap->frames_admitted == 0u && cmeta_monotonic_ms() < deadline)
     check_equal(protocol_network_e2e_poll(fixture, 1u, snap), SALTS_OK);
   check_equal(snap->frames_admitted, (uint64_t)1u);
 }
@@ -129,9 +129,9 @@ spec("real JT/T808 TCP protocol intake") {
     check_true(frame_size > 4u);
     check_equal(protocol_network_e2e_tcp_send(&fixture, frame, frame_size), SALTS_OK);
 
-    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_E2E_TIMEOUT_MS;
     while ((intake.frames_admitted == 0u || fixture.tcp.received == 0u) &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
 
     check_equal(intake.frames_admitted, (uint64_t)1u);

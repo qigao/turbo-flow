@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../../turbo_flow/tests/adapter_component_fixture.h"
 #include "durable_provider_conformance.h"
 #include "tinytest.h"
 #include "turbo_flow_durable_buffer.h"
@@ -8,6 +9,7 @@
 #include "turbo_flow_resource.h"
 
 #include <salts/clock.h>
+#include <salts/thread.h>
 #include <salts/plugin.h>
 
 #include <stdatomic.h>
@@ -43,8 +45,8 @@ static const char graph_generated[] =
     "}\n";
 
 typedef struct resolver_state_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned provider_calls;
   unsigned resource_calls;
 } resolver_state_t;
@@ -58,14 +60,15 @@ typedef struct fixture_s {
   turbo_flow_plugin_generation_t *generation;
   turbo_flow_plugin_generation_t *cleanup;
 
-  salts_plugin_registry registry;
-  salts_plugin_ref plugin_ref;
+  cmeta_plugin_registry registry;
+  cmeta_plugin_ref plugin_ref;
   int registry_initialized;
   int plugin_loaded;
   int plugin_started;
 
+  adapter_component_fixture_t component;
   resolver_state_t resolver;
-  turbo_flow_provider_resolver_v1_t provider_resolver;
+  turbo_flow_provider_resolver_v2_t provider_resolver;
   turbo_flow_resource_resolver_v1_t resource_resolver;
 
   atomic_size_t delivered;
@@ -84,7 +87,7 @@ static int output(turbo_flow_msg_t *msg, void *ctx) {
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   resolver_state_t *state = (resolver_state_t *)ctx;
   if (!state || !provider_identity || !out ||
@@ -99,8 +102,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "turbo-flow.durable.memory";
-  out->registry = state->registry;
-  out->plugin = state->plugin;
+  out->component_identity = "AdapterProviderFixture";
   return SALTS_OK;
 }
 
@@ -143,26 +145,26 @@ static void stop_unload(fixture_t *f) {
   if (!f || !f->registry_initialized) return;
   if (f->plugin_started) {
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &f->registry, f->plugin_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     f->plugin_started = 0;
   }
   if (f->plugin_loaded) {
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &f->registry, f->plugin_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(
+        cmeta_plugin_registry_unload(
             &f->registry, f->plugin_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     f->plugin_loaded = 0;
   }
   check_equal(
-      salts_plugin_registry_destroy(&f->registry),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_destroy(&f->registry),
+      CMETA_PLUGIN_OK);
   f->registry_initialized = 0;
 }
 
@@ -173,7 +175,7 @@ static int open_fixture(
       TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t plugin_error =
       TURBO_FLOW_PLUGIN_ERROR_INIT;
-  salts_plugin_registry_config registry_config = {2u};
+  cmeta_plugin_registry_config registry_config = {2u};
   flow_test_operation_t operation;
   const char *path =
       getenv("TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH");
@@ -204,24 +206,27 @@ static int open_fixture(
   rc = turbo_flow_parse_string(f->flow, graph, strlen(graph));
   if (rc != SALTS_OK) return rc;
 
-  if (salts_plugin_registry_init(
-          &f->registry, &registry_config) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_init(
+          &f->registry, &registry_config) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->registry_initialized = 1;
-  if (salts_plugin_registry_load(
-          &f->registry, path, &f->plugin_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_load(
+          &f->registry, path, &f->plugin_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->plugin_loaded = 1;
-  if (salts_plugin_registry_start(
-          &f->registry, f->plugin_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_start(
+          &f->registry, f->plugin_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->plugin_started = 1;
+  rc = adapter_component_open(&f->component, &f->registry, f->plugin_ref,
+      "flow.durable.memory");
+  if (rc != SALTS_OK) return rc;
 
   f->resolver.registry = &f->registry;
   f->resolver.plugin = f->plugin_ref;
   f->provider_resolver =
-      (turbo_flow_provider_resolver_v1_t)
-          TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+      (turbo_flow_provider_resolver_v2_t)
+          TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   f->provider_resolver.ctx = &f->resolver;
   f->provider_resolver.resolve = resolve_provider;
   f->resource_resolver =
@@ -272,6 +277,7 @@ static void close_fixture(fixture_t *f) {
         SALTS_OK);
     f->host = NULL;
   }
+  check_equal(adapter_component_close(&f->component), SALTS_OK);
   stop_unload(f);
 }
 
@@ -282,6 +288,7 @@ static int create_generation(fixture_t *f) {
       TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
   int rc;
 
+  config.component_runtime = &f->component.component.runtime;
   config.provider_resolver = &f->provider_resolver;
   config.resource_resolver = &f->resource_resolver;
   rc = turbo_flow_plugin_generation_create(
@@ -386,7 +393,7 @@ spec("canonical bounded memory durable provider") {
           turbo_flow_plugin_generation_flow(f.generation);
       turbo_flow_durable_provider_conformance_v1_t contract = {
           &f, flow, conformance_publish_stable,
-          conformance_progress, conformance_delivered};
+          conformance_progress, conformance_delivered, "intake_store"};
       check_equal(turbo_flow_start(flow), SALTS_OK);
       turbo_flow_durable_provider_conformance_capacity_and_replay(
           &contract);
@@ -465,7 +472,7 @@ spec("canonical bounded memory durable provider") {
             turbo_flow_plugin_generation_poll(
                 f.generation, 0u, &error),
             SALTS_OK);
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check_equal(atomic_load(&f.delivered), (size_t)1u);
     }
@@ -501,7 +508,7 @@ spec("canonical bounded memory durable provider") {
                 flow, "intake_store", 0u,
                 &history, 1u, &count),
             SALTS_OK);
-        if (count == 0u) salts_sleep_ms(1u);
+        if (count == 0u) cmeta_sleep_ms(1u);
       }
       check_equal(atomic_load(&f.delivered), (size_t)1u);
       check_equal(publish(flow), SALTS_ENOSPC);
@@ -517,7 +524,7 @@ spec("canonical bounded memory durable provider") {
     close_fixture(&f);
   }
 
-  it("releases prepared memory leases when operation preflight fails") {
+  it("releases materialized memory owners and leases after Graph compile failure") {
     static const char graph[] =
         "source input\n"
         "buffer intake provider flow.durable.memory {\n"
@@ -540,11 +547,15 @@ spec("canonical bounded memory durable provider") {
 
     check_equal(open_fixture(&f, graph, &error), SALTS_OK);
     {
-      turbo_flow_t *original = f.flow;
+      cmeta_plugin_lifecycle_info lifecycle;
       check_not_equal(create_generation(&f), SALTS_OK);
-      check_true(f.flow == original);
+      /* Graph ownership moves after preflight; compile failure destroys it. */
+      check_null(f.flow);
       check_null(f.generation);
       check_null(f.cleanup);
+      check_equal(cmeta_plugin_registry_get_lifecycle(
+          &f.registry, f.plugin_ref, &lifecycle), CMETA_PLUGIN_OK);
+      check_equal(lifecycle.active_leases, (size_t)1u);
     }
     close_fixture(&f);
   }

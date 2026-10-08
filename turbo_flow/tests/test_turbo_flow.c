@@ -1,7 +1,7 @@
 #include "../../tests/flow_operation_fixture.h"
 #include "flow_internal.h"
-#include "salts_coro.h"
-#include "salts_thread.h"
+#include "coro.h"
+#include "cmeta_thread.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 
@@ -248,7 +248,7 @@ static int async_gate_stage(turbo_flow_msg_t *msg, void *ctx) {
   }
   atomic_fetch_add_explicit(&gate->entered, 1, memory_order_acq_rel);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
   atomic_fetch_add_explicit(&gate->calls, 1, memory_order_acq_rel);
   return SALTS_OK;
 }
@@ -311,7 +311,7 @@ static int worker_probe_stage(turbo_flow_msg_t *msg, void *ctx) {
          !atomic_compare_exchange_weak_explicit(&probe->peak, &peak, active, memory_order_acq_rel,
                                                 memory_order_acquire)) {
   }
-  salts_sleep_ms(25);
+  cmeta_sleep_ms(25);
   atomic_fetch_sub_explicit(&probe->active, 1, memory_order_acq_rel);
   atomic_fetch_add_explicit(&probe->calls, 1, memory_order_acq_rel);
   return SALTS_OK;
@@ -350,7 +350,7 @@ static void concurrent_publish_thread(void *arg) {
   msg.id = publish->msg_id;
   atomic_fetch_add_explicit(publish->ready, 1, memory_order_acq_rel);
   while (!atomic_load_explicit(publish->go, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
   rc = turbo_flow_publish(publish->flow, publish->source_name, &msg);
   error = turbo_flow_last_error(publish->flow);
   publish->error_code = error ? error->code : SALTS_EINVAL;
@@ -367,7 +367,7 @@ static void stop_flow_thread(void *arg) {
 
 static int fail_by_message_id_stage(turbo_flow_msg_t *msg, void *ctx) {
   (void)ctx;
-  salts_sleep_ms(10);
+  cmeta_sleep_ms(10);
   return msg->id == 1u ? SALTS_EIO : SALTS_EPROTO;
 }
 
@@ -608,7 +608,7 @@ static void blocking_adapter_stop(void *ctx, turbo_flow_t *flow,
   atomic_fetch_add_explicit(&adapter->stop_count, 1, memory_order_acq_rel);
   atomic_store_explicit(&adapter->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&adapter->allow_exit, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
 }
 
 static void test_adapter_shutdown(void *ctx) {
@@ -2415,8 +2415,8 @@ suite("Turbo Flow") {
       turbo_flow_adapter_ops_t ops;
       stop_flow_ctx_t first_stop;
       stop_flow_ctx_t second_stop;
-      salts_thread_t first_thread = NULL;
-      salts_thread_t second_thread = NULL;
+      cmeta_thread_t first_thread = NULL;
+      cmeta_thread_t second_thread = NULL;
       turbo_flow_t *flow = turbo_flow_create();
 
       atomic_init(&adapter.entered, 0);
@@ -2437,17 +2437,17 @@ suite("Turbo Flow") {
       check_equal(turbo_flow_compile(flow), SALTS_OK);
       check_equal(turbo_flow_start(flow), SALTS_OK);
 
-      check_equal(salts_thread_create(&first_thread, stop_flow_thread, &first_stop), SALTS_OK);
+      check_equal(cmeta_thread_create(&first_thread, stop_flow_thread, &first_stop), SALTS_OK);
       while (!atomic_load_explicit(&adapter.entered, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
       check_equal(turbo_flow_adapter_report_stop_status(flow, SALTS_EIO), SALTS_EINVAL);
-      check_equal(salts_thread_create(&second_thread, stop_flow_thread, &second_stop), SALTS_OK);
-      check_equal(salts_thread_join(&second_thread), SALTS_OK);
+      check_equal(cmeta_thread_create(&second_thread, stop_flow_thread, &second_stop), SALTS_OK);
+      check_equal(cmeta_thread_join(&second_thread), SALTS_OK);
       check_equal(atomic_load_explicit(&second_stop.result, memory_order_acquire), SALTS_EBUSY);
       check_equal(atomic_load_explicit(&adapter.stop_count, memory_order_acquire), 1);
 
       atomic_store_explicit(&adapter.allow_exit, 1, memory_order_release);
-      check_equal(salts_thread_join(&first_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&first_thread), SALTS_OK);
       check_equal(atomic_load_explicit(&first_stop.result, memory_order_acquire), SALTS_OK);
       check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_STOPPED);
       check_equal(atomic_load_explicit(&adapter.stop_count, memory_order_acquire), 1);
@@ -4939,7 +4939,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       worker_submit_ctx_t submits[2];
-      salts_thread_t threads[2] = {0};
+      cmeta_thread_t threads[2] = {0};
       turbo_flow_t *flow = turbo_flow_create();
       flow_worker_pool_adapter_t *adapter;
       uint32_t stage_index;
@@ -4971,10 +4971,10 @@ suite("Turbo Flow") {
       for (size_t i = 0; i < 2; ++i) {
         submits[i].adapter = adapter;
         atomic_init(&submits[i].result, SALTS_EALREADY);
-        check_equal(salts_thread_create(&threads[i], worker_submit_thread, &submits[i]), SALTS_OK);
+        check_equal(cmeta_thread_create(&threads[i], worker_submit_thread, &submits[i]), SALTS_OK);
       }
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
         check_equal(atomic_load_explicit(&submits[i].result, memory_order_acquire), SALTS_OK);
       }
 
@@ -4993,7 +4993,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[2];
-      salts_thread_t threads[2] = {0};
+      cmeta_thread_t threads[2] = {0};
       flow_runtime_node_plan_t node_before;
       flow_executor_plan_t executor_before;
       flow_data_segment_plan_t segment_before;
@@ -5047,14 +5047,14 @@ suite("Turbo Flow") {
         publishes[i].ready = &ready;
         publishes[i].go = &go;
         atomic_init(&publishes[i].result, SALTS_EBUSY);
-        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+        check_equal(cmeta_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
                      SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        salts_thread_yield();
+        cmeta_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
         check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
         check_equal(publishes[i].error_code, SALTS_OK);
       }
@@ -5090,7 +5090,7 @@ suite("Turbo Flow") {
       enum { PRODUCERS = 8 };
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[PRODUCERS];
-      salts_thread_t threads[PRODUCERS] = {0};
+      cmeta_thread_t threads[PRODUCERS] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -5123,14 +5123,14 @@ suite("Turbo Flow") {
         publishes[i].ready = &ready;
         publishes[i].go = &go;
         atomic_init(&publishes[i].result, SALTS_EBUSY);
-        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+        check_equal(cmeta_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
                      SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != PRODUCERS)
-        salts_thread_yield();
+        cmeta_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < PRODUCERS; ++i) {
-        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
         check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
       }
       check_equal(atomic_load_explicit(&probe.calls, memory_order_acquire), PRODUCERS);
@@ -5146,7 +5146,7 @@ suite("Turbo Flow") {
                                "}\n";
       worker_probe_ctx_t probe;
       concurrent_publish_t publishes[2];
-      salts_thread_t threads[2] = {0};
+      cmeta_thread_t threads[2] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -5185,7 +5185,7 @@ suite("Turbo Flow") {
       check_equal(adapter->lanes, 2);
       for (size_t i = 0; i < 2; ++i) {
         check_not_null(adapter->pools[i]);
-        check_equal(salts_coro_pool_capacity(adapter->pools[i]), 8);
+        check_equal(coro_pool_capacity(adapter->pools[i]), 8);
         memset(&publishes[i], 0, sizeof(publishes[i]));
         publishes[i].flow = flow;
         publishes[i].source_name = "input";
@@ -5193,14 +5193,14 @@ suite("Turbo Flow") {
         publishes[i].ready = &ready;
         publishes[i].go = &go;
         atomic_init(&publishes[i].result, SALTS_EBUSY);
-        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+        check_equal(cmeta_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
                      SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        salts_thread_yield();
+        cmeta_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i) {
-        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
         check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
       }
       check_greater_equal(atomic_load_explicit(&probe.peak, memory_order_acquire), 2);
@@ -5215,7 +5215,7 @@ suite("Turbo Flow") {
                                "  input -> transform\n"
                                "}\n";
       concurrent_publish_t publishes[2];
-      salts_thread_t threads[2] = {0};
+      cmeta_thread_t threads[2] = {0};
       atomic_int ready;
       atomic_int go;
       turbo_flow_t *flow = turbo_flow_create();
@@ -5241,14 +5241,14 @@ suite("Turbo Flow") {
         publishes[i].ready = &ready;
         publishes[i].go = &go;
         atomic_init(&publishes[i].result, SALTS_EBUSY);
-        check_equal(salts_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
+        check_equal(cmeta_thread_create(&threads[i], concurrent_publish_thread, &publishes[i]),
                      SALTS_OK);
       }
       while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
-        salts_thread_yield();
+        cmeta_thread_yield();
       atomic_store_explicit(&go, 1, memory_order_release);
       for (size_t i = 0; i < 2; ++i)
-        check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+        check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
       check_equal(atomic_load_explicit(&publishes[0].result, memory_order_acquire), SALTS_EIO);
       check_equal(publishes[0].error_code, SALTS_EIO);
       check_equal(atomic_load_explicit(&publishes[1].result, memory_order_acquire), SALTS_EPROTO);
@@ -5268,8 +5268,8 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
       stop_flow_ctx_t stop;
-      salts_thread_t publish_thread = NULL;
-      salts_thread_t stop_thread = NULL;
+      cmeta_thread_t publish_thread = NULL;
+      cmeta_thread_t stop_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_msg_t rejected;
@@ -5302,26 +5302,26 @@ suite("Turbo Flow") {
       publish.ready = &ready;
       publish.go = &go;
       atomic_init(&publish.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+      check_equal(cmeta_thread_create(&publish_thread, concurrent_publish_thread, &publish),
                    SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
 
       stop.flow = flow;
       atomic_init(&stop.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
+      check_equal(cmeta_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
       while (accepting) {
-        salts_mutex_lock(&flow->runtime_mutex);
+        cmeta_mutex_lock(&flow->runtime_mutex);
         accepting = flow->admission_state == FLOW_ADMISSION_OPEN;
-        salts_mutex_unlock(&flow->runtime_mutex);
-        salts_thread_yield();
+        cmeta_mutex_unlock(&flow->runtime_mutex);
+        cmeta_thread_yield();
       }
       turbo_flow_msg_init(&rejected);
       check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       turbo_flow_msg_cleanup(&rejected);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
-      check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&publish_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
       check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), SALTS_OK);
       check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -5368,7 +5368,7 @@ suite("Turbo Flow") {
       turbo_flow_msg_cleanup(&msg);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(atomic_load_explicit(&gate.ran_off_submitter, memory_order_acquire), 1);
@@ -5376,7 +5376,7 @@ suite("Turbo Flow") {
       atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
       for (int wait = 0;
            wait < 2000 && !atomic_load_explicit(&completion.called, memory_order_acquire); ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
       check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), SALTS_OK);
@@ -5505,7 +5505,7 @@ suite("Turbo Flow") {
           SALTS_OK);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(
@@ -5520,7 +5520,7 @@ suite("Turbo Flow") {
       for (int wait = 0;
            wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 1;
            ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
       check_equal(flow->async_ingress_inflight_bytes, 0u);
@@ -5533,7 +5533,7 @@ suite("Turbo Flow") {
       for (int wait = 0;
            wait < 2000 && atomic_load_explicit(&completion.called, memory_order_acquire) < 2;
            ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 2);
       check_equal(flow->async_ingress_inflight_bytes, 0u);
@@ -5556,7 +5556,7 @@ suite("Turbo Flow") {
       async_completion_ctx_t completion;
       async_gate_ctx_t gate;
       stop_flow_ctx_t stop;
-      salts_thread_t stop_thread = NULL;
+      cmeta_thread_t stop_thread = NULL;
       turbo_flow_msg_t msg;
       turbo_flow_t *flow = turbo_flow_create();
       int accepting = 1;
@@ -5586,7 +5586,7 @@ suite("Turbo Flow") {
           SALTS_OK);
       for (int wait = 0; wait < 2000 && !atomic_load_explicit(&gate.entered, memory_order_acquire);
            ++wait) {
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       }
       check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
       check_equal(
@@ -5598,18 +5598,18 @@ suite("Turbo Flow") {
 
       stop.flow = flow;
       atomic_init(&stop.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
+      check_equal(cmeta_thread_create(&stop_thread, stop_flow_thread, &stop), SALTS_OK);
       while (accepting) {
-        salts_mutex_lock(&flow->runtime_mutex);
+        cmeta_mutex_lock(&flow->runtime_mutex);
         accepting = flow->admission_state == FLOW_ADMISSION_OPEN;
-        salts_mutex_unlock(&flow->runtime_mutex);
-        salts_thread_yield();
+        cmeta_mutex_unlock(&flow->runtime_mutex);
+        cmeta_thread_yield();
       }
       check_equal(
           turbo_flow_publish_async(flow, "input", &msg, async_publish_complete, &completion),
           SALTS_ESHUTDOWN);
       atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
-      check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
       check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
       check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 2);
       check_equal(atomic_load_explicit(&completion.last_status, memory_order_acquire), SALTS_OK);
@@ -5677,7 +5677,7 @@ suite("Turbo Flow") {
       check_equal(pool.queue_capacity, 16);
       check_equal(pool.queued, 0);
       check_equal(pool.active, 0);
-      salts_sleep_ms(20);
+      cmeta_sleep_ms(20);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       check_equal(turbo_flow_pool_snapshot_at(flow, 0, &pool), SALTS_OK);
       check_equal(pool.state, TURBO_FLOW_POOL_STOPPED);
@@ -6091,7 +6091,7 @@ suite("Turbo Flow") {
                                "}\n";
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
-      salts_thread_t publish_thread = NULL;
+      cmeta_thread_t publish_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_pool_resize_command_t command;
@@ -6135,15 +6135,15 @@ suite("Turbo Flow") {
       publish.ready = &ready;
       publish.go = &go;
       atomic_init(&publish.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+      check_equal(cmeta_thread_create(&publish_thread, concurrent_publish_thread, &publish),
                    SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
       check_equal(turbo_flow_resize_pool(flow, &command), SALTS_ETIMEDOUT);
       turbo_flow_msg_init(&rejected);
       check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&publish_thread), SALTS_OK);
       check_equal(atomic_load_explicit(&publish.result, memory_order_acquire), SALTS_OK);
       check_equal(turbo_flow_resume(flow), SALTS_OK);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
@@ -6159,7 +6159,7 @@ suite("Turbo Flow") {
                                "}\n";
       execution_probe_ctx_t probe;
       concurrent_publish_t publish;
-      salts_thread_t publish_thread = NULL;
+      cmeta_thread_t publish_thread = NULL;
       atomic_int ready;
       atomic_int go;
       turbo_flow_msg_t rejected;
@@ -6191,16 +6191,16 @@ suite("Turbo Flow") {
       publish.ready = &ready;
       publish.go = &go;
       atomic_init(&publish.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&publish_thread, concurrent_publish_thread, &publish),
+      check_equal(cmeta_thread_create(&publish_thread, concurrent_publish_thread, &publish),
                    SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
 
       check_equal(turbo_flow_drain(flow, 0), SALTS_ETIMEDOUT);
       turbo_flow_msg_init(&rejected);
       check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       atomic_store_explicit(&probe.allow_exit, 1, memory_order_release);
-      check_equal(salts_thread_join(&publish_thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&publish_thread), SALTS_OK);
       check_equal(turbo_flow_drain(flow, 100), SALTS_OK);
       check_equal(turbo_flow_publish(flow, "input", &rejected), SALTS_ESHUTDOWN);
       check_equal(turbo_flow_resume(flow), SALTS_OK);
@@ -7227,7 +7227,7 @@ suite("Turbo Flow") {
       uint32_t stage_index = 0;
       turbo_flow_t *flow = reorder_test_flow(2, 1000, &stage_index);
       reorder_wait_t wait = {0};
-      salts_thread_t thread;
+      cmeta_thread_t thread;
       check_not_null(flow);
       wait.flow = flow;
       wait.stage_index = stage_index;
@@ -7235,14 +7235,14 @@ suite("Turbo Flow") {
       wait.leave_on_success = 1;
       atomic_init(&wait.started, 0);
       atomic_init(&wait.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        salts_sleep_ms(1);
-      salts_sleep_ms(10);
+        cmeta_sleep_ms(1);
+      cmeta_sleep_ms(10);
       check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_EBUSY);
       check_equal(flow_reorder_enter(flow, stage_index, 1), SALTS_OK);
       flow_reorder_leave(flow, stage_index, 1);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_OK);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -7260,20 +7260,20 @@ suite("Turbo Flow") {
       check_not_null(flow);
       check_equal(flow_reorder_enter(flow, stage_index, 1), SALTS_OK);
       reorder_wait_t wait = {0};
-      salts_thread_t thread;
+      cmeta_thread_t thread;
       wait.flow = flow;
       wait.stage_index = stage_index;
       wait.sequence = 2;
       wait.leave_on_success = 1;
       atomic_init(&wait.started, 0);
       atomic_init(&wait.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        salts_sleep_ms(1);
-      salts_sleep_ms(5);
+        cmeta_sleep_ms(1);
+      cmeta_sleep_ms(5);
       check_equal(flow_reorder_enter(flow, stage_index, 3), SALTS_ENOSPC);
       flow_reorder_leave(flow, stage_index, 1);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
     }
@@ -7306,18 +7306,18 @@ suite("Turbo Flow") {
       uint32_t stage_index = 0;
       turbo_flow_t *flow = reorder_test_flow(1, 1000, &stage_index);
       reorder_wait_t wait = {0};
-      salts_thread_t thread;
+      cmeta_thread_t thread;
       check_not_null(flow);
       wait.flow = flow;
       wait.stage_index = stage_index;
       wait.sequence = 2;
       atomic_init(&wait.started, 0);
       atomic_init(&wait.result, SALTS_EBUSY);
-      check_equal(salts_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, reorder_wait_thread, &wait), SALTS_OK);
       while (!atomic_load_explicit(&wait.started, memory_order_acquire))
-        salts_sleep_ms(1);
+        cmeta_sleep_ms(1);
       flow_stop_reorder_states(flow);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(atomic_load_explicit(&wait.result, memory_order_acquire), SALTS_ESHUTDOWN);
       check_equal(turbo_flow_stop(flow), SALTS_OK);
       turbo_flow_destroy(flow);
@@ -7392,7 +7392,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      salts_thread_t thread = NULL;
+      cmeta_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 1);
@@ -7404,9 +7404,9 @@ suite("Turbo Flow") {
                                             &probe, &input, &completion, 0u),
                    SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_ACCEPTED);
-      check_equal(salts_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
       check_equal(flow_execution_task_wait(&task, &output, &completion), SALTS_OK);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_COMPLETED);
       check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
       flow_execution_task_cleanup(&task);
@@ -7419,7 +7419,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      salts_thread_t thread = NULL;
+      cmeta_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 0);
@@ -7430,9 +7430,9 @@ suite("Turbo Flow") {
       check_equal(flow_execution_task_init(&task, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 5u),
                    SALTS_OK);
-      check_equal(salts_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, execution_task_thread, &task), SALTS_OK);
       check_equal(flow_execution_task_wait(&task, &output, &completion), SALTS_ETIMEDOUT);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(flow_execution_task_state(&task), FLOW_EXECUTION_COMPLETED);
       check_equal(completion.status, SALTS_ETIMEDOUT);
       check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
@@ -7448,7 +7448,7 @@ suite("Turbo Flow") {
       execution_probe_ctx_t probe;
       turbo_flow_msg_t input;
       turbo_flow_msg_t output;
-      salts_thread_t thread = NULL;
+      cmeta_thread_t thread = NULL;
 
       atomic_init(&probe.entered, 0);
       atomic_init(&probe.allow_exit, 0);
@@ -7470,12 +7470,12 @@ suite("Turbo Flow") {
       check_equal(flow_execution_task_init(&running, FLOW_EXECUTION_THREAD, execution_yield_stage,
                                             &probe, &input, &completion, 0u),
                    SALTS_OK);
-      check_equal(salts_thread_create(&thread, execution_task_thread, &running), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, execution_task_thread, &running), SALTS_OK);
       while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
       check_equal(flow_execution_task_abort(&running), SALTS_OK);
       check_equal(flow_execution_task_wait(&running, &output, &completion), SALTS_ECANCELED);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
       check_equal(atomic_load_explicit(&probe.saw_cancel, memory_order_acquire), 1);
       flow_execution_task_cleanup(&running);
       turbo_flow_msg_cleanup(&output);

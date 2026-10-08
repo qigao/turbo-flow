@@ -1,6 +1,6 @@
 #include "turbo_flow.h"
 
-#include "salts_thread.h"
+#include <cmeta_thread.h>
 #include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
@@ -145,7 +145,7 @@ typedef struct flow_projection_registry_entry_s {
 
 struct turbo_flow_projection_registry_s {
   vec_t entries;
-  salts_mutex_t lock;
+  cmeta_mutex_t lock;
   int lock_initialized;
 };
 
@@ -274,14 +274,14 @@ turbo_flow_projection_registry_t *turbo_flow_projection_registry_create(void) {
     free(projection_registry);
     return NULL;
   }
-  salts_mutex_init(&projection_registry->lock);
+  cmeta_mutex_init(&projection_registry->lock);
   projection_registry->lock_initialized = 1;
   return projection_registry;
 }
 
 void turbo_flow_projection_registry_destroy(turbo_flow_projection_registry_t *projection_registry) {
   if (!projection_registry) return;
-  if (projection_registry->lock_initialized) salts_mutex_lock(&projection_registry->lock);
+  if (projection_registry->lock_initialized) cmeta_mutex_lock(&projection_registry->lock);
   for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
     flow_projection_registry_entry_t **entry =
         (flow_projection_registry_entry_t **)vec_at(&projection_registry->entries, i);
@@ -289,8 +289,8 @@ void turbo_flow_projection_registry_destroy(turbo_flow_projection_registry_t *pr
   }
   vec_destroy(&projection_registry->entries);
   if (projection_registry->lock_initialized) {
-    salts_mutex_unlock(&projection_registry->lock);
-    salts_mutex_destroy(&projection_registry->lock);
+    cmeta_mutex_unlock(&projection_registry->lock);
+    cmeta_mutex_destroy(&projection_registry->lock);
   }
   free(projection_registry);
 }
@@ -313,19 +313,19 @@ int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *pr
        strcmp(match->type_name, schema->type_name) != 0)) {
     return SALTS_EPROTO;
   }
-  salts_mutex_lock(&projection_registry->lock);
+  cmeta_mutex_lock(&projection_registry->lock);
   for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
     flow_projection_registry_entry_t *const *current =
         (flow_projection_registry_entry_t *const *)vec_at_const(&projection_registry->entries, i);
     if (current && flow_projection_registry_key_equal(*current, match, schema)) {
       rc = flow_projection_registry_definition_equal(*current, schema) ? SALTS_EALREADY : SALTS_EPROTO;
-      salts_mutex_unlock(&projection_registry->lock);
+      cmeta_mutex_unlock(&projection_registry->lock);
       return rc;
     }
   }
   entry = (flow_projection_registry_entry_t *)calloc(1, sizeof(*entry));
   if (!entry) {
-    salts_mutex_unlock(&projection_registry->lock);
+    cmeta_mutex_unlock(&projection_registry->lock);
     return SALTS_ENOMEM;
   }
   entry->match = *match;
@@ -335,7 +335,7 @@ int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *pr
   entry->projection_type = tstr_dup(schema->projection_type);
   if (!entry->schema_name || !entry->type_name || !entry->projection_type) {
     flow_projection_registry_entry_destroy(entry);
-    salts_mutex_unlock(&projection_registry->lock);
+    cmeta_mutex_unlock(&projection_registry->lock);
     return SALTS_ENOMEM;
   }
   entry->schema = *schema;
@@ -346,7 +346,7 @@ int turbo_flow_projection_registry_register(turbo_flow_projection_registry_t *pr
   entry->schema.schema_text = NULL;
   rc = turbo_flow_stl_error(vec_push(&projection_registry->entries, &entry));
   if (rc != SALTS_OK) flow_projection_registry_entry_destroy(entry);
-  salts_mutex_unlock(&projection_registry->lock);
+  cmeta_mutex_unlock(&projection_registry->lock);
   return rc;
 }
 
@@ -359,7 +359,7 @@ int turbo_flow_projection_registry_resolve(const turbo_flow_projection_registry_
     return SALTS_EINVAL;
   }
   const turbo_flow_data_schema_t *resolved = NULL;
-  salts_mutex_lock(&mutable_projection_registry->lock);
+  cmeta_mutex_lock(&mutable_projection_registry->lock);
   for (size_t i = 0; i < vec_size(&projection_registry->entries); ++i) {
     flow_projection_registry_entry_t *const *entry =
         (flow_projection_registry_entry_t *const *)vec_at_const(&projection_registry->entries, i);
@@ -369,10 +369,10 @@ int turbo_flow_projection_registry_resolve(const turbo_flow_projection_registry_
   }
   if (resolved) {
     *schema_out = resolved;
-    salts_mutex_unlock(&mutable_projection_registry->lock);
+    cmeta_mutex_unlock(&mutable_projection_registry->lock);
     return SALTS_OK;
   }
-  salts_mutex_unlock(&mutable_projection_registry->lock);
+  cmeta_mutex_unlock(&mutable_projection_registry->lock);
   return SALTS_ENOENT;
 }
 
