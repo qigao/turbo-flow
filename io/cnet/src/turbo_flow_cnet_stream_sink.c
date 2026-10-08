@@ -1,4 +1,5 @@
 #include "turbo_flow_cnet_managed_sink.h"
+#include "turbo_flow_cnet_provider_adapter_internal.h"
 #include "turbo_flow_provider_adapter.h"
 
 #include <cflow/executor.h>
