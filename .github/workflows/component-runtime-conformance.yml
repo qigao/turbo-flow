@@ -179,7 +179,7 @@ jobs:
       - name: Run Component and adjacent business tests
         run: >-
           ctest --preset ci-component-release-user
-          -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_component_generation|test_flow_plugin_materializer_generation|test_flow_provider_interface|test_flow_provider_adapter_binding|test_flow_salts_provider_binding|test_flow_compiled_provider_instance|test_flow_provider_typed_config)$'
+          -R '^(test_flow_provider_binding|test_flow_provider_generation|test_flow_component_generation|test_flow_plugin_materializer_generation|test_flow_provider_interface|test_flow_provider_adapter_binding|test_flow_salts_provider_binding|test_flow_compiled_provider_instance|test_flow_provider_typed_config|test_cnet_provider_interface|test_chttp_provider_interface)$'
           --no-tests=error --output-on-failure
           --output-junit "$GITHUB_WORKSPACE/build/component-runtime/component-results.xml"
 

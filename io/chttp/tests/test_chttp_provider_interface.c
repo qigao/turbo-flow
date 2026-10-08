@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../../turbo_flow/tests/adapter_component_fixture.h"
 #include "chttp_provider_config_native.h"
 #include "tinytest.h"
 #include "turbo_flow_chttp.h"
@@ -35,6 +36,7 @@ typedef struct provider_acceptance_s {
   int resource_loaded;
   int provider_started;
   int resource_started;
+  adapter_component_fixture_t component;
   turbo_flow_provider_binding_t *provider_binding;
   turbo_flow_resource_binding_t *resource_binding;
   turbo_flow_runtime_owner owner;
@@ -205,7 +207,7 @@ static int output(turbo_flow_msg_t *message, void *ctx) {
 
 static int resolve_provider(
     void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   resolver_fixture_t *fixture = (resolver_fixture_t *)ctx;
   if (!fixture || !out || out->size != sizeof(*out))
@@ -222,8 +224,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "turbo-flow.chttp";
-  out->registry = fixture->registry;
-  out->plugin = fixture->provider;
+  out->component_identity = "AdapterProviderFixture";
   return SALTS_OK;
 }
 
@@ -354,6 +355,7 @@ static void acceptance_cleanup(void) {
     CHttpWebSocketServerConfig_clear(&acceptance.typed.websocket);
   }
   acceptance.typed_kind = 0u;
+  check_equal(adapter_component_close(&acceptance.component), SALTS_OK);
 
   if (acceptance.registry_initialized) {
     bool quiescent = false;
@@ -439,8 +441,8 @@ static int acquire_instance_bindings(
     turbo_flow_provider_contract_v1_t *contract,
     turbo_flow_provider_resource_view_v1_t *resource_view,
     turbo_flow_config_error_t *error) {
-  turbo_flow_provider_resolver_v1_t provider_resolver =
-      TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+  turbo_flow_provider_resolver_v2_t provider_resolver =
+      TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   turbo_flow_resource_resolver_v1_t resource_resolver =
       TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
   int rc;
@@ -450,8 +452,11 @@ static int acquire_instance_bindings(
   resource_resolver.ctx = &acceptance.resolver;
   resource_resolver.resolve = resolve_resource;
 
+  rc = adapter_component_open(&acceptance.component,
+      &acceptance.registry, acceptance.provider_ref, provider_identity);
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_provider_binding_acquire(
-      &provider_resolver, provider_identity,
+      &acceptance.component.component.scope, &provider_resolver, provider_identity,
       &acceptance.provider_binding, error);
   if (rc != SALTS_OK) return rc;
 
