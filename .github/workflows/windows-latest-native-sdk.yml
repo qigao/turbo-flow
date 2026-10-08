@@ -93,7 +93,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          foreach ($name in @("SALTS_ROOT", "SALTS_UTILS_ROOT", "CHTTP_ROOT", "RULES_FORGE_ROOT")) {
+          foreach ($name in @("SALTS_ROOT", "SALTS_UTILS_ROOT", "HTTP_SERVICES_ROOT", "RULES_FORGE_ROOT")) {
             $root = [Environment]::GetEnvironmentVariable($name)
             if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) {
               throw "native SDK root is unavailable: $name"
@@ -151,7 +151,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
-          set "PATH=%TURBO_FLOW_ROOT%\bin;%CHTTP_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%PATH%"
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%PATH%"
           cmake -S tests\install_windows_native_consumer -B build\windows-native-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
           if errorlevel 1 exit /b 1
           cmake --build build\windows-native-consumer --parallel 2
