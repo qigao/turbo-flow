@@ -145,12 +145,17 @@ Reactive execution is demand-driven and bounded. Waiting resumes only through a 
 
 The build resolves exact published producer SDKs from explicit installed roots and fails if required roots are absent or resolve outside those roots.
 
-Current published dependency baseline is:
+Observed latest published stable SDK baseline (**2026-10-08**, not a permanent pin):
 
-- **Salts.Native 1.8.3**
-- **SaltsUtils.Native 4.1.3** (including DataBind)
-- **RulesForge.Native 0.9.0** when the RulesForge plugin/provider is enabled
-- **TurboDB.Native 1.0.0** when the TurboDB adapter is enabled
+- **Salts.Native 2.1.2** — Salts 2.1 CMeta, CFlow, CNet.
+- **SaltsUtils.Native 4.2.1** — DataBind 3 / **ABI 10**, native IDL generator and CMeta-based generated binding semantics. Unix host `salts-idlc` must be executable.
+- **CHttp.Native 2.0.0** — separately installed HTTP/WebSocket SDK. Its CMeta Plugin ABI is not compatible with legacy `salts_plugin_*` providers; TurboFlow migration/qualification is tracked by [#279](https://github.com/qigao/turbo-flow/issues/279).
+- **RulesForge.Native** — restored from the latest published stable package when enabled.
+- **TurboDB.Native** — restored from the latest published stable package when enabled.
+
+`cmake/ci/restore-native-sdks.ps1` intentionally uses **latest published stable** NuGet versions, not consumer-side fixed version pins (see [#226](https://github.com/qigao/turbo-flow/issues/226)). Each CI run records the *exact resolved* package versions, RID and source SHA for reproducible qualification. A version being released upstream does **not** itself mean TurboFlow `master` has passed the corresponding installed-package tests.
+
+The separate Salts Component Runtime integration branch uses an **exact attested candidate SDK** and is tracked by [#278](https://github.com/qigao/turbo-flow/issues/278); that candidate is not an implicit fallback or a replacement for latest-stable production qualification.
 
 Required roots for the base build are:
 
@@ -173,7 +178,7 @@ When the TurboDB adapter is enabled:
 TURBODB_ROOT
 ```
 
-The CHTTP adapter is validated through the repository's package contract helper.
+The CHTTP adapter consumes `CHttp.Native` through `HTTP_SERVICES_ROOT` and validates the installed `CHttp::Client` / `CHttp::Server` targets; no Salts-bundled HTTP fallback is allowed.
 
 TurboFlow does not search unrelated profiles as a hidden fallback.
 
