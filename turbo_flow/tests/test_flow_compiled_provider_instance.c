@@ -1,5 +1,6 @@
 #include "flow_provider_instance_internal.h"
 #include "salts_resource_fixture.h"
+#include "component_scope_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 #include "turbo_flow_provider.h"
@@ -47,8 +48,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "test.turboflow.provider";
-  out->registry = fixture->registry;
-  out->plugin = fixture->plugin;
+  out->component_identity = "TurboFlowFixtureProvider";
   return SALTS_OK;
 }
 
@@ -101,6 +101,7 @@ spec("compiled provider instance") {
         "  concurrency 2\n"
         "}\n";
     cmeta_plugin_registry registry = {0};
+    component_fixture_t component = {0};
     cmeta_plugin_registry_config registry_config = {2u};
     cmeta_plugin_ref provider_ref = {0};
     cmeta_plugin_ref resource_ref = {0};
@@ -136,6 +137,7 @@ spec("compiled provider instance") {
     check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
                 CMETA_PLUGIN_OK);
 
+    check_equal(component_fixture_open(&component, &registry, provider_ref), SALTS_OK);
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
     provider_resolver.ctx = &provider_fixture;
@@ -147,7 +149,7 @@ spec("compiled provider instance") {
 
     check_equal(
         flow_compiled_provider_instance_prepare(
-            flow, (size_t)stage_index, &provider_resolver,
+            flow, (size_t)stage_index, &component.scope, &provider_resolver,
             &resource_resolver, &compiled, &error),
         SALTS_OK);
     check_not_null(compiled);
@@ -228,6 +230,7 @@ spec("compiled provider instance") {
         flow_compiled_provider_instance_release(&compiled),
         SALTS_OK);
     check_null(compiled);
+    check_equal(component_fixture_close(&component), SALTS_OK);
 
     check_equal(
         cmeta_plugin_registry_poll_quiescent(
@@ -258,6 +261,7 @@ spec("compiled provider instance") {
         "  concurrency 2\n"
         "}\n";
     cmeta_plugin_registry registry = {0};
+    component_fixture_t component = {0};
     cmeta_plugin_registry_config registry_config = {1u};
     cmeta_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
@@ -284,6 +288,7 @@ spec("compiled provider instance") {
     check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
                 CMETA_PLUGIN_OK);
 
+    check_equal(component_fixture_open(&component, &registry, provider_ref), SALTS_OK);
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
     provider_resolver.ctx = &provider_fixture;
@@ -293,7 +298,7 @@ spec("compiled provider instance") {
 
     check_equal(
         flow_compiled_provider_instance_prepare(
-            flow, (size_t)stage_index, &provider_resolver,
+            flow, (size_t)stage_index, &component.scope, &provider_resolver,
             &resource_resolver, &compiled, &error),
         SALTS_EPROTO);
     check_null(compiled);
@@ -301,6 +306,7 @@ spec("compiled provider instance") {
     check_equal(resource_fixture.calls, 0u);
     check_contains(error.path, "batch");
 
+    check_equal(component_fixture_close(&component), SALTS_OK);
     stop_and_unload(&registry, provider_ref);
     check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
     turbo_flow_destroy(flow);
@@ -313,6 +319,7 @@ spec("compiled provider instance") {
         "  concurrency 2\n"
         "}\n";
     cmeta_plugin_registry registry = {0};
+    component_fixture_t component = {0};
     cmeta_plugin_registry_config registry_config = {1u};
     cmeta_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
@@ -336,6 +343,7 @@ spec("compiled provider instance") {
     check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
                 CMETA_PLUGIN_OK);
 
+    check_equal(component_fixture_open(&component, &registry, provider_ref), SALTS_OK);
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
     provider_resolver.ctx = &provider_fixture;
@@ -343,12 +351,13 @@ spec("compiled provider instance") {
 
     check_equal(
         flow_compiled_provider_instance_prepare(
-            flow, (size_t)stage_index, &provider_resolver,
+            flow, (size_t)stage_index, &component.scope, &provider_resolver,
             NULL, &compiled, &error),
         SALTS_EPROTO);
     check_null(compiled);
     check_contains(error.message, "resource");
 
+    check_equal(component_fixture_close(&component), SALTS_OK);
     stop_and_unload(&registry, provider_ref);
     check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
     turbo_flow_destroy(flow);

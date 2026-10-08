@@ -1,6 +1,7 @@
 #include "tinytest.h"
 #include "turbo_flow_provider.h"
 #include "salts_resource_fixture.h"
+#include "component_scope_fixture.h"
 #include "provider_config_native.h"
 
 #include <salts/plugin.h>
@@ -12,17 +13,17 @@
 #error "FLOW_SALTS_RESOURCE_FIXTURE is required"
 #endif
 
-spec("Salts Plugin provider/resource binding") {
-  it("binds exact provider and resource Interfaces under independent leases") {
+spec("Component provider and Plugin resource binding") {
+  it("binds exact provider and resource Interfaces with independent retirement") {
     cmeta_plugin_registry registry = {0};
     cmeta_plugin_registry_config registry_config = {2u};
     cmeta_plugin_ref provider_ref = {0};
     cmeta_plugin_ref resource_ref = {0};
-    cmeta_plugin_lease provider_lease = {0};
+    component_fixture_t component = {0};
+    salts_component_service service = {0};
+    turbo_flow_provider_factory projected_factory = {0};
     cmeta_plugin_lease resource_lease = {0};
-    const cmeta_plugin_manifest *provider_manifest = NULL;
     const cmeta_plugin_manifest *resource_manifest = NULL;
-    const cmeta_plugin_export *provider_entry = NULL;
     const cmeta_plugin_export *resource_entry = NULL;
     turbo_flow_provider_factory *factory;
     turbo_flow_provider_contract_v1_t contract =
@@ -57,29 +58,19 @@ spec("Salts Plugin provider/resource binding") {
     check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
                 CMETA_PLUGIN_OK);
 
-    check_equal(cmeta_plugin_registry_acquire(
-                    &registry, provider_ref, &provider_lease,
-                    &provider_manifest),
-                CMETA_PLUGIN_OK);
+    check_equal(component_fixture_open(&component, &registry, provider_ref), SALTS_OK);
     check_equal(cmeta_plugin_registry_acquire(
                     &registry, resource_ref, &resource_lease,
                     &resource_manifest),
                 CMETA_PLUGIN_OK);
-    check_true(cmeta_plugin_lease_valid(provider_lease));
     check_true(cmeta_plugin_lease_valid(resource_lease));
 
-    check_equal(cmeta_plugin_manifest_find_export(
-                    provider_manifest, "fixture.provider", &provider_entry),
-                CMETA_PLUGIN_OK);
-    check_equal(
-        cmeta_plugin_export_require_interface(
-            provider_entry, TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
-            TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION, 0u,
-            turbo_flow_provider_factory_interface()),
-        CMETA_PLUGIN_OK);
-
-    factory =
-        (turbo_flow_provider_factory *)provider_entry->value.interface.value;
+    check_equal(salts_component_plugin_scope_find_service_from(&component.scope,
+        "TurboFlowFixtureProvider", turbo_flow_provider_factory_interface(), &service),
+        SALTS_COMPONENT_PLUGIN_OK);
+    check_equal(turbo_flow_provider_factory_borrow_from_object(service.object,
+        service.interfaces, &projected_factory), CMETA_OK);
+    factory = &projected_factory;
     check_not_null(factory);
     check_true(turbo_flow_provider_factory_valid(factory));
     check_equal(turbo_flow_provider_factory_contract(factory, &contract),
@@ -151,8 +142,8 @@ spec("Salts Plugin provider/resource binding") {
     check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
                 CMETA_PLUGIN_BUSY);
 
-    check_equal(cmeta_plugin_registry_release(&registry, &provider_lease),
-                CMETA_PLUGIN_OK);
+    BatchConfig_clear(&config);
+    check_equal(component_fixture_close(&component), SALTS_OK);
     check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, provider_ref, &provider_quiescent),
                 CMETA_PLUGIN_OK);
@@ -178,7 +169,6 @@ spec("Salts Plugin provider/resource binding") {
                 CMETA_PLUGIN_OK);
 
     check_equal(cmeta_plugin_registry_count(&registry), (size_t)0u);
-    BatchConfig_clear(&config);
     check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 }
