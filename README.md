@@ -150,7 +150,7 @@ Observed latest published stable SDK baseline (**2026-10-08**, not a permanent p
 - **Salts.Native 2.2.0** — Salts 2.2 CMeta, CFlow, CNet and optional CNetManager.
 - **SaltsUtils.Native 4.2.1** — DataBind 3 / **ABI 10**, native IDL generator and CMeta-based generated binding semantics. Unix host `salts-idlc` must be executable.
 - **CHttp.Native 2.0.0** — separately installed HTTP/WebSocket SDK. Its CMeta Plugin ABI is not compatible with legacy `salts_plugin_*` providers; TurboFlow migration/qualification is tracked by [#279](https://github.com/qigao/turbo-flow/issues/279).
-- **RulesForge.Native** — restored from the latest published stable package when enabled.
+- **RulesForge.Native 0.9.2** — the published ABI-10-compatible provider SDK, independently restored as latest stable when enabled. [Release](https://github.com/qigao/RulesForge/releases/tag/v0.9.2).
 - **TurboDB.Native** — restored from the latest published stable package when enabled.
 
 `cmake/ci/restore-native-sdks.ps1` intentionally uses **latest published stable** NuGet versions, not consumer-side fixed version pins (see [#226](https://github.com/qigao/turbo-flow/issues/226)). Each CI run records the *exact resolved* package versions, RID and source SHA for reproducible qualification. A version being released upstream does **not** itself mean TurboFlow `master` has passed the corresponding installed-package tests.
