@@ -1,8 +1,8 @@
 #include "turbo_flow_schedule.h"
 
 #include "../../tests/flow_operation_fixture.h"
-#include "salts_error.h"
-#include "salts_thread.h"
+#include "cmeta_error.h"
+#include "cmeta_thread.h"
 #include "tinytest.h"
 
 #include <stdatomic.h>
@@ -44,7 +44,7 @@ static int schedule_capture_stage(turbo_flow_msg_t *msg, void *ctx) {
   if (msg->payload.len > 0) memcpy(capture->payload, msg->payload.data, msg->payload.len);
   capture->payload_len = msg->payload.len;
   capture->last_ts_ns = msg->ts_ns;
-  if (capture->callback_delay_ms > 0) salts_sleep_ms(capture->callback_delay_ms);
+  if (capture->callback_delay_ms > 0) cmeta_sleep_ms(capture->callback_delay_ms);
   atomic_fetch_add_explicit(&capture->called, 1, memory_order_release);
   cmeta_mutex_lock(&capture->wait_mutex);
   cmeta_cond_broadcast(&capture->called_cond);
@@ -78,10 +78,10 @@ static int schedule_capture_called(const schedule_capture_t *capture) {
 }
 
 static int schedule_wait_called(schedule_capture_t *capture, int expected) {
-  const uint64_t started_at = salts_hrtime();
+  const uint64_t started_at = cmeta_hrtime();
   cmeta_mutex_lock(&capture->wait_mutex);
   while (schedule_capture_called(capture) < expected) {
-    const uint64_t elapsed = salts_hrtime() - started_at;
+    const uint64_t elapsed = cmeta_hrtime() - started_at;
     if (elapsed >= SCHEDULE_TEST_WAIT_TIMEOUT_NS ||
         cmeta_cond_timedwait(&capture->called_cond, &capture->wait_mutex,
                              SCHEDULE_TEST_WAIT_TIMEOUT_NS - elapsed) != 0) {
@@ -143,11 +143,11 @@ static void schedule_lifecycle_gate_stop(void *ctx, turbo_flow_t *flow,
 
 static int schedule_lifecycle_gate_wait_entered(schedule_lifecycle_gate_t *gate,
                                                 unsigned expected) {
-  const uint64_t started_at = salts_hrtime();
+  const uint64_t started_at = cmeta_hrtime();
   int entered;
   cmeta_mutex_lock(&gate->mutex);
   while (gate->entered < expected) {
-    const uint64_t elapsed = salts_hrtime() - started_at;
+    const uint64_t elapsed = cmeta_hrtime() - started_at;
     if (elapsed >= SCHEDULE_TEST_WAIT_TIMEOUT_NS ||
         cmeta_cond_timedwait(&gate->cond, &gate->mutex,
                              SCHEDULE_TEST_WAIT_TIMEOUT_NS - elapsed) != 0) {
@@ -401,7 +401,7 @@ spec("turbo_flow_schedule") {
     flow = schedule_make_flow(&config, &capture, &schedule);
     check_not_null(flow);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    salts_sleep_ms(20);
+    cmeta_sleep_ms(20);
     check_equal(schedule_capture_called(&capture), 0);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(schedule_capture_called(&capture), 0);

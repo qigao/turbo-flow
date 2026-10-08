@@ -120,7 +120,7 @@ static int domain_slow_inline_stage(turbo_flow_msg_t *message, void *ctx) {
   deadline_probe_t *probe = (deadline_probe_t *)ctx;
   (void)message;
   probe->called += 1;
-  salts_sleep_ms(15u);
+  cmeta_sleep_ms(15u);
   probe->terminal_status = SALTS_OK;
   return SALTS_OK;
 }
@@ -2144,13 +2144,13 @@ suite("Turbo Flow Domain Contracts") {
               cmeta_thread_yield();
           }
         }
-        wait_deadline = salts_hrtime() + UINT64_C(1000000000);
+        wait_deadline = cmeta_hrtime() + UINT64_C(1000000000);
         do {
           snapshot_status = turbo_flow_pool_snapshot_at(flow, 0u, &snapshot);
           if (snapshot_status != SALTS_OK) break;
           if (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED) cmeta_thread_yield();
         } while (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED &&
-                 salts_hrtime() < wait_deadline);
+                 cmeta_hrtime() < wait_deadline);
         check_equal(snapshot_status, SALTS_OK);
         check_equal(snapshot.queued, DOMAIN_ADMISSION_EXPECTED_QUEUED);
 

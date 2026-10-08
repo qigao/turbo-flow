@@ -805,7 +805,7 @@ spec("Flow managed Source registration") {
     for (size_t attempt = 0u;
          attempt < 2000u && atomic_load_explicit(&fixture.sink_entered, memory_order_acquire) == 0;
          ++attempt) {
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&fixture.publisher_emits, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&fixture.sink_entered, memory_order_acquire), 1);
@@ -818,7 +818,7 @@ spec("Flow managed Source registration") {
       admission = flow->admission_state;
       cmeta_mutex_unlock(&flow->runtime_mutex);
       if (admission == FLOW_ADMISSION_STOPPING) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(admission, FLOW_ADMISSION_STOPPING);
     check_equal(atomic_load_explicit(&stop_call.status, memory_order_acquire), INT_MIN);

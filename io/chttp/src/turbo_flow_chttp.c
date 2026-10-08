@@ -299,7 +299,7 @@ static void chttp_adapter_complete(void *user, chttp_request request,
   if (!slot || !(client = slot->owner)) return;
   status = error ? error->status : SALTS_OK;
   native_status = error ? error->native_status : 0;
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
 
   cmeta_mutex_lock(&client->mutex);
   if (!turbo_flow_async_emit_claim_message(&slot->claim)) {
@@ -394,7 +394,7 @@ static int chttp_adapter_submit_claim(void *ctx, turbo_flow_t *flow,
     free_slot->deadline_ms =
         client->overall_timeout_ms == 0u
             ? 0u
-            : chttp_adapter_deadline_after(salts_monotonic_ms(), client->overall_timeout_ms);
+            : chttp_adapter_deadline_after(cmeta_monotonic_ms(), client->overall_timeout_ms);
   }
   cmeta_mutex_unlock(&client->mutex);
   return status;
@@ -736,7 +736,7 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   }
   client->owner_active = 1;
   cmeta_mutex_unlock(&client->mutex);
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
   status = chttp_adapter_poll_cancellations(client, now);
   if (status != SALTS_OK) goto done;
   for (index = 0u; index < client->slot_count; ++index) {
@@ -746,7 +746,7 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   timeout_ms = chttp_adapter_poll_timeout(client, now, timeout_ms);
   status = chttp_async_client_poll(&client->http, timeout_ms, &completions);
   if (status != SALTS_OK) goto done;
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
   status = chttp_adapter_poll_cancellations(client, now);
   if (status != SALTS_OK) goto done;
   for (index = 0u; index < client->slot_count; ++index) {

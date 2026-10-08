@@ -357,7 +357,7 @@ static int chttp_server_adapter_gate(turbo_flow_msg_t *message, void *ctx) {
   if (!gate) return SALTS_EINVAL;
   (void)atomic_fetch_add_explicit(&gate->entered, 1u, memory_order_release);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   return SALTS_OK;
 }
 
@@ -1207,7 +1207,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
                 SALTS_OK);
     for (int wait = 0;
          wait < 2000 && !atomic_load_explicit(&completion.called, memory_order_acquire); ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ENOENT);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1486,7 +1486,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
       for (int wait = 0; wait < 5000; ++wait) {
         check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
         if (snapshot.admitted_requests >= index + 1u) break;
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check_equal(snapshot.admitted_requests, (uint64_t)(index + 1u));
     }
@@ -1774,7 +1774,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
                 SALTS_OK);
     for (int wait = 0;
          wait < 5000 && atomic_load_explicit(&gate.entered, memory_order_acquire) == 0u; ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), (size_t)1u);
 
     stop.flow = flow;
@@ -1783,7 +1783,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
     for (int wait = 0; wait < 5000; ++wait) {
       check_equal(turbo_flow_runtime_snapshot(flow, &runtime), SALTS_OK);
       if (!runtime.accepting_publishes) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(runtime.accepting_publishes, 0);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1860,7 +1860,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
                 SALTS_OK);
     for (int wait = 0;
          wait < 5000 && atomic_load_explicit(&sink.submissions, memory_order_acquire) == 0u; ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&sink.submissions, memory_order_acquire), (size_t)1u);
 
     stop.flow = flow;

@@ -465,7 +465,7 @@ spec("canonical bounded memory durable provider") {
             turbo_flow_plugin_generation_poll(
                 f.generation, 0u, &error),
             SALTS_OK);
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check_equal(atomic_load(&f.delivered), (size_t)1u);
     }
@@ -501,7 +501,7 @@ spec("canonical bounded memory durable provider") {
                 flow, "intake_store", 0u,
                 &history, 1u, &count),
             SALTS_OK);
-        if (count == 0u) salts_sleep_ms(1u);
+        if (count == 0u) cmeta_sleep_ms(1u);
       }
       check_equal(atomic_load(&f.delivered), (size_t)1u);
       check_equal(publish(flow), SALTS_ENOSPC);

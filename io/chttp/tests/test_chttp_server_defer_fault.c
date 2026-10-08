@@ -236,7 +236,7 @@ static int chttp_fault_wait_active(turbo_flow_chttp_server_t *server, size_t exp
     const int status = turbo_flow_chttp_server_snapshot(server, &snapshot);
     if (status != SALTS_OK) return status;
     if (snapshot.active_requests == expected) return SALTS_OK;
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
   return SALTS_ETIMEDOUT;
 }
@@ -286,13 +286,13 @@ spec("CHTTP managed deferred server fault boundaries") {
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&completion_entered, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&completion_entered, memory_order_acquire), 1);
     for (unsigned int elapsed = 0u;
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&client.completed, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&client.completed, memory_order_acquire), 1);
     check_equal(turbo_flow_chttp_server_snapshot(owner.server, &native), SALTS_OK);
     check_equal(native.active_requests, (size_t)1u);
@@ -386,7 +386,7 @@ spec("CHTTP managed deferred server fault boundaries") {
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&publish_entered, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&publish_entered, memory_order_acquire), 1);
     check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_EBUSY);
     atomic_store_explicit(&publish_allowed, 1, memory_order_release);
@@ -443,7 +443,7 @@ spec("CHTTP managed deferred server fault boundaries") {
       if (turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed) == SALTS_OK &&
           managed.in_flight == 1u)
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(managed.in_flight, (uint64_t)1u);
     check_equal(managed.completed, (uint64_t)0u);

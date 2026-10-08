@@ -463,7 +463,7 @@ spec("CHTTP WebSocket close admission failure") {
       if (mode == 1u) {
         for (unsigned int elapsed = 0u; elapsed < CLOSE_TEST_TIMEOUT_MS; ++elapsed) {
           if (atomic_load_explicit(&failure_finalization_entered, memory_order_acquire)) break;
-          salts_sleep_ms(1u);
+          cmeta_sleep_ms(1u);
         }
         check_equal(atomic_load_explicit(&failure_finalization_entered, memory_order_acquire), 1);
         managed =
@@ -483,7 +483,7 @@ spec("CHTTP WebSocket close admission failure") {
             turbo_flow_chttp_websocket_server_snapshot(server, &snapshot) == SALTS_OK &&
             snapshot.frames_rejected == 1u)
           break;
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check_equal(managed.in_flight, (uint64_t)0u);
       if (mode < 2u) {
@@ -579,7 +579,7 @@ spec("CHTTP WebSocket close admission failure") {
                 SALTS_OK);
     for (unsigned int elapsed = 0u; elapsed < CLOSE_TEST_TIMEOUT_MS; ++elapsed) {
       if (atomic_load_explicit(&allocation_entered, memory_order_acquire)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&allocation_entered, memory_order_acquire), 1);
     managed = (turbo_flow_managed_boundary_snapshot_t)TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
@@ -601,7 +601,7 @@ spec("CHTTP WebSocket close admission failure") {
       if (atomic_load_explicit(&publish_entered, memory_order_acquire) &&
           atomic_load_explicit(&completion_called, memory_order_acquire))
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&publish_entered, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&completion_called, memory_order_acquire), 1);
@@ -665,7 +665,7 @@ spec("CHTTP WebSocket close admission failure") {
     for (unsigned int elapsed = 0u; elapsed < CLOSE_TEST_TIMEOUT_MS; ++elapsed) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.frames_rejected != 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.frames_rejected, (uint64_t)1u);
     check_equal(atomic_load_explicit(&close_calls, memory_order_relaxed), 1u);

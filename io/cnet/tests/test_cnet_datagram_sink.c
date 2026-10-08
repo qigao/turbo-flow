@@ -308,9 +308,9 @@ spec("TurboFlow CNet datagram sink") {
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_datagram_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
@@ -377,12 +377,12 @@ spec("TurboFlow CNet datagram sink") {
     turbo_flow_msg_cleanup(&first_message);
     turbo_flow_msg_cleanup(&second_message);
 
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
-      if (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u) salts_sleep_ms(1u);
+      if (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u) cmeta_sleep_ms(1u);
     } while (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
     check_equal(snapshot.active_requests, (size_t)1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)0u);
@@ -471,9 +471,9 @@ spec("TurboFlow CNet datagram sink") {
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_datagram_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
     check_not_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
@@ -517,12 +517,12 @@ spec("TurboFlow CNet datagram sink") {
         turbo_flow_publish_async(flow, "input", &message, datagram_sink_complete, &completion),
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     do {
       snapshot_status = turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot);
       check_true(snapshot_status == SALTS_OK || snapshot_status == SALTS_EBUSY);
       if (snapshot_status == SALTS_EBUSY || snapshot.active_requests == 0u) cmeta_thread_yield();
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
 
     check_equal(cmeta_thread_create(&observer, datagram_sink_snapshot_race, &race), SALTS_OK);

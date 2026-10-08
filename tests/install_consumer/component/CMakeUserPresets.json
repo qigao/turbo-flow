@@ -4,6 +4,22 @@
     "../../../CMakeUserPresets.json"
   ],
   "configurePresets": [
+{
+  "name": "ci-component-installed-user",
+  "inherits": "ci-component-release-user",
+  "binaryDir": "${sourceDir}/build/component-installed",
+  "cacheVariables": {
+    "VCPKG_MANIFEST_DIR": "${sourceDir}/../../..",
+    "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+    "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+    "TURBO_FLOW_TEST_COMPONENT": "Graph"
+  },
+  "environment": {
+    "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+    "TURBO_FLOW_ROOT": "${sourceDir}/../../../stage/sdk/linux-x64",
+    "LD_LIBRARY_PATH": "$env{TURBO_FLOW_ROOT}/lib${pathListSep}$env{TURBO_FLOW_ROOT}/bin${pathListSep}$penv{LD_LIBRARY_PATH}"
+  }
+},
     {
       "name": "component-win-dev-base",
       "hidden": true,
@@ -898,6 +914,10 @@
     }
   ],
   "buildPresets": [
+{
+  "name": "ci-component-installed-user",
+  "configurePreset": "ci-component-installed-user"
+},
     {
       "name": "component-config-win-dev-user",
       "configurePreset": "component-config-win-dev-user"
@@ -996,6 +1016,16 @@
     }
   ],
   "testPresets": [
+{
+  "name": "ci-component-installed-user",
+  "configurePreset": "ci-component-installed-user",
+  "output": {
+    "outputOnFailure": true
+  },
+  "execution": {
+    "noTestsAction": "error"
+  }
+},
     {
       "name": "component-config-win-dev-user",
       "inherits": "base-test",

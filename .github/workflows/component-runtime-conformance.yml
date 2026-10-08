@@ -183,6 +183,21 @@ jobs:
           --no-tests=error --output-on-failure
           --output-junit build/component-runtime/component-results.xml
 
+      - name: Install the qualified consumer SDK
+        run: cmake --build --preset install-ci-component-release-user -j2
+
+      - name: Verify the installed SDK consumer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        working-directory: tests/install_consumer/component
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-installed-user
+          cmake --build --preset ci-component-installed-user -j2
+          ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
+
       - name: Record acceptance identities
         if: always()
         shell: bash
@@ -202,4 +217,5 @@ jobs:
           path: |
             build/component-runtime/acceptance.txt
             build/component-runtime/component-results.xml
+            build/component-runtime/installed-results.xml
             build/component-runtime/Testing/Temporary/LastTest.log

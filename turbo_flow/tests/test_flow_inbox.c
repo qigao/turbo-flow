@@ -1,8 +1,8 @@
 #include "tinytest.h"
 #include "turbo_flow_inbox.h"
 
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <cmeta_error.h>
+#include <cmeta_thread.h>
 
 #include <stdint.h>
 #include <string.h>

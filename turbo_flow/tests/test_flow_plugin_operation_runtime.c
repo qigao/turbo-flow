@@ -829,8 +829,8 @@ spec("ABI3 generation operation runtime") {
       cmeta_mutex_unlock(&t.observer->mutex);
       check_equal(cmeta_thread_create(&thread, runtime_worker, &worker), 0);
       cmeta_mutex_lock(&t.observer->mutex);
-      uint64_t barrier_deadline = salts_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
-      while (!t.observer->entered && salts_monotonic_ms() < barrier_deadline)
+      uint64_t barrier_deadline = cmeta_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
+      while (!t.observer->entered && cmeta_monotonic_ms() < barrier_deadline)
         cmeta_cond_timedwait(&t.observer->cond, &t.observer->mutex, UINT64_C(1000000));
       int entered = t.observer->entered;
       cmeta_mutex_unlock(&t.observer->mutex);
@@ -852,7 +852,7 @@ spec("ABI3 generation operation runtime") {
         turbo_flow_plugin_operation_error_v3_init(&recent);
         second_create = cmeta_thread_create(&second_thread, runtime_worker, &second);
         second_started = second_create == 0;
-        uint64_t deadline = salts_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
+        uint64_t deadline = cmeta_monotonic_ms() + RUNTIME_BARRIER_TIMEOUT_MS;
         do {
           int query_rc = turbo_flow_plugin_generation_operation_error(t.generation, 0, &recent);
           if (query_rc != SALTS_OK) {
@@ -860,8 +860,8 @@ spec("ABI3 generation operation runtime") {
             break;
           }
           admission_status = recent.status;
-          if (admission_status == SALTS_OK) salts_sleep_ms(1u);
-        } while (second_started && admission_status == SALTS_OK && salts_monotonic_ms() < deadline);
+          if (admission_status == SALTS_OK) cmeta_sleep_ms(1u);
+        } while (second_started && admission_status == SALTS_OK && cmeta_monotonic_ms() < deadline);
         generation_destroy = turbo_flow_plugin_generation_destroy(t.generation, 0, &t.error);
         session_releases = atomic_load(&t.observer->session_releases);
       }
