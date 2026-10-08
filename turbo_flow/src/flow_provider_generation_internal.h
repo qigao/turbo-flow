@@ -1,6 +1,7 @@
 #ifndef FLOW_PROVIDER_GENERATION_INTERNAL_H
 #define FLOW_PROVIDER_GENERATION_INTERNAL_H
 
+#include "flow_dll_boundary_internal.h"
 #include "flow_provider_instance_internal.h"
 
 #include "turbo_flow_provider_binding.h"
@@ -29,7 +30,7 @@ typedef struct flow_provider_generation_s flow_provider_generation_t;
  * Success retains provider/resource Salts Plugin leases and typed config for all
  * roots. No provider materialize callback has run yet.
  */
-int flow_provider_generation_prepare(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_prepare(
     turbo_flow_t *flow,
     const turbo_flow_provider_resolver_v1_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
@@ -38,31 +39,31 @@ int flow_provider_generation_prepare(
     turbo_flow_config_error_t *error);
 
 /** Materialize all prepared roots in deterministic Graph stage order. */
-int flow_provider_generation_materialize(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_materialize(
     flow_provider_generation_t *generation,
     turbo_flow_t *flow,
     turbo_flow_config_error_t *error);
 
 /** Number of provider materialization roots retained by this generation. */
-size_t flow_provider_generation_count(
+TURBO_FLOW_PRODUCT_INTERNAL_API size_t flow_provider_generation_count(
     const flow_provider_generation_t *generation);
 
 /** One bounded external-poll round over materialized owners. */
-int flow_provider_generation_poll(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_poll(
     flow_provider_generation_t *generation,
     uint32_t timeout_ms,
     turbo_flow_config_error_t *error);
 
 /** Retryable reverse-order lifecycle transitions. */
-int flow_provider_generation_quiesce(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_quiesce(
     flow_provider_generation_t *generation,
     uint64_t timeout_ms,
     turbo_flow_config_error_t *error);
-int flow_provider_generation_drain(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_drain(
     flow_provider_generation_t *generation,
     uint64_t timeout_ms,
     turbo_flow_config_error_t *error);
-int flow_provider_generation_shutdown(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_shutdown(
     flow_provider_generation_t *generation,
     turbo_flow_config_error_t *error);
 
@@ -71,7 +72,7 @@ int flow_provider_generation_shutdown(
  *
  * Provider/resource leases and typed config remain retained until this succeeds.
  */
-int flow_provider_generation_owner_destroy(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_owner_destroy(
     flow_provider_generation_t *generation,
     turbo_flow_config_error_t *error);
 
@@ -81,7 +82,7 @@ int flow_provider_generation_owner_destroy(
  * Materialized owners must already have been destroyed. On release failure the
  * generation remains live for explicit retry.
  */
-int flow_provider_generation_release(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_generation_release(
     flow_provider_generation_t **generation_io,
     turbo_flow_config_error_t *error);
 

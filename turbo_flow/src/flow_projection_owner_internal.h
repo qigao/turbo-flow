@@ -1,5 +1,6 @@
 #ifndef FLOW_PROJECTION_OWNER_INTERNAL_H
 #define FLOW_PROJECTION_OWNER_INTERNAL_H
+#include "flow_dll_boundary_internal.h"
 #include "turbo_flow_projection.h"
 #include "turbo_flow_durable_buffer.h"
 
@@ -52,9 +53,9 @@ struct turbo_flow_result_claim_s {
 };
 
 int flow_msg_mark_durable_claim(turbo_flow_msg_t *msg);
-int flow_msg_has_durable_claim(const turbo_flow_msg_t *msg);
-int flow_projection_owner_reserve(turbo_flow_projection_owner_t *owner);
-void flow_projection_owner_release(turbo_flow_projection_owner_t *owner);
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_msg_has_durable_claim(const turbo_flow_msg_t *msg);
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_projection_owner_reserve(turbo_flow_projection_owner_t *owner);
+TURBO_FLOW_GRAPH_INTERNAL_API void flow_projection_owner_release(turbo_flow_projection_owner_t *owner);
 const turbo_flow_projection_owner_config_t *
 flow_projection_owner_config(const turbo_flow_projection_owner_t *owner);
 #endif

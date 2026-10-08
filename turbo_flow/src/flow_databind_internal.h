@@ -66,22 +66,6 @@ typedef struct flow_databind_service_plan_s {
   } method;
 } flow_databind_service_plan_t;
 
-/*
- * Graph owns this binding implementation; Product only consumes it.
- * The public TURBO_FLOW_BUILD macro is shared by multiple DLL targets and
- * must not be used to decide the ownership of this particular entry point.
- */
-#if defined(_WIN32)
-  #if defined(turbo_flow_graph_EXPORTS)
-    #define TURBO_FLOW_GRAPH_INTERNAL_API __declspec(dllexport)
-  #else
-    #define TURBO_FLOW_GRAPH_INTERNAL_API __declspec(dllimport)
-  #endif
-#elif defined(__GNUC__) && __GNUC__ >= 4
-  #define TURBO_FLOW_GRAPH_INTERNAL_API __attribute__((visibility("default")))
-#else
-  #define TURBO_FLOW_GRAPH_INTERNAL_API
-#endif
 
 TURBO_FLOW_GRAPH_INTERNAL_API int flow_databind_service_bind(
     turbo_flow_t *flow, const char *stage_name,

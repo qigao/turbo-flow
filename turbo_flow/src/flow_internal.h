@@ -1,6 +1,7 @@
 #ifndef TURBO_FLOW_INTERNAL_H
 #define TURBO_FLOW_INTERNAL_H
 
+#include "flow_dll_boundary_internal.h"
 #include "turbo_flow.h"
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_expr.h"
@@ -837,7 +838,7 @@ struct turbo_flow_s {
 
 int flow_set_error(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
                    const char *message);
-int flow_set_error_keep_state(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_set_error_keep_state(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
                               const char *message);
 void flow_clear_error(turbo_flow_t *flow);
 void flow_publish_error_context_begin(turbo_flow_t *flow);
@@ -913,11 +914,11 @@ void flow_module_registration_destroy(flow_module_registration_t *module);
 void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge);
 int flow_msg_set_failure(turbo_flow_msg_t *msg, const char *stage_name, const char *adapter_name,
                          const char *route_name, int code, uint32_t attempt);
-int flow_msg_payload_validate(const turbo_flow_msg_t *msg);
-int flow_msg_bind_reserved_typed_projection(turbo_flow_msg_t *msg,
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_msg_payload_validate(const turbo_flow_msg_t *msg);
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_msg_bind_reserved_typed_projection(turbo_flow_msg_t *msg,
                                             turbo_flow_projection_owner_t *owner,
                                             const cmeta_data_desc *data, void *value);
-int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg);
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_msg_has_active_result_claim(const turbo_flow_msg_t *msg);
 int flow_msg_transport_context_is_borrowed(const turbo_flow_msg_t *msg);
 void flow_clear_runtime_plan(turbo_flow_t *flow);
 int flow_compiled_plan_init(flow_compiled_plan_t *plan);
