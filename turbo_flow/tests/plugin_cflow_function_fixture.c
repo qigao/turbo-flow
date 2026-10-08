@@ -18,7 +18,7 @@ int plugin_cflow_double(int value) {
   return value * 2;
 }
 
-static bool SALTS_PLUGIN_CALL plugin_cflow_double_invoke(
+static bool CMETA_PLUGIN_CALL plugin_cflow_double_invoke(
     void *context, void *return_storage, void *const *params,
     size_t param_count) {
   plugin_cflow_fixture_state_t *state =
@@ -32,34 +32,34 @@ static bool SALTS_PLUGIN_CALL plugin_cflow_double_invoke(
   return true;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL
+static cmeta_plugin_status CMETA_PLUGIN_CALL
 plugin_cflow_start(void *self) {
   plugin_cflow_fixture_state_t *state =
       (plugin_cflow_fixture_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   atomic_store(&state->stopping, false);
   atomic_store(&state->started, true);
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL
+static cmeta_plugin_status CMETA_PLUGIN_CALL
 plugin_cflow_request_stop(void *self) {
   plugin_cflow_fixture_state_t *state =
       (plugin_cflow_fixture_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   atomic_store(&state->stopping, true);
   atomic_store(&state->started, false);
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL
+static bool CMETA_PLUGIN_CALL
 plugin_cflow_is_quiescent(const void *self) {
   const plugin_cflow_fixture_state_t *state =
       (const plugin_cflow_fixture_state_t *)self;
   return state && atomic_load(&state->stopping);
 }
 
-static void SALTS_PLUGIN_CALL
+static void CMETA_PLUGIN_CALL
 plugin_cflow_destroy(void *self) {
   plugin_cflow_fixture_state_t *state =
       (plugin_cflow_fixture_state_t *)self;
@@ -68,13 +68,13 @@ plugin_cflow_destroy(void *self) {
   atomic_store(&state->stopping, true);
 }
 
-static salts_plugin_export fixture_export;
+static cmeta_plugin_export fixture_export;
 static salts_once_t fixture_once = SALTS_ONCE_INIT;
 
 static void plugin_cflow_init_export(void) {
-  fixture_export = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_FUNCTION,
+  fixture_export = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_FUNCTION,
       .contract_version = 1u,
       .capabilities = 1u,
       .export_id = "test.turboflow.cflow.double",
@@ -88,9 +88,9 @@ static void plugin_cflow_init_export(void) {
   };
 }
 
-static salts_plugin_manifest fixture_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_manifest fixture_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.turboflow.cflow.plugin",
     .version = {1u, 0u, 0u},
     .exports = &fixture_export,
@@ -102,10 +102,10 @@ static salts_plugin_manifest fixture_manifest = {
     .destroy = plugin_cflow_destroy,
 };
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
   salts_once(&fixture_once, plugin_cflow_init_export);
   return &fixture_manifest;
 }

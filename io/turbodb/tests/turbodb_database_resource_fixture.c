@@ -44,10 +44,10 @@ CMETA_IMPLEMENTS(
     .snapshot = resource_snapshot);
 
 static turbo_flow_turbodb_database_resource resource_handle;
-static salts_plugin_export resource_export;
-static salts_plugin_manifest resource_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_export resource_export;
+static cmeta_plugin_manifest resource_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.turboflow.turbodb.database",
     .version = {1u, 0u, 0u},
     .self = &resource_state,
@@ -65,9 +65,9 @@ static void resource_init(void) {
   resource_handle =
       database_resource_impl_as_turbo_flow_turbodb_database_resource(
           &resource_state);
-  resource_export = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  resource_export = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version =
           TURBO_FLOW_TURBODB_DATABASE_RESOURCE_CONTRACT_VERSION,
       .capabilities = TURBO_FLOW_TURBODB_DATABASE_RESOURCE_CONNECT,
@@ -82,19 +82,19 @@ static void resource_init(void) {
   resource_manifest.export_count = 1u;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL resource_start(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL resource_start(void *self) {
   database_resource_state_t *state = (database_resource_state_t *)self;
   orm_runtime_config_t runtime_config;
   orm_driver_load_config_t load = {0};
   orm_error_t error;
 
-  if (!state || state->runtime) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state || state->runtime) return CMETA_PLUGIN_INVALID_ARGUMENT;
 
   orm_runtime_config_init(&runtime_config);
   orm_error_init(&error);
   if (orm_runtime_create(&runtime_config, &state->runtime, &error) !=
       ORM_STATUS_OK)
-    return SALTS_PLUGIN_LOAD_FAILED;
+    return CMETA_PLUGIN_LOAD_FAILED;
 
   load.struct_size = (uint32_t)sizeof(load);
   load.abi_version = ORM_RUNTIME_ABI_VERSION;
@@ -105,23 +105,23 @@ static salts_plugin_status SALTS_PLUGIN_CALL resource_start(void *self) {
     (void)orm_runtime_close(state->runtime, &error);
     orm_runtime_release(state->runtime);
     state->runtime = NULL;
-    return SALTS_PLUGIN_LOAD_FAILED;
+    return CMETA_PLUGIN_LOAD_FAILED;
   }
 
   state->stopping = false;
   state->started = true;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL resource_request_stop(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL resource_request_stop(void *self) {
   database_resource_state_t *state = (database_resource_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = true;
   state->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL resource_is_quiescent(const void *self) {
+static bool CMETA_PLUGIN_CALL resource_is_quiescent(const void *self) {
   database_resource_state_t *state =
       (database_resource_state_t *)(uintptr_t)self;
   orm_error_t error;
@@ -138,17 +138,17 @@ static bool SALTS_PLUGIN_CALL resource_is_quiescent(const void *self) {
   return true;
 }
 
-static void SALTS_PLUGIN_CALL resource_destroy(void *self) {
+static void CMETA_PLUGIN_CALL resource_destroy(void *self) {
   database_resource_state_t *state = (database_resource_state_t *)self;
   if (!state) return;
   state->started = false;
   state->stopping = true;
 }
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
   salts_once(&resource_once, resource_init);
   resource_manifest.start = resource_start;
   resource_manifest.request_stop = resource_request_stop;

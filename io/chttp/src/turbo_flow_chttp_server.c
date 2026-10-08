@@ -100,7 +100,7 @@ struct turbo_flow_chttp_server_s {
   bool http_initialized;
   turbo_flow_chttp_server_slot_t *slots;
   size_t slot_count;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   turbo_flow_chttp_server_state_t state;
   uint16_t bound_port;
   uint64_t next_message_id;
@@ -297,7 +297,7 @@ static int chttp_server_adapter_reserve_slot(turbo_flow_chttp_server_t *server,
   int status = SALTS_ENOSPC;
   if (!server || !out_slot || !message_id) return SALTS_EINVAL;
   *out_slot = NULL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING) {
     status = SALTS_ESHUTDOWN;
   } else if (server->next_message_id != 0u) {
@@ -323,7 +323,7 @@ static int chttp_server_adapter_reserve_slot(turbo_flow_chttp_server_t *server,
   } else {
     status = SALTS_ERANGE;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out_slot = selected;
   return status;
 }
@@ -334,7 +334,7 @@ static void chttp_server_adapter_release_unadmitted(turbo_flow_chttp_server_slot
   turbo_flow_msg_t released;
   if (!slot || !(server = slot->owner)) return;
   turbo_flow_msg_init(&released);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (slot->occupied) {
     const bool managed_admitted = slot->managed_admitted;
     chttp_server_adapter_slot_reset(slot, &released);
@@ -343,7 +343,7 @@ static void chttp_server_adapter_release_unadmitted(turbo_flow_chttp_server_slot
     if (!managed_admitted) chttp_server_adapter_counter_increment(&server->managed_rejected);
     server->last_status = status;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   turbo_flow_msg_cleanup(&released);
 }
 
@@ -489,10 +489,10 @@ static bool chttp_server_adapter_prepare_reply(turbo_flow_chttp_server_slot_t *s
   if (!slot || !work || !(server = slot->owner)) return false;
   memset(work, 0, sizeof(*work));
   turbo_flow_msg_init(&work->response);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (!slot->occupied || !slot->publication_done || !slot->deferred_attached ||
       slot->reply_in_progress) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return false;
   }
   slot->reply_in_progress = true;
@@ -514,7 +514,7 @@ static bool chttp_server_adapter_prepare_reply(turbo_flow_chttp_server_slot_t *s
     work->body = server->graph_error_body;
     work->body_size = tstr_len(server->graph_error_body);
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return true;
 }
 
@@ -525,7 +525,7 @@ static void chttp_server_adapter_finish_reply(chttp_server_reply_work_t *work, i
   turbo_flow_msg_t released;
   if (!work || !(slot = work->slot) || !(server = slot->owner)) return;
   turbo_flow_msg_init(&released);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (slot->occupied && slot->generation == work->generation) {
     const bool reply_terminal =
         reply_status == SALTS_OK || reply_status == SALTS_ENOENT || reply_status == SALTS_EALREADY;
@@ -548,7 +548,7 @@ static void chttp_server_adapter_finish_reply(chttp_server_reply_work_t *work, i
       server->state = TURBO_FLOW_CHTTP_SERVER_FAILED;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   turbo_flow_msg_cleanup(&released);
   turbo_flow_msg_cleanup(&work->response);
 }
@@ -579,7 +579,7 @@ static void chttp_server_adapter_publication_complete(void *ctx,
   bool retire_without_deferred = false;
   if (!slot || !server) return;
   turbo_flow_msg_init(&released);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (slot->occupied) {
     slot->publication_status = result ? result->status : SALTS_EINVAL;
     slot->publication_done = true;
@@ -591,7 +591,7 @@ static void chttp_server_adapter_publication_complete(void *ctx,
       retire_without_deferred = true;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   turbo_flow_msg_cleanup(&released);
   if (!retire_without_deferred) chttp_server_adapter_execute_reply(slot);
 }
@@ -609,11 +609,11 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
   if (!server || !request || !response) return SALTS_EINVAL;
   status = chttp_server_adapter_reserve_slot(server, &slot, &message_id);
   if (status != SALTS_OK) {
-    salts_mutex_lock(&server->mutex);
+    cmeta_mutex_lock(&server->mutex);
     chttp_server_adapter_counter_increment(&server->rejected_requests);
     chttp_server_adapter_counter_increment(&server->managed_rejected);
     server->last_status = status;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return chttp_server_adapter_immediate(
         response, status == SALTS_ENOSPC ? server->overload_status : server->unavailable_status,
         server->error_content_type,
@@ -641,14 +641,14 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
                                                                  : "flow unavailable");
   }
   /* A successful publish owns the copied request before native defer admission is resolved. */
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (slot->occupied) {
     slot->managed_admitted = true;
     chttp_server_adapter_counter_increment(&server->managed_accepted);
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = chttp_server_response_defer(response, &deferred);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (slot->occupied) {
     if (status == SALTS_OK) {
       slot->deferred = deferred;
@@ -660,7 +660,7 @@ static int chttp_server_adapter_handler(void *user, const chttp_server_request_v
       release_completed_publication = slot->publication_done;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   if (status == SALTS_OK) chttp_server_adapter_execute_reply(slot);
   else if (release_completed_publication) chttp_server_adapter_release_unadmitted(slot, status);
   return status;
@@ -692,7 +692,7 @@ static int chttp_server_adapter_terminal_submit(void *ctx, turbo_flow_t *flow,
   status = turbo_flow_msg_clone(&response, message);
   if (status != SALTS_OK) return status;
   slot = &server->slots[storage->slot_index];
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (!slot->occupied || slot->generation != storage->slot_generation) {
     status = SALTS_ENOENT;
   } else if (slot->response_ready) {
@@ -704,14 +704,14 @@ static int chttp_server_adapter_terminal_submit(void *ctx, turbo_flow_t *flow,
       slot->response_ready = true;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   turbo_flow_msg_cleanup(&response);
   if (status != SALTS_OK) return status;
   status = turbo_flow_async_terminal_complete(&owned_claim, SALTS_OK, NULL);
   if (status != SALTS_OK) {
-    salts_mutex_lock(&server->mutex);
+    cmeta_mutex_lock(&server->mutex);
     server->last_status = status;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
   }
   return status;
 }
@@ -745,14 +745,14 @@ static int chttp_server_adapter_resource_metadata(void *ctx,
   turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   if (!server || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
   memcpy(metadata.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
   memcpy(metadata.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
   metadata.generation = server->managed_generation;
   metadata.observed_generation = server->managed_generation;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out = metadata;
   return SALTS_OK;
 }
@@ -767,12 +767,12 @@ static int chttp_server_adapter_managed_descriptor(
       out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   descriptor.kind = TURBO_FLOW_RESOURCE_CONNECTION;
   memcpy(descriptor.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
   memcpy(descriptor.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   descriptor.role_flags =
       TURBO_FLOW_MANAGED_BOUNDARY_SOURCE | TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   descriptor.command_flags = TURBO_FLOW_MANAGED_BOUNDARY_COMMAND_QUIESCE |
@@ -808,23 +808,23 @@ static int chttp_server_adapter_managed_snapshot(void *ctx,
       out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   for (index = 0u; index < server->slot_count; ++index) {
     const turbo_flow_chttp_server_slot_t *slot = &server->slots[index];
     if (!slot->occupied && slot->managed_admitted) {
-      salts_mutex_unlock(&server->mutex);
+      cmeta_mutex_unlock(&server->mutex);
       return SALTS_EPROTO;
     }
     if (!slot->occupied) continue;
     ++occupied;
     if (!slot->managed_admitted) {
-      salts_mutex_unlock(&server->mutex);
+      cmeta_mutex_unlock(&server->mutex);
       return SALTS_EBUSY;
     }
     ++in_flight;
   }
   if (occupied != server->active_requests || server->managed_completed > server->managed_accepted) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EPROTO;
   }
   memcpy(snapshot.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
@@ -838,7 +838,7 @@ static int chttp_server_adapter_managed_snapshot(void *ctx,
   snapshot.rejected = server->managed_rejected;
   snapshot.backpressured = occupied == server->slot_count;
   snapshot.last_status = server->last_status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out = snapshot;
   return SALTS_OK;
 }
@@ -859,7 +859,7 @@ static int chttp_server_adapter_resource_command(
   } else {
     return SALTS_ENOTSUP;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (command->expected_generation != server->managed_generation) {
     status = SALTS_EBUSY;
   } else if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING &&
@@ -874,7 +874,7 @@ static int chttp_server_adapter_resource_command(
     ++server->managed_generation;
     status = SALTS_OK;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return status;
 }
 
@@ -920,17 +920,17 @@ static int chttp_server_adapter_start(void *ctx, turbo_flow_t *flow,
   if (!server || flow != server->flow || !stage) return SALTS_EINVAL;
   if (!stage->is_source) return SALTS_OK;
   if (strcmp(stage->name, server->source_name) != 0) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_SERVER_REGISTERED &&
       server->state != TURBO_FLOW_CHTTP_SERVER_STOPPED) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EALREADY;
   }
   server->state = TURBO_FLOW_CHTTP_SERVER_STARTING;
   server->last_status = SALTS_OK;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = chttp_server_adapter_start_native(server, &bound_port);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   /* Native ownership survives a failed cleanup, including a failed start. */
   server->http_initialized = server->http.impl != NULL;
   server->bound_port = status == SALTS_OK ? bound_port : 0u;
@@ -938,7 +938,7 @@ static int chttp_server_adapter_start(void *ctx, turbo_flow_t *flow,
                   : server->http_initialized ? TURBO_FLOW_CHTTP_SERVER_FAILED
                                              : TURBO_FLOW_CHTTP_SERVER_STOPPED;
   server->last_status = status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return status;
 }
 
@@ -946,10 +946,10 @@ static int chttp_server_adapter_set_admission(turbo_flow_chttp_server_t *server,
                                               turbo_flow_chttp_server_state_t state) {
   int status = SALTS_OK;
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_SERVER_RUNNING &&
       server->state != TURBO_FLOW_CHTTP_SERVER_QUIESCED) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_ESHUTDOWN;
   }
   if (server->state != state) {
@@ -960,7 +960,7 @@ static int chttp_server_adapter_set_admission(turbo_flow_chttp_server_t *server,
       ++server->managed_generation;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return status;
 }
 
@@ -989,21 +989,21 @@ static void chttp_server_adapter_stop(void *ctx, turbo_flow_t *flow,
   turbo_flow_chttp_server_t *server = (turbo_flow_chttp_server_t *)ctx;
   int status;
   if (!server || !stage || !stage->is_source) return;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (!server->http_initialized) {
     if (server->state != TURBO_FLOW_CHTTP_SERVER_DETACHED)
       server->state = TURBO_FLOW_CHTTP_SERVER_STOPPED;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return;
   }
   server->state = TURBO_FLOW_CHTTP_SERVER_STOPPING;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = chttp_server_adapter_stop_native(server, server->stop_timeout_ms);
   if (status != SALTS_OK) {
     int report_status = turbo_flow_adapter_report_stop_status(flow, status);
     if (report_status != SALTS_OK) status = report_status;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (status == SALTS_OK) {
     server->http_initialized = false;
     server->bound_port = 0u;
@@ -1011,7 +1011,7 @@ static void chttp_server_adapter_stop(void *ctx, turbo_flow_t *flow,
   server->state =
       status == SALTS_OK ? TURBO_FLOW_CHTTP_SERVER_STOPPED : TURBO_FLOW_CHTTP_SERVER_FAILED;
   server->last_status = status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
 }
 
 static void chttp_server_adapter_shutdown(void *ctx) {
@@ -1019,12 +1019,12 @@ static void chttp_server_adapter_shutdown(void *ctx) {
   bool http_initialized;
   int status;
   if (!server) return;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   http_initialized = server->http_initialized;
   if (http_initialized) server->state = TURBO_FLOW_CHTTP_SERVER_STOPPING;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = http_initialized ? chttp_server_adapter_stop_native(server, 0u) : SALTS_OK;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->last_status = status;
   if (status == SALTS_OK) {
     server->http_initialized = false;
@@ -1034,7 +1034,7 @@ static void chttp_server_adapter_shutdown(void *ctx) {
   } else {
     server->state = TURBO_FLOW_CHTTP_SERVER_FAILED;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
 }
 
 static int chttp_server_adapter_config_valid(const turbo_flow_chttp_server_config_t *config) {
@@ -1110,7 +1110,7 @@ static int chttp_server_register_impl(
     return SALTS_EINVAL;
   server = (turbo_flow_chttp_server_t *)calloc(1u, sizeof(*server));
   if (!server) return SALTS_ENOMEM;
-  salts_mutex_init(&server->mutex);
+  cmeta_mutex_init(&server->mutex);
   server->flow = config->flow;
   server->config = *config->server;
   server->method = config->method;
@@ -1143,14 +1143,14 @@ static int chttp_server_register_impl(
       !server->response_content_type || !server->error_content_type || !server->graph_error_body ||
       !server->slots) {
     chttp_server_adapter_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return SALTS_ENOMEM;
   }
   status = chttp_server_adapter_managed_identity_init(server, server->adapter_name);
   if (status != SALTS_OK) {
     chttp_server_adapter_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return status;
   }
@@ -1202,7 +1202,7 @@ static int chttp_server_register_impl(
   }
   if (status != SALTS_OK) {
     chttp_server_adapter_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return status;
   }
@@ -1235,7 +1235,7 @@ int turbo_flow_chttp_server_snapshot(const turbo_flow_chttp_server_t *server,
       out_snapshot->version != TURBO_FLOW_CHTTP_SERVER_API_VERSION) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock((salts_mutex_t *)&server->mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&server->mutex);
   current.state = server->state;
   current.bound_port = server->bound_port;
   current.active_requests = server->active_requests;
@@ -1245,22 +1245,22 @@ int turbo_flow_chttp_server_snapshot(const turbo_flow_chttp_server_t *server,
   current.completed_requests = server->completed_requests;
   current.response_bytes = server->response_bytes;
   current.last_status = server->last_status;
-  salts_mutex_unlock((salts_mutex_t *)&server->mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&server->mutex);
   *out_snapshot = current;
   return SALTS_OK;
 }
 
 int turbo_flow_chttp_server_destroy(turbo_flow_chttp_server_t *server) {
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_SERVER_DETACHED || server->active_requests != 0u ||
       server->http_initialized) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EBUSY;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   chttp_server_adapter_cleanup(server);
-  salts_mutex_destroy(&server->mutex);
+  cmeta_mutex_destroy(&server->mutex);
   free(server);
   return SALTS_OK;
 }

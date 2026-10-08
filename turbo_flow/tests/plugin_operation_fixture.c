@@ -13,14 +13,14 @@ typedef struct operation_context_s {
   int releases;
 } operation_context_t;
 static void fixture_barrier(operation_fixture_t *f, int point) {
-  salts_mutex_lock(&f->mutex);
+  cmeta_mutex_lock(&f->mutex);
   if (f->barrier == point) {
     f->entered = 1;
-    salts_cond_broadcast(&f->cond);
+    cmeta_cond_broadcast(&f->cond);
     while (!f->proceed)
-      salts_cond_wait(&f->cond, &f->mutex);
+      cmeta_cond_wait(&f->cond, &f->mutex);
   }
-  salts_mutex_unlock(&f->mutex);
+  cmeta_mutex_unlock(&f->mutex);
 }
 static const turbo_flow_data_schema_t record_schema = {sizeof(turbo_flow_data_schema_t),
                                                        TURBO_FLOW_DOMAIN_DATA,
@@ -233,11 +233,11 @@ static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   operation_fixture_t *f = calloc(1, sizeof(*f));
   if (!f) return SALTS_ENOMEM;
   f->mode = FLOW_OPERATION_MODE;
-  salts_mutex_init(&f->mutex);
-  salts_cond_init(&f->cond);
+  cmeta_mutex_init(&f->mutex);
+  cmeta_cond_init(&f->cond);
   if (!f->mutex || !f->cond) {
-    if (f->mutex) salts_mutex_destroy(&f->mutex);
-    if (f->cond) salts_cond_destroy(&f->cond);
+    if (f->mutex) cmeta_mutex_destroy(&f->mutex);
+    if (f->cond) cmeta_cond_destroy(&f->cond);
     free(f);
     return SALTS_ENOMEM;
   }
@@ -398,8 +398,8 @@ static int fixture_shutdown(void *ctx) {
 }
 static void fixture_destroy(void *ctx) {
   operation_fixture_t *f = ctx;
-  salts_cond_destroy(&f->cond);
-  salts_mutex_destroy(&f->mutex);
+  cmeta_cond_destroy(&f->cond);
+  cmeta_mutex_destroy(&f->mutex);
   free(f);
 }
 static const turbo_flow_plugin_api_v1_t fixture_api = {

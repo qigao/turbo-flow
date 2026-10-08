@@ -53,8 +53,8 @@ struct turbo_flow_cnet_datagram_sink_s {
   bool executor_initialized;
   bool actor_initialized;
   atomic_bool detached;
-  salts_mutex_t lifecycle_mutex;
-  salts_cond_t lifecycle_cond;
+  cmeta_mutex_t lifecycle_mutex;
+  cmeta_cond_t lifecycle_cond;
   bool lifecycle_initialized;
   bool owner_active;
   bool starting;
@@ -75,11 +75,11 @@ static int datagram_sink_managed_identity_init(turbo_flow_cnet_datagram_sink_t *
 }
 
 static int datagram_sink_lifecycle_init(turbo_flow_cnet_datagram_sink_t *sink) {
-  salts_mutex_init(&sink->lifecycle_mutex);
+  cmeta_mutex_init(&sink->lifecycle_mutex);
   if (!sink->lifecycle_mutex) return SALTS_ENOMEM;
-  salts_cond_init(&sink->lifecycle_cond);
+  cmeta_cond_init(&sink->lifecycle_cond);
   if (!sink->lifecycle_cond) {
-    salts_mutex_destroy(&sink->lifecycle_mutex);
+    cmeta_mutex_destroy(&sink->lifecycle_mutex);
     return SALTS_ENOMEM;
   }
   sink->lifecycle_initialized = true;
@@ -88,8 +88,8 @@ static int datagram_sink_lifecycle_init(turbo_flow_cnet_datagram_sink_t *sink) {
 
 static void datagram_sink_lifecycle_destroy(turbo_flow_cnet_datagram_sink_t *sink) {
   if (!sink || !sink->lifecycle_initialized) return;
-  salts_cond_destroy(&sink->lifecycle_cond);
-  salts_mutex_destroy(&sink->lifecycle_mutex);
+  cmeta_cond_destroy(&sink->lifecycle_cond);
+  cmeta_mutex_destroy(&sink->lifecycle_mutex);
   sink->lifecycle_initialized = false;
 }
 
@@ -164,23 +164,23 @@ static int datagram_sink_managed_snapshot(void *ctx, turbo_flow_managed_boundary
   cflow_io_actor_stats stats = {0};
   size_t queue_depth;
   if (!sink || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (sink->submissions_active > 0u) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EBUSY;
   }
   stats.request_capacity = sink->config.send_capacity;
   if (sink->actor_initialized && !cflow_io_actor_get_stats(&sink->actor, &stats)) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EPROTO;
   }
   if (stats.admitted > SIZE_MAX - stats.ready) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EPROTO;
   }
   queue_depth = stats.admitted + stats.ready;
   if (queue_depth > stats.active_requests || stats.active_requests > stats.request_capacity) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EPROTO;
   }
   memcpy(snapshot.uid, sink->identity.uid, strlen(sink->identity.uid) + 1u);
@@ -195,39 +195,39 @@ static int datagram_sink_managed_snapshot(void *ctx, turbo_flow_managed_boundary
   snapshot.completed = atomic_load_explicit(&sink->completed, memory_order_relaxed);
   snapshot.rejected = atomic_load_explicit(&sink->rejected, memory_order_relaxed);
   if (snapshot.completed > snapshot.accepted) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EPROTO;
   }
   snapshot.backpressured = stats.active_requests >= stats.request_capacity;
   snapshot.last_status = atomic_load_explicit(&sink->status, memory_order_relaxed);
   *out = snapshot;
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   return SALTS_OK;
 }
 
 static int datagram_sink_reject(turbo_flow_cnet_datagram_sink_t *sink, int status) {
   if (sink) {
-    salts_mutex_lock(&sink->lifecycle_mutex);
+    cmeta_mutex_lock(&sink->lifecycle_mutex);
     turbo_flow_cnet_sink_counter_increment(&sink->rejected);
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
   }
   return status;
 }
 
 static void datagram_sink_submission_finish(turbo_flow_cnet_datagram_sink_t *sink, bool accepted) {
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   turbo_flow_cnet_sink_counter_increment(accepted ? &sink->accepted : &sink->rejected);
   --sink->submissions_active;
-  salts_cond_broadcast(&sink->lifecycle_cond);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_cond_broadcast(&sink->lifecycle_cond);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
 }
 
 static void datagram_sink_operation_complete(datagram_sink_operation_t *operation, int status) {
   if (!operation || !operation->claim._impl) return;
   if (turbo_flow_async_terminal_complete(&operation->claim, status, NULL) == SALTS_OK) {
-    salts_mutex_lock(&operation->sink->lifecycle_mutex);
+    cmeta_mutex_lock(&operation->sink->lifecycle_mutex);
     turbo_flow_cnet_sink_counter_increment(&operation->sink->completed);
-    salts_mutex_unlock(&operation->sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&operation->sink->lifecycle_mutex);
   }
 }
 
@@ -379,18 +379,18 @@ static int datagram_sink_start(void *ctx, turbo_flow_t *flow,
   int rc;
   (void)stage;
   if (!sink || flow != sink->flow) return SALTS_EINVAL;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (atomic_load_explicit(&sink->detached, memory_order_acquire) || sink->owner_active ||
       sink->submissions_active > 0u ||
       (datagram_sink_state(sink) != TURBO_FLOW_CNET_DATAGRAM_SINK_REGISTERED &&
        datagram_sink_state(sink) != TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED)) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EINVAL;
   }
   sink->owner_active = true;
   sink->starting = true;
   atomic_store_explicit(&sink->status, SALTS_OK, memory_order_relaxed);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   sink->config.host = sink->host;
   sink->config.observer.on_receive = datagram_sink_on_receive;
   sink->config.observer.on_send = datagram_sink_on_send;
@@ -417,21 +417,21 @@ static int datagram_sink_start(void *ctx, turbo_flow_t *flow,
   actor_config.wake_user = sink;
   rc = cflow_io_actor_init(&sink->actor, &actor_config);
   if (rc != SALTS_OK) goto fail;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   sink->actor_initialized = true;
   atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_RUNNING, memory_order_release);
   sink->starting = false;
   sink->owner_active = false;
-  salts_cond_broadcast(&sink->lifecycle_cond);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_cond_broadcast(&sink->lifecycle_cond);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   return SALTS_OK;
 
 fail:
   atomic_store_explicit(&sink->status, rc, memory_order_relaxed);
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   sink->starting = false;
   atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED, memory_order_release);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   datagram_sink_cleanup_internal(sink, DATAGRAM_SINK_CLEANUP_FAILURE);
   return rc;
 }
@@ -441,10 +441,10 @@ static void datagram_sink_cleanup_internal(turbo_flow_cnet_datagram_sink_t *sink
   const bool failure_cleanup = mode == DATAGRAM_SINK_CLEANUP_FAILURE;
   int rc = SALTS_OK;
   if (!sink) return;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (!failure_cleanup && (datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED ||
                            datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_DETACHED)) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return;
   }
   if (!failure_cleanup &&
@@ -452,17 +452,17 @@ static void datagram_sink_cleanup_internal(turbo_flow_cnet_datagram_sink_t *sink
     atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPING,
                           memory_order_release);
   while ((!failure_cleanup && sink->owner_active) || sink->submissions_active > 0u)
-    salts_cond_wait(&sink->lifecycle_cond, &sink->lifecycle_mutex);
+    cmeta_cond_wait(&sink->lifecycle_cond, &sink->lifecycle_mutex);
   if (!failure_cleanup && (datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED ||
                            datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_DETACHED)) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return;
   }
   if (!failure_cleanup)
     atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPING,
                           memory_order_release);
   sink->owner_active = true;
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   if (sink->actor_initialized) {
     (void)cflow_io_actor_close(&sink->actor);
     datagram_sink_drive_actor(sink);
@@ -476,12 +476,12 @@ static void datagram_sink_cleanup_internal(turbo_flow_cnet_datagram_sink_t *sink
   }
   while (sink->actor_initialized && !cflow_io_actor_is_quiescent(&sink->actor))
     datagram_sink_drive_actor(sink);
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (sink->actor_initialized) {
     (void)cflow_io_actor_destroy(&sink->actor);
     sink->actor_initialized = false;
   }
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   if (sink->executor_initialized) {
     (void)cflow_executor_shutdown(&sink->executor);
     cflow_executor_destroy(&sink->executor);
@@ -492,14 +492,14 @@ static void datagram_sink_cleanup_internal(turbo_flow_cnet_datagram_sink_t *sink
     atomic_store_explicit(&sink->datagram_initialized, false, memory_order_release);
   }
   sink->bound_port = 0u;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   atomic_store_explicit(&sink->state,
                         failure_cleanup ? TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED
                                         : TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED,
                         memory_order_release);
   sink->owner_active = false;
-  salts_cond_broadcast(&sink->lifecycle_cond);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_cond_broadcast(&sink->lifecycle_cond);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
 }
 
 static void datagram_sink_stop(void *ctx, turbo_flow_t *flow,
@@ -514,11 +514,11 @@ static void datagram_sink_shutdown(void *ctx) {
   turbo_flow_cnet_datagram_sink_t *sink = (turbo_flow_cnet_datagram_sink_t *)ctx;
   if (!sink) return;
   datagram_sink_cleanup_internal(sink, DATAGRAM_SINK_CLEANUP_STOP);
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   sink->flow = NULL;
   atomic_store_explicit(&sink->detached, true, memory_order_release);
   atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_DETACHED, memory_order_release);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
 }
 
 static int datagram_sink_next_lease(turbo_flow_cnet_datagram_sink_t *sink,
@@ -558,19 +558,19 @@ static int datagram_sink_async_submit(void *ctx, turbo_flow_t *flow,
   operation->sink = sink;
   operation->claim = (turbo_flow_async_terminal_claim_t)TURBO_FLOW_ASYNC_TERMINAL_CLAIM_INIT;
   operation->bytes = message->payload.len;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   state = datagram_sink_state(sink);
   if (flow != sink->flow || atomic_load_explicit(&sink->detached, memory_order_acquire) ||
       !sink->actor_initialized || state != TURBO_FLOW_CNET_DATAGRAM_SINK_RUNNING) {
     rc = state == TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED
              ? atomic_load_explicit(&sink->status, memory_order_relaxed)
              : SALTS_EBUSY;
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     free(operation);
     return datagram_sink_reject(sink, rc);
   }
   ++sink->submissions_active;
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   rc = datagram_sink_next_lease(sink, &lease_id);
   if (rc != SALTS_OK) {
     free(operation);
@@ -782,13 +782,13 @@ int turbo_flow_cnet_datagram_sink_snapshot(const turbo_flow_cnet_datagram_sink_t
   if (!sink || !snapshot || snapshot->size < sizeof(*snapshot) ||
       snapshot->version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION)
     return SALTS_EINVAL;
-  salts_mutex_lock(&mutable_sink->lifecycle_mutex);
+  cmeta_mutex_lock(&mutable_sink->lifecycle_mutex);
   if (mutable_sink->owner_active || mutable_sink->submissions_active > 0u) {
-    salts_mutex_unlock(&mutable_sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&mutable_sink->lifecycle_mutex);
     return SALTS_EBUSY;
   }
   rc = datagram_sink_snapshot_locked(sink, snapshot);
-  salts_mutex_unlock(&mutable_sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&mutable_sink->lifecycle_mutex);
   return rc;
 }
 
@@ -799,24 +799,24 @@ int turbo_flow_cnet_datagram_sink_poll(turbo_flow_cnet_datagram_sink_t *sink, ui
   if (!sink || (snapshot && (snapshot->size < sizeof(*snapshot) ||
                              snapshot->version != TURBO_FLOW_CNET_DATAGRAM_SINK_API_VERSION)))
     return SALTS_EINVAL;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (atomic_load_explicit(&sink->detached, memory_order_acquire) ||
       !atomic_load_explicit(&sink->datagram_initialized, memory_order_acquire) ||
       !sink->actor_initialized) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EINVAL;
   }
   if (datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPING ||
       datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_ESHUTDOWN;
   }
   if (sink->owner_active) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EBUSY;
   }
   sink->owner_active = true;
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   datagram_sink_drive_actor(sink);
   rc = cnet_datagram_poll(&sink->datagram, timeout_ms, &events);
   if (rc != SALTS_OK && datagram_sink_state(sink) != TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED) {
@@ -824,30 +824,30 @@ int turbo_flow_cnet_datagram_sink_poll(turbo_flow_cnet_datagram_sink_t *sink, ui
     atomic_store_explicit(&sink->state, TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED, memory_order_release);
   }
   datagram_sink_drive_actor(sink);
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (snapshot) {
     int snapshot_status = datagram_sink_snapshot_locked(sink, snapshot);
     if (rc == SALTS_OK && snapshot_status != SALTS_OK) rc = snapshot_status;
   }
   sink->owner_active = false;
-  salts_cond_broadcast(&sink->lifecycle_cond);
+  cmeta_cond_broadcast(&sink->lifecycle_cond);
   if (datagram_sink_state(sink) == TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED)
     rc = atomic_load_explicit(&sink->status, memory_order_relaxed);
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   return rc;
 }
 
 int turbo_flow_cnet_datagram_sink_destroy(turbo_flow_cnet_datagram_sink_t *sink) {
   if (!sink) return SALTS_EINVAL;
-  salts_mutex_lock(&sink->lifecycle_mutex);
+  cmeta_mutex_lock(&sink->lifecycle_mutex);
   if (!atomic_load_explicit(&sink->detached, memory_order_acquire) ||
       atomic_load_explicit(&sink->datagram_initialized, memory_order_acquire) ||
       sink->actor_initialized || sink->executor_initialized || sink->owner_active ||
       sink->submissions_active > 0u) {
-    salts_mutex_unlock(&sink->lifecycle_mutex);
+    cmeta_mutex_unlock(&sink->lifecycle_mutex);
     return SALTS_EBUSY;
   }
-  salts_mutex_unlock(&sink->lifecycle_mutex);
+  cmeta_mutex_unlock(&sink->lifecycle_mutex);
   tstr_free(sink->adapter_name);
   tstr_free(sink->host);
   free(sink->delivered_ids);

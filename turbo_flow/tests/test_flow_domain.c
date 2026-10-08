@@ -142,7 +142,7 @@ static int domain_blocking_stage(turbo_flow_msg_t *message, void *ctx) {
   admission_probe_t *probe = (admission_probe_t *)ctx;
   (void)message;
   atomic_fetch_add_explicit(&probe->entered, 1, memory_order_acq_rel);
-  while (!atomic_load_explicit(&probe->release, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&probe->release, memory_order_acquire)) cmeta_thread_yield();
   return SALTS_OK;
 }
 
@@ -2108,7 +2108,7 @@ suite("Turbo Flow Domain Contracts") {
             TURBO_FLOW_DOMAIN_DATA, "Message", TURBO_FLOW_OPERATION_STAGE);
         admission_probe_t probe;
         domain_publish_t publishes[DOMAIN_ADMISSION_PUBLISHER_COUNT];
-        salts_thread_t threads[DOMAIN_ADMISSION_PUBLISHER_COUNT] = {NULL};
+        cmeta_thread_t threads[DOMAIN_ADMISSION_PUBLISHER_COUNT] = {NULL};
         turbo_flow_pool_snapshot_t snapshot;
         turbo_flow_msg_t overflow;
         int snapshot_status;
@@ -2137,18 +2137,18 @@ suite("Turbo Flow Domain Contracts") {
         for (size_t i = 0; i < DOMAIN_ADMISSION_PUBLISHER_COUNT; ++i) {
           publishes[i].flow = flow;
           atomic_init(&publishes[i].result, SALTS_EBUSY);
-          check_equal(salts_thread_create(&threads[i], domain_publish_thread, &publishes[i]),
+          check_equal(cmeta_thread_create(&threads[i], domain_publish_thread, &publishes[i]),
                        SALTS_OK);
           if (i == 0u) {
             while (atomic_load_explicit(&probe.entered, memory_order_acquire) != 1)
-              salts_thread_yield();
+              cmeta_thread_yield();
           }
         }
         wait_deadline = salts_hrtime() + UINT64_C(1000000000);
         do {
           snapshot_status = turbo_flow_pool_snapshot_at(flow, 0u, &snapshot);
           if (snapshot_status != SALTS_OK) break;
-          if (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED) salts_thread_yield();
+          if (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED) cmeta_thread_yield();
         } while (snapshot.queued != DOMAIN_ADMISSION_EXPECTED_QUEUED &&
                  salts_hrtime() < wait_deadline);
         check_equal(snapshot_status, SALTS_OK);
@@ -2159,7 +2159,7 @@ suite("Turbo Flow Domain Contracts") {
         turbo_flow_msg_cleanup(&overflow);
         atomic_store_explicit(&probe.release, 1, memory_order_release);
         for (size_t i = 0; i < DOMAIN_ADMISSION_PUBLISHER_COUNT; ++i) {
-          check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+          check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
           check_equal(atomic_load_explicit(&publishes[i].result, memory_order_acquire), SALTS_OK);
         }
         check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire),

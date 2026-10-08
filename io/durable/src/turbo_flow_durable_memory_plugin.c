@@ -346,7 +346,7 @@ CMETA_IMPLEMENTS(
 
 static turbo_flow_provider_factory provider_factory;
 static turbo_flow_durable_memory_resource resource_handle;
-static salts_plugin_export plugin_exports[2];
+static cmeta_plugin_export plugin_exports[2];
 static salts_once_t provider_once = SALTS_ONCE_INIT;
 
 static void provider_init(void) {
@@ -358,9 +358,9 @@ static void provider_init(void) {
       memory_resource_impl_as_turbo_flow_durable_memory_resource(
           &provider_state);
 
-  plugin_exports[0] = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  plugin_exports[0] = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version =
           TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
       .capabilities = 0u,
@@ -371,9 +371,9 @@ static void provider_init(void) {
           .value = &provider_factory,
       },
   };
-  plugin_exports[1] = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  plugin_exports[1] = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version =
           TURBO_FLOW_DURABLE_MEMORY_RESOURCE_CONTRACT_VERSION,
       .capabilities =
@@ -388,51 +388,51 @@ static void provider_init(void) {
   };
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL
+static cmeta_plugin_status CMETA_PLUGIN_CALL
 provider_start(void *self) {
   memory_provider_state_t *state = (memory_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
-  if (state->owners != 0u) return SALTS_PLUGIN_BUSY;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
+  if (state->owners != 0u) return CMETA_PLUGIN_BUSY;
   state->stopping = false;
   state->started = true;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL
+static cmeta_plugin_status CMETA_PLUGIN_CALL
 provider_request_stop(void *self) {
   memory_provider_state_t *state = (memory_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = true;
   state->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL
+static bool CMETA_PLUGIN_CALL
 provider_is_quiescent(const void *self) {
   const memory_provider_state_t *state =
       (const memory_provider_state_t *)self;
   return state && state->stopping && state->owners == 0u;
 }
 
-static void SALTS_PLUGIN_CALL provider_destroy(void *self) {
+static void CMETA_PLUGIN_CALL provider_destroy(void *self) {
   memory_provider_state_t *state = (memory_provider_state_t *)self;
   if (!state || state->owners != 0u) return;
   state->started = false;
   state->stopping = true;
 }
 
-static salts_plugin_manifest provider_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_manifest provider_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "turbo-flow.durable.memory",
     .version = {2u, 0u, 0u},
     .self = &provider_state,
 };
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
   salts_once(&provider_once, provider_init);
   provider_manifest.exports = plugin_exports;
   provider_manifest.export_count = 2u;

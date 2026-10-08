@@ -79,7 +79,7 @@ typedef struct flow_plugin_cflow_function_binding_s {
  *
  * export_id selects the implementation row; contract_id/version/capabilities
  * state the product's required semantic capability and are verified through
- * salts_plugin_export_require_function() before any reflected registration.
+ * cmeta_plugin_export_require_function() before any reflected registration.
  *
  * The caller-owned registry must outlive the TurboFlow registry/compiled plan
  * that receives this binding. A successful bind retains one Salts Plugin lease

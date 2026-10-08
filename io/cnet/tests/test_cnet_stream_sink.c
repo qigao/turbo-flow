@@ -88,7 +88,7 @@ static void stream_sink_snapshot_race(void *ctx) {
       atomic_store_explicit(&race->status, rc, memory_order_release);
       break;
     }
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
 }
 
@@ -376,7 +376,7 @@ spec("TurboFlow CNet stream sink") {
     stream_sink_snapshot_race_t race;
     turbo_flow_msg_t message;
     turbo_flow_t *flow = turbo_flow_create();
-    salts_thread_t observer = NULL;
+    cmeta_thread_t observer = NULL;
     char uri[640];
     uint64_t deadline;
 
@@ -422,17 +422,17 @@ spec("TurboFlow CNet stream sink") {
     deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
-      if (snapshot.active_requests == 0u) salts_thread_yield();
+      if (snapshot.active_requests == 0u) cmeta_thread_yield();
     } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
 
-    check_equal(salts_thread_create(&observer, stream_sink_snapshot_race, &race), SALTS_OK);
+    check_equal(cmeta_thread_create(&observer, stream_sink_snapshot_race, &race), SALTS_OK);
     while (!atomic_load_explicit(&race.ready, memory_order_acquire))
-      salts_thread_yield();
+      cmeta_thread_yield();
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     atomic_store_explicit(&race.done, true, memory_order_release);
-    check_equal(salts_thread_join(&observer), SALTS_OK);
-    salts_thread_destroy(&observer);
+    check_equal(cmeta_thread_join(&observer), SALTS_OK);
+    cmeta_thread_destroy(&observer);
     check_equal(atomic_load_explicit(&race.status, memory_order_acquire), SALTS_OK);
     check_true(atomic_load_explicit(&race.snapshots, memory_order_relaxed) > 0u);
     /*
@@ -511,7 +511,7 @@ spec("TurboFlow CNet stream sink") {
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
       managed_status = turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed);
       check_true(managed_status == SALTS_OK || managed_status == SALTS_EBUSY);
-      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) salts_thread_yield();
+      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) cmeta_thread_yield();
     } while (managed.in_flight == 0u &&
              atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
              salts_monotonic_ms() < deadline);
@@ -591,7 +591,7 @@ spec("TurboFlow CNet stream sink") {
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
       managed_status = turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed);
       check_true(managed_status == SALTS_OK || managed_status == SALTS_EBUSY);
-      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) salts_thread_yield();
+      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) cmeta_thread_yield();
     } while (managed.in_flight == 0u &&
              atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
              salts_monotonic_ms() < deadline);

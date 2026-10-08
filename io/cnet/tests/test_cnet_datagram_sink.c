@@ -124,7 +124,7 @@ static void datagram_sink_snapshot_race(void *ctx) {
       atomic_store_explicit(&race->status, rc, memory_order_release);
       break;
     }
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
 }
 
@@ -497,7 +497,7 @@ spec("TurboFlow CNet datagram sink") {
     datagram_sink_snapshot_race_t race;
     turbo_flow_msg_t message;
     turbo_flow_t *flow = datagram_sink_flow(&datagram, datagram_sink_peer(9u), &sink);
-    salts_thread_t observer = NULL;
+    cmeta_thread_t observer = NULL;
     uint64_t deadline;
     int snapshot_status;
 
@@ -521,17 +521,17 @@ spec("TurboFlow CNet datagram sink") {
     do {
       snapshot_status = turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot);
       check_true(snapshot_status == SALTS_OK || snapshot_status == SALTS_EBUSY);
-      if (snapshot_status == SALTS_EBUSY || snapshot.active_requests == 0u) salts_thread_yield();
+      if (snapshot_status == SALTS_EBUSY || snapshot.active_requests == 0u) cmeta_thread_yield();
     } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
 
-    check_equal(salts_thread_create(&observer, datagram_sink_snapshot_race, &race), SALTS_OK);
+    check_equal(cmeta_thread_create(&observer, datagram_sink_snapshot_race, &race), SALTS_OK);
     while (!atomic_load_explicit(&race.ready, memory_order_acquire))
-      salts_thread_yield();
+      cmeta_thread_yield();
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     atomic_store_explicit(&race.done, true, memory_order_release);
-    check_equal(salts_thread_join(&observer), SALTS_OK);
-    salts_thread_destroy(&observer);
+    check_equal(cmeta_thread_join(&observer), SALTS_OK);
+    cmeta_thread_destroy(&observer);
     check_equal(atomic_load_explicit(&race.status, memory_order_acquire), SALTS_OK);
     check_true(atomic_load_explicit(&race.snapshots, memory_order_relaxed) > 0u);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);

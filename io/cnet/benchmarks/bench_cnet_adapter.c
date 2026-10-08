@@ -646,7 +646,7 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
   deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   while (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u &&
          salts_monotonic_ms() < deadline)
-    salts_thread_yield();
+    cmeta_thread_yield();
   if (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u)
     return SALTS_ETIMEDOUT;
 

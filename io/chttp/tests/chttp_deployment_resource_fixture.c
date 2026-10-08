@@ -47,10 +47,10 @@ CMETA_IMPLEMENTS(
 
 static turbo_flow_chttp_deployment_resource client_handle;
 static turbo_flow_chttp_deployment_resource server_handle;
-static salts_plugin_export fixture_exports[2];
-static salts_plugin_manifest fixture_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_export fixture_exports[2];
+static cmeta_plugin_manifest fixture_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.turboflow.chttp.deployment",
     .version = {1u, 0u, 0u},
     .self = &fixture_root,
@@ -80,9 +80,9 @@ static void fixture_init(void) {
       fixture_server_resource_impl_as_turbo_flow_chttp_deployment_resource(
           &fixture_root.server);
 
-  fixture_exports[0] = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  fixture_exports[0] = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version = TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION,
       .capabilities =
           TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
@@ -94,9 +94,9 @@ static void fixture_init(void) {
           .value = &client_handle,
       },
   };
-  fixture_exports[1] = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  fixture_exports[1] = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version = TURBO_FLOW_CHTTP_RESOURCE_CONTRACT_VERSION,
       .capabilities =
           TURBO_FLOW_CHTTP_RESOURCE_ENDPOINT |
@@ -113,38 +113,38 @@ static void fixture_init(void) {
   fixture_manifest.export_count = 2u;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_start(void *self) {
   fixture_root_t *root = (fixture_root_t *)self;
-  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!root) return CMETA_PLUGIN_INVALID_ARGUMENT;
   root->stopping = false;
   root->started = true;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_request_stop(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_request_stop(void *self) {
   fixture_root_t *root = (fixture_root_t *)self;
-  if (!root) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!root) return CMETA_PLUGIN_INVALID_ARGUMENT;
   root->stopping = true;
   root->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL fixture_is_quiescent(const void *self) {
+static bool CMETA_PLUGIN_CALL fixture_is_quiescent(const void *self) {
   const fixture_root_t *root = (const fixture_root_t *)self;
   return root && root->stopping;
 }
 
-static void SALTS_PLUGIN_CALL fixture_destroy(void *self) {
+static void CMETA_PLUGIN_CALL fixture_destroy(void *self) {
   fixture_root_t *root = (fixture_root_t *)self;
   if (!root) return;
   root->started = false;
   root->stopping = true;
 }
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
   salts_once(&fixture_once, fixture_init);
   fixture_manifest.start = fixture_start;
   fixture_manifest.request_stop = fixture_request_stop;

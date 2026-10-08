@@ -18,14 +18,14 @@
 #endif
 
 typedef struct provider_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
 } provider_resolver_fixture_t;
 
 typedef struct resource_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
 } resource_resolver_fixture_t;
 
@@ -78,18 +78,18 @@ static int resolve_resource(
 }
 
 static void stop_and_unload(
-    salts_plugin_registry *registry, salts_plugin_ref ref) {
+    cmeta_plugin_registry *registry, cmeta_plugin_ref ref) {
   bool quiescent = false;
   check_equal(
-      salts_plugin_registry_request_stop(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_request_stop(registry, ref),
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_poll_quiescent(registry, ref, &quiescent),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_poll_quiescent(registry, ref, &quiescent),
+      CMETA_PLUGIN_OK);
   check_true(quiescent);
   check_equal(
-      salts_plugin_registry_unload(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_unload(registry, ref),
+      CMETA_PLUGIN_OK);
 }
 
 spec("compiled provider instance") {
@@ -100,10 +100,10 @@ spec("compiled provider instance") {
         "  batch 7\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {2u};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {2u};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v2_t provider_resolver =
@@ -123,18 +123,18 @@ spec("compiled provider instance") {
     stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_PROVIDER_FIXTURE, &provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_RESOURCE_FIXTURE, &resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
 
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
@@ -184,28 +184,28 @@ spec("compiled provider instance") {
         SALTS_EALREADY);
 
     check_equal(
-        salts_plugin_registry_request_stop(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, provider_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, provider_ref),
-        SALTS_PLUGIN_BUSY);
+        cmeta_plugin_registry_unload(&registry, provider_ref),
+        CMETA_PLUGIN_BUSY);
 
     check_equal(
-        salts_plugin_registry_request_stop(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, resource_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, resource_ref),
-        SALTS_PLUGIN_BUSY);
+        cmeta_plugin_registry_unload(&registry, resource_ref),
+        CMETA_PLUGIN_BUSY);
 
     check_equal(
         flow_compiled_provider_instance_release(&compiled),
@@ -230,23 +230,23 @@ spec("compiled provider instance") {
     check_null(compiled);
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, provider_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, resource_ref),
+        CMETA_PLUGIN_OK);
 
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -257,9 +257,9 @@ spec("compiled provider instance") {
         "  batch 0\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref provider_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {1u};
+    cmeta_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v2_t provider_resolver =
@@ -276,13 +276,13 @@ spec("compiled provider instance") {
     stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_PROVIDER_FIXTURE, &provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
 
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
@@ -302,7 +302,7 @@ spec("compiled provider instance") {
     check_contains(error.path, "batch");
 
     stop_and_unload(&registry, provider_ref);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
     turbo_flow_destroy(flow);
   }
 
@@ -312,9 +312,9 @@ spec("compiled provider instance") {
         "  batch 7\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref provider_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {1u};
+    cmeta_plugin_ref provider_ref = {0};
     provider_resolver_fixture_t provider_fixture = {0};
     turbo_flow_provider_resolver_v2_t provider_resolver =
         TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
@@ -328,13 +328,13 @@ spec("compiled provider instance") {
     stage_index = turbo_flow_find_stage(flow, "provider_stage");
     check_true(stage_index >= 0);
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_PROVIDER_FIXTURE, &provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
 
     provider_fixture.registry = &registry;
     provider_fixture.plugin = provider_ref;
@@ -350,7 +350,7 @@ spec("compiled provider instance") {
     check_contains(error.message, "resource");
 
     stop_and_unload(&registry, provider_ref);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
     turbo_flow_destroy(flow);
   }
 }

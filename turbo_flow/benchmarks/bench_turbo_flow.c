@@ -1005,7 +1005,7 @@ static void bench_publish_worker(void *arg) {
   worker->status = SALTS_OK;
   atomic_fetch_add_explicit(worker->ready, 1u, memory_order_release);
   while (!atomic_load_explicit(worker->start, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
 
   for (size_t i = 0; i < worker->iterations; ++i) {
     uint64_t begin = salts_hrtime();
@@ -1025,7 +1025,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
                                             uint32_t producers, size_t payload_size,
                                             size_t iterations) {
   flow_bench_publish_worker_t *contexts;
-  salts_thread_t *threads;
+  cmeta_thread_t *threads;
   uint64_t *latencies;
   atomic_uint ready;
   atomic_int start;
@@ -1035,7 +1035,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
   double throughput;
 
   contexts = (flow_bench_publish_worker_t *)calloc(producers, sizeof(*contexts));
-  threads = (salts_thread_t *)calloc(producers, sizeof(*threads));
+  threads = (cmeta_thread_t *)calloc(producers, sizeof(*threads));
   latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
   check_not_null(contexts);
   check_not_null(threads);
@@ -1054,14 +1054,14 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
     contexts[i].ready = &ready;
     contexts[i].start = &start;
     contexts[i].status = SALTS_EBUSY;
-    check_equal(salts_thread_create(&threads[i], bench_publish_worker, &contexts[i]), SALTS_OK);
+    check_equal(cmeta_thread_create(&threads[i], bench_publish_worker, &contexts[i]), SALTS_OK);
   }
   while (atomic_load_explicit(&ready, memory_order_acquire) != producers)
-    salts_thread_yield();
+    cmeta_thread_yield();
   total_start = salts_hrtime();
   atomic_store_explicit(&start, 1, memory_order_release);
   for (uint32_t i = 0; i < producers; ++i) {
-    check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+    check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
     check_equal(contexts[i].status, SALTS_OK);
     completed += contexts[i].completed;
   }
@@ -1934,7 +1934,7 @@ spec("Turbo Flow Bench") {
     check_equal(submit_status, SALTS_OK);
     while (atomic_load_explicit(&completion.completed, memory_order_acquire) <
            FLOW_BENCH_ASYNC_INGRESS_ITERS) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.completed, memory_order_acquire),
@@ -2034,18 +2034,18 @@ spec("Turbo Flow Bench") {
       uint32_t stage_index = (uint32_t)turbo_flow_find_stage(flow, "work");
       const flow_threadpool_adapter_t *adapter = bench_threadpool_adapter(flow, stage_index);
       flow_bench_live_jobs_t jobs;
-      salts_thread_t releaser;
+      cmeta_thread_t releaser;
       atomic_init(&jobs.release, 0);
       atomic_init(&jobs.started, 0u);
       atomic_init(&jobs.completed, 0u);
       check_not_null(adapter);
       for (uint32_t i = 0; i < 4; ++i)
-        check_equal(salts_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
+        check_equal(cmeta_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
       while (atomic_load_explicit(&jobs.started, memory_order_acquire) == 0u)
         salts_sleep_ms(1);
-      check_equal(salts_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);
+      check_equal(cmeta_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);
       bench_destroy_started_flow(flow);
-      check_equal(salts_thread_join(&releaser), SALTS_OK);
+      check_equal(cmeta_thread_join(&releaser), SALTS_OK);
       check_equal(atomic_load_explicit(&jobs.completed, memory_order_acquire), 4);
     }
   }

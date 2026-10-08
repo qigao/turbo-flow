@@ -68,8 +68,8 @@ static const char INBOX_META_V3_ROW[] =
     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 
 typedef struct resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
 } resolver_fixture_t;
 
@@ -192,10 +192,10 @@ static int resolve_resource(
 
 typedef struct provider_acceptance_fixture_s {
   turbo_flow_t *flow;
-  salts_plugin_registry registry;
+  cmeta_plugin_registry registry;
   int registry_initialized;
-  salts_plugin_ref provider_ref;
-  salts_plugin_ref resource_ref;
+  cmeta_plugin_ref provider_ref;
+  cmeta_plugin_ref resource_ref;
   int provider_loaded;
   int resource_loaded;
   int provider_started;
@@ -231,38 +231,38 @@ static void acceptance_cleanup(void) {
   if (acceptance.registry_initialized) {
     bool quiescent = false;
     if (acceptance.provider_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.provider_ref);
       acceptance.provider_started = 0;
     }
     if (acceptance.resource_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.resource_ref);
       acceptance.resource_started = 0;
     }
     if (acceptance.provider_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.provider_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry,
-              acceptance.provider_ref) == SALTS_PLUGIN_OK)
+              acceptance.provider_ref) == CMETA_PLUGIN_OK)
         acceptance.provider_loaded = 0;
     }
     quiescent = false;
     if (acceptance.resource_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.resource_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry,
-              acceptance.resource_ref) == SALTS_PLUGIN_OK)
+              acceptance.resource_ref) == CMETA_PLUGIN_OK)
         acceptance.resource_loaded = 0;
     }
     if (!acceptance.provider_loaded && !acceptance.resource_loaded) {
-      (void)salts_plugin_registry_destroy(&acceptance.registry);
+      (void)cmeta_plugin_registry_destroy(&acceptance.registry);
       acceptance.registry_initialized = 0;
     }
   }
@@ -305,7 +305,7 @@ spec("TurboDB canonical Salts provider") {
         "stage main {\n"
         "  input -> durable_buffer -> output\n"
         "}\n";
-    salts_plugin_registry_config registry_config = {2u};
+    cmeta_plugin_registry_config registry_config = {2u};
     resolver_fixture_t provider_fixture = {0};
     resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver =
@@ -333,32 +333,32 @@ spec("TurboDB canonical Salts provider") {
         turbo_flow_find_stage(acceptance.flow, "durable_buffer");
     check_true(stage_index >= 0);
 
-    rc = salts_plugin_registry_init(
+    rc = cmeta_plugin_registry_init(
         &acceptance.registry, &registry_config);
-    if (rc == SALTS_PLUGIN_OK) acceptance.registry_initialized = 1;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.registry_initialized = 1;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
-    rc = salts_plugin_registry_load(
+    rc = cmeta_plugin_registry_load(
         &acceptance.registry, FLOW_TURBODB_PROVIDER_FIXTURE,
         &acceptance.provider_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.provider_loaded = 1;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.provider_loaded = 1;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
-    rc = salts_plugin_registry_load(
+    rc = cmeta_plugin_registry_load(
         &acceptance.registry, FLOW_TURBODB_RESOURCE_FIXTURE,
         &acceptance.resource_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.resource_loaded = 1;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.resource_loaded = 1;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
-    rc = salts_plugin_registry_start(
+    rc = cmeta_plugin_registry_start(
         &acceptance.registry, acceptance.provider_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.provider_started = 1;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.provider_started = 1;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
-    rc = salts_plugin_registry_start(
+    rc = cmeta_plugin_registry_start(
         &acceptance.registry, acceptance.resource_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.resource_started = 1;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.resource_started = 1;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
     provider_fixture.registry = &acceptance.registry;
     provider_fixture.plugin = acceptance.provider_ref;
@@ -406,24 +406,24 @@ spec("TurboDB canonical Salts provider") {
     check_true(
         turbo_flow_runtime_owner_contract_valid(acceptance.owner));
 
-    rc = salts_plugin_registry_request_stop(
+    rc = cmeta_plugin_registry_request_stop(
         &acceptance.registry, acceptance.provider_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.provider_started = 0;
-    check_equal(rc, SALTS_PLUGIN_OK);
-    rc = salts_plugin_registry_request_stop(
+    if (rc == CMETA_PLUGIN_OK) acceptance.provider_started = 0;
+    check_equal(rc, CMETA_PLUGIN_OK);
+    rc = cmeta_plugin_registry_request_stop(
         &acceptance.registry, acceptance.resource_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.resource_started = 0;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.resource_started = 0;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
 
     check_equal(
@@ -447,28 +447,28 @@ spec("TurboDB canonical Salts provider") {
     check_null(acceptance.compiled);
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
-    rc = salts_plugin_registry_unload(
+    rc = cmeta_plugin_registry_unload(
         &acceptance.registry, acceptance.provider_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.provider_loaded = 0;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.provider_loaded = 0;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
-    rc = salts_plugin_registry_unload(
+    rc = cmeta_plugin_registry_unload(
         &acceptance.registry, acceptance.resource_ref);
-    if (rc == SALTS_PLUGIN_OK) acceptance.resource_loaded = 0;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    if (rc == CMETA_PLUGIN_OK) acceptance.resource_loaded = 0;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
-    rc = salts_plugin_registry_destroy(&acceptance.registry);
-    if (rc == SALTS_PLUGIN_OK) acceptance.registry_initialized = 0;
-    check_equal(rc, SALTS_PLUGIN_OK);
+    rc = cmeta_plugin_registry_destroy(&acceptance.registry);
+    if (rc == CMETA_PLUGIN_OK) acceptance.registry_initialized = 0;
+    check_equal(rc, CMETA_PLUGIN_OK);
 
     turbo_flow_destroy(acceptance.flow);
     acceptance.flow = NULL;

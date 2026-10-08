@@ -761,7 +761,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     turbo_flow_chttp_websocket_server_t *server = NULL;
     chttp_websocket_connect_options options = {.size = sizeof(options)};
     chttp_websocket_client client = {0};
-    salts_thread_t stop_thread = NULL;
+    cmeta_thread_t stop_thread = NULL;
     unsigned int http_status = 0u;
     turbo_flow_t *flow = turbo_flow_create();
     char uri[128];
@@ -804,11 +804,11 @@ spec("TurboFlow CHTTP WebSocket adapter") {
       salts_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
-    check_equal(salts_thread_create(&stop_thread, websocket_adapter_stop_thread, &stop), SALTS_OK);
+    check_equal(cmeta_thread_create(&stop_thread, websocket_adapter_stop_thread, &stop), SALTS_OK);
     salts_sleep_ms(20u);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_EBUSY);
     atomic_store_explicit(&gate.release, 1, memory_order_release);
-    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
     check_equal(snapshot.state, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED);

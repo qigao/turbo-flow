@@ -78,7 +78,7 @@ struct turbo_flow_chttp_websocket_server_s {
   bool http_initialized;
   websocket_session_slot_t *sessions;
   websocket_frame_slot_t *frames;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   turbo_flow_chttp_websocket_server_state_t state;
   uint16_t bound_port;
   uint64_t next_message_id;
@@ -209,7 +209,7 @@ static int websocket_open(void *user, chttp_websocket *websocket,
   }
   status = chttp_server_websocket_session_capture(websocket, &captured);
   if (status != SALTS_OK) return status;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state == TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING) {
     for (index = 0u; index < server->session_capacity; ++index) {
       websocket_session_slot_t *slot = &server->sessions[index];
@@ -233,7 +233,7 @@ static int websocket_open(void *user, chttp_websocket *websocket,
     server->last_status = SALTS_ESHUTDOWN;
   }
   if (!selected) websocket_counter_increment(&server->sessions_rejected);
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   if (selected) return SALTS_OK;
   return chttp_server_reply(response, 503u, "text/plain", overload, sizeof(overload) - 1u);
 }
@@ -252,7 +252,7 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
   *out_frame = NULL;
   *out_session = NULL;
   *out_message_id = 0u;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   session_slot = websocket_find_session_locked(server, session, &session_index);
   if (!session_slot) {
     status = SALTS_ENOENT;
@@ -291,7 +291,7 @@ static int websocket_reserve_frame(turbo_flow_chttp_websocket_server_t *server,
     session_slot->peer_closed = true;
     if (status != SALTS_OK) websocket_retire_session_locked(server, session_slot);
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out_frame = frame;
   *out_session = session_slot;
   return status;
@@ -305,27 +305,27 @@ static int websocket_close_drained(turbo_flow_chttp_websocket_server_t *server, 
   uint64_t generation;
   websocket_session_slot_t *slot;
   int status;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   slot = &server->sessions[index];
   if (!slot->active || !slot->close_on_drain || slot->in_flight_frames != 0u ||
       slot->close_command_submitted || slot->peer_closed ||
       (slot->close_retry_required && !explicit_retry)) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_OK;
   }
   captured = slot->session;
   generation = slot->generation;
   slot->close_command_submitted = true;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = chttp_server_websocket_close(&captured, WEBSOCKET_QUIESCE_CLOSE_CODE, NULL, 0u);
   if (status != SALTS_OK) {
-    salts_mutex_lock(&server->mutex);
+    cmeta_mutex_lock(&server->mutex);
     if (slot->active && slot->generation == generation) {
       slot->close_command_submitted = false;
       slot->close_retry_required = true;
     }
     server->last_status = status;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
   }
   return status;
 }
@@ -336,7 +336,7 @@ static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
                                     chttp_server_websocket_session *close_session) {
   websocket_session_slot_t *session = NULL;
   if (close_session) *close_session = (chttp_server_websocket_session){0};
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (frame->occupied && frame->session_index < server->session_capacity) {
     session = &server->sessions[frame->session_index];
     if (session->active && session->generation == frame->session_generation) {
@@ -360,7 +360,7 @@ static void websocket_release_frame(turbo_flow_chttp_websocket_server_t *server,
     websocket_counter_increment(&server->managed_rejected);
     if (server->pending_publications != 0u) --server->pending_publications;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
 }
 
 static int websocket_make_message(turbo_flow_chttp_websocket_server_t *server,
@@ -440,26 +440,26 @@ static void websocket_event(void *user, chttp_websocket *websocket,
                                         websocket_publication_complete, frame);
     turbo_flow_msg_cleanup(&message);
     if (status == SALTS_OK) {
-      salts_mutex_lock(&server->mutex);
+      cmeta_mutex_lock(&server->mutex);
       websocket_counter_increment(&server->managed_accepted);
       if (server->pending_publications != 0u) --server->pending_publications;
       websocket_counter_increment(&server->frames_admitted);
       if (server->bytes_admitted <= UINT64_MAX - (uint64_t)event->size)
         server->bytes_admitted += (uint64_t)event->size;
       else server->last_status = SALTS_ERANGE;
-      salts_mutex_unlock(&server->mutex);
+      cmeta_mutex_unlock(&server->mutex);
     } else {
       websocket_release_frame(server, frame, status, false, true, NULL);
     }
   }
   if (status != SALTS_OK) {
     bool draining = false;
-    salts_mutex_lock(&server->mutex);
+    cmeta_mutex_lock(&server->mutex);
     if (!reservation_attempted) websocket_counter_increment(&server->managed_rejected);
     server->last_status = status;
     session = websocket_find_session_locked(server, captured, NULL);
     draining = status == SALTS_ESHUTDOWN && session && session->close_on_drain;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     if (draining) {
       /* Rejected input must not retry a failed close admission. */
       return;
@@ -512,7 +512,7 @@ static int websocket_terminal_submit(void *ctx, turbo_flow_t *flow,
        (message->payload.len > 123u || message->status < 0 || message->status > UINT16_MAX))) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   session = &server->sessions[storage->session_index];
   if (!session->active || session->generation != storage->session_generation ||
       !websocket_session_equal(session->session, storage->public_context.session)) {
@@ -529,12 +529,12 @@ static int websocket_terminal_submit(void *ctx, turbo_flow_t *flow,
       close_reserved = true;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   if (status != SALTS_OK) return status;
   status = turbo_flow_async_terminal_claim_move(&owned_claim, claim);
   if (status != SALTS_OK) return status;
   status = websocket_send_command(message, captured);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   session = &server->sessions[storage->session_index];
   if (status == SALTS_OK) {
     websocket_counter_increment(&server->commands_admitted);
@@ -547,7 +547,7 @@ static int websocket_terminal_submit(void *ctx, turbo_flow_t *flow,
       session->close_command_submitted = false;
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return turbo_flow_async_terminal_complete(&owned_claim, status, NULL);
 }
 
@@ -580,14 +580,14 @@ static int websocket_resource_metadata(void *ctx, turbo_flow_resource_metadata_t
   turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
   turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
   if (!server || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   metadata.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   metadata.kind = TURBO_FLOW_RESOURCE_CONNECTION;
   memcpy(metadata.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
   memcpy(metadata.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
   metadata.generation = server->managed_generation;
   metadata.observed_generation = server->managed_generation;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out = metadata;
   return SALTS_OK;
 }
@@ -602,12 +602,12 @@ static int websocket_managed_descriptor(void *ctx,
       out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   descriptor.domain = TURBO_FLOW_DOMAIN_IO_TRANSPORT;
   descriptor.kind = TURBO_FLOW_RESOURCE_CONNECTION;
   memcpy(descriptor.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
   memcpy(descriptor.owner_name, server->managed_owner, strlen(server->managed_owner) + 1u);
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   descriptor.role_flags =
       TURBO_FLOW_MANAGED_BOUNDARY_SOURCE | TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   descriptor.capability_flags = 0u;
@@ -645,11 +645,11 @@ static int websocket_managed_snapshot(void *ctx,
       out->version != TURBO_FLOW_MANAGED_BOUNDARY_API_VERSION) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->pending_publications != 0u) {
     const int status = server->pending_publications > server->frame_capacity ? SALTS_EPROTO
                                                                              : SALTS_EBUSY;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return status;
   }
   for (index = 0u; index < server->frame_capacity; ++index)
@@ -659,19 +659,19 @@ static int websocket_managed_snapshot(void *ctx,
     if (slot->active) {
       ++active_sessions;
       if (slot->in_flight_frames > SIZE_MAX - session_frames) {
-        salts_mutex_unlock(&server->mutex);
+        cmeta_mutex_unlock(&server->mutex);
         return SALTS_EPROTO;
       }
       session_frames += slot->in_flight_frames;
     } else if (slot->in_flight_frames != 0u) {
-      salts_mutex_unlock(&server->mutex);
+      cmeta_mutex_unlock(&server->mutex);
       return SALTS_EPROTO;
     }
   }
   if (occupied_frames != server->in_flight_frames || session_frames != occupied_frames ||
       active_sessions != server->active_sessions ||
       server->managed_completed > server->managed_accepted) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EPROTO;
   }
   memcpy(snapshot.uid, server->managed_uid, strlen(server->managed_uid) + 1u);
@@ -686,7 +686,7 @@ static int websocket_managed_snapshot(void *ctx,
   snapshot.rejected = server->managed_rejected;
   snapshot.backpressured = occupied_frames == server->frame_capacity;
   snapshot.last_status = server->last_status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   *out = snapshot;
   return SALTS_OK;
 }
@@ -697,7 +697,7 @@ static int websocket_set_admission(turbo_flow_chttp_websocket_server_t *server,
   int status = SALTS_OK;
   size_t index;
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (check_generation && expected_generation != server->managed_generation) {
     status = SALTS_EBUSY;
   } else if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_RUNNING &&
@@ -719,7 +719,7 @@ static int websocket_set_admission(turbo_flow_chttp_websocket_server_t *server,
       }
     }
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   if (status != SALTS_OK || desired != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_QUIESCED) return status;
   for (index = 0u; index < server->session_capacity; ++index) {
     status = websocket_close_drained(server, index, true);
@@ -787,17 +787,17 @@ static int websocket_adapter_start(void *ctx, turbo_flow_t *flow,
   if (!server || flow != server->flow || !stage) return SALTS_EINVAL;
   if (!stage->is_source) return SALTS_OK;
   if (strcmp(stage->name, server->source_name) != 0) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_REGISTERED &&
       server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EALREADY;
   }
   server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STARTING;
   server->last_status = SALTS_OK;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = websocket_start_native(server, &port);
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   /* Native ownership survives a failed cleanup, including a failed start. */
   server->http_initialized = server->http.impl != NULL;
   server->bound_port = status == SALTS_OK ? port : 0u;
@@ -805,7 +805,7 @@ static int websocket_adapter_start(void *ctx, turbo_flow_t *flow,
                   : server->http_initialized ? TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED
                                              : TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED;
   server->last_status = status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return status;
 }
 
@@ -848,21 +848,21 @@ static void websocket_adapter_stop(void *ctx, turbo_flow_t *flow,
   turbo_flow_chttp_websocket_server_t *server = (turbo_flow_chttp_websocket_server_t *)ctx;
   int status;
   if (!server || !stage || !stage->is_source) return;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (!server->http_initialized) {
     if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED)
       server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED;
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return;
   }
   server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPING;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = websocket_stop_native(server, server->stop_timeout_ms);
   if (status != SALTS_OK) {
     const int report_status = turbo_flow_adapter_report_stop_status(flow, status);
     if (report_status != SALTS_OK) status = report_status;
   }
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (status == SALTS_OK) {
     server->http_initialized = false;
     server->bound_port = 0u;
@@ -871,7 +871,7 @@ static void websocket_adapter_stop(void *ctx, turbo_flow_t *flow,
   server->state = status == SALTS_OK ? TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED
                                      : TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED;
   server->last_status = status;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
 }
 
 static void websocket_adapter_shutdown(void *ctx) {
@@ -879,12 +879,12 @@ static void websocket_adapter_shutdown(void *ctx) {
   bool initialized;
   int status;
   if (!server) return;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   initialized = server->http_initialized;
   if (initialized) server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPING;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   status = initialized ? websocket_stop_native(server, 0u) : SALTS_OK;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->last_status = status;
   if (status == SALTS_OK) {
     websocket_clear_sessions_locked(server);
@@ -895,7 +895,7 @@ static void websocket_adapter_shutdown(void *ctx) {
   } else {
     server->state = TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_FAILED;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
 }
 
 static int websocket_config_valid(const turbo_flow_chttp_websocket_server_config_t *config) {
@@ -973,7 +973,7 @@ static int websocket_server_register_impl(
     return SALTS_EINVAL;
   server = (turbo_flow_chttp_websocket_server_t *)calloc(1u, sizeof(*server));
   if (!server) return SALTS_ENOMEM;
-  salts_mutex_init(&server->mutex);
+  cmeta_mutex_init(&server->mutex);
   server->flow = config->flow;
   server->config = *config->server;
   server->session_capacity = config->session_capacity;
@@ -1002,14 +1002,14 @@ static int websocket_server_register_impl(
       (config->server->session_cookie_name && !server->session_cookie_name) || !server->sessions ||
       !server->frames) {
     websocket_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return SALTS_ENOMEM;
   }
   status = websocket_managed_identity_init(server, server->adapter_name);
   if (status != SALTS_OK) {
     websocket_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return status;
   }
@@ -1060,7 +1060,7 @@ static int websocket_server_register_impl(
   }
   if (status != SALTS_OK) {
     websocket_cleanup(server);
-    salts_mutex_destroy(&server->mutex);
+    cmeta_mutex_destroy(&server->mutex);
     free(server);
     return status;
   }
@@ -1094,7 +1094,7 @@ int turbo_flow_chttp_websocket_server_snapshot(
   if (!server || !out_snapshot || out_snapshot->size < sizeof(*out_snapshot) ||
       out_snapshot->version != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_API_VERSION)
     return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&server->mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&server->mutex);
   current.state = server->state;
   current.bound_port = server->bound_port;
   current.active_sessions = server->active_sessions;
@@ -1111,22 +1111,22 @@ int turbo_flow_chttp_websocket_server_snapshot(
   current.commands_admitted = server->commands_admitted;
   current.bytes_sent = server->bytes_sent;
   current.last_status = server->last_status;
-  salts_mutex_unlock((salts_mutex_t *)&server->mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&server->mutex);
   *out_snapshot = current;
   return SALTS_OK;
 }
 
 int turbo_flow_chttp_websocket_server_destroy(turbo_flow_chttp_websocket_server_t *server) {
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   if (server->state != TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_DETACHED ||
       server->active_sessions != 0u || server->in_flight_frames != 0u || server->http_initialized) {
-    salts_mutex_unlock(&server->mutex);
+    cmeta_mutex_unlock(&server->mutex);
     return SALTS_EBUSY;
   }
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   websocket_cleanup(server);
-  salts_mutex_destroy(&server->mutex);
+  cmeta_mutex_destroy(&server->mutex);
   free(server);
   return SALTS_OK;
 }

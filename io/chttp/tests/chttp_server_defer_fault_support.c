@@ -32,9 +32,9 @@ int chttp_test_server_retry_first(turbo_flow_chttp_server_t *server) {
 int chttp_test_server_set_managed_generation(turbo_flow_chttp_server_t *server,
                                              uint64_t generation) {
   if (!server || generation == 0u) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->managed_generation = generation;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
@@ -49,26 +49,26 @@ int chttp_test_server_set_snapshot_state(turbo_flow_chttp_server_t *server, int 
                                          uint64_t accepted, uint64_t completed,
                                          uint64_t rejected) {
   if (!server || server->slot_count != 1u) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->slots[0].occupied = occupied != 0;
   server->slots[0].managed_admitted = managed_admitted != 0;
   server->active_requests = active_requests;
   server->managed_accepted = accepted;
   server->managed_completed = completed;
   server->managed_rejected = rejected;
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
 int chttp_test_server_saturate_managed_counters(turbo_flow_chttp_server_t *server) {
   if (!server) return SALTS_EINVAL;
-  salts_mutex_lock(&server->mutex);
+  cmeta_mutex_lock(&server->mutex);
   server->managed_accepted = UINT64_MAX;
   server->managed_completed = UINT64_MAX;
   server->managed_rejected = UINT64_MAX;
   chttp_server_adapter_counter_increment(&server->managed_accepted);
   chttp_server_adapter_counter_increment(&server->managed_completed);
   chttp_server_adapter_counter_increment(&server->managed_rejected);
-  salts_mutex_unlock(&server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }

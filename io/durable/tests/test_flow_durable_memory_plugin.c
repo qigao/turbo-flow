@@ -43,8 +43,8 @@ static const char graph_generated[] =
     "}\n";
 
 typedef struct resolver_state_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned provider_calls;
   unsigned resource_calls;
 } resolver_state_t;
@@ -58,8 +58,8 @@ typedef struct fixture_s {
   turbo_flow_plugin_generation_t *generation;
   turbo_flow_plugin_generation_t *cleanup;
 
-  salts_plugin_registry registry;
-  salts_plugin_ref plugin_ref;
+  cmeta_plugin_registry registry;
+  cmeta_plugin_ref plugin_ref;
   int registry_initialized;
   int plugin_loaded;
   int plugin_started;
@@ -143,26 +143,26 @@ static void stop_unload(fixture_t *f) {
   if (!f || !f->registry_initialized) return;
   if (f->plugin_started) {
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &f->registry, f->plugin_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     f->plugin_started = 0;
   }
   if (f->plugin_loaded) {
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &f->registry, f->plugin_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(
+        cmeta_plugin_registry_unload(
             &f->registry, f->plugin_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     f->plugin_loaded = 0;
   }
   check_equal(
-      salts_plugin_registry_destroy(&f->registry),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_destroy(&f->registry),
+      CMETA_PLUGIN_OK);
   f->registry_initialized = 0;
 }
 
@@ -173,7 +173,7 @@ static int open_fixture(
       TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t plugin_error =
       TURBO_FLOW_PLUGIN_ERROR_INIT;
-  salts_plugin_registry_config registry_config = {2u};
+  cmeta_plugin_registry_config registry_config = {2u};
   flow_test_operation_t operation;
   const char *path =
       getenv("TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH");
@@ -204,16 +204,16 @@ static int open_fixture(
   rc = turbo_flow_parse_string(f->flow, graph, strlen(graph));
   if (rc != SALTS_OK) return rc;
 
-  if (salts_plugin_registry_init(
-          &f->registry, &registry_config) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_init(
+          &f->registry, &registry_config) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->registry_initialized = 1;
-  if (salts_plugin_registry_load(
-          &f->registry, path, &f->plugin_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_load(
+          &f->registry, path, &f->plugin_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->plugin_loaded = 1;
-  if (salts_plugin_registry_start(
-          &f->registry, f->plugin_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_start(
+          &f->registry, f->plugin_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
   f->plugin_started = 1;
 

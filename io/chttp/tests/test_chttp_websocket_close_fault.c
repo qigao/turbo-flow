@@ -67,13 +67,13 @@ void chttp_test_websocket_failure_finalization_unlocked(void) {
   atomic_store_explicit(&failure_finalization_entered, 1, memory_order_release);
   while (atomic_load_explicit(&failure_finalization_gate, memory_order_acquire) &&
          !atomic_load_explicit(&failure_finalization_allowed, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
 }
 
 mem_buffer_t *chttp_test_websocket_mem_get_buffer(mem_pool_t *pool, size_t min_size) {
   if (atomic_load_explicit(&allocation_gate, memory_order_acquire)) {
     atomic_store_explicit(&allocation_entered, 1, memory_order_release);
-    while (!atomic_load_explicit(&allocation_allowed, memory_order_acquire)) salts_thread_yield();
+    while (!atomic_load_explicit(&allocation_allowed, memory_order_acquire)) cmeta_thread_yield();
   }
   if (atomic_exchange_explicit(&allocation_failure, SALTS_OK, memory_order_relaxed) != SALTS_OK)
     return NULL;
@@ -111,7 +111,7 @@ int chttp_test_websocket_publish_async(turbo_flow_t *flow, const char *source_na
                                     websocket_fault_publication_complete, &publish_completion);
   if (status == SALTS_OK && atomic_load_explicit(&publish_gate, memory_order_acquire)) {
     atomic_store_explicit(&publish_entered, 1, memory_order_release);
-    while (!atomic_load_explicit(&publish_allowed, memory_order_acquire)) salts_thread_yield();
+    while (!atomic_load_explicit(&publish_allowed, memory_order_acquire)) cmeta_thread_yield();
   }
   return status;
 }
