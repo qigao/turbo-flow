@@ -376,7 +376,7 @@ static cmeta_plugin_manifest provider_manifest = {
     .version = {2u, 0u, 0u},
     .self = &provider_state,
 };
-static salts_once_t provider_once = SALTS_ONCE_INIT;
+static cmeta_once_t provider_once = SALTS_ONCE_INIT;
 
 static void provider_init(void) {
   provider_factory =
@@ -430,7 +430,7 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&provider_once, provider_init);
+  cmeta_once(&provider_once, provider_init);
   provider_manifest.start = provider_start;
   provider_manifest.request_stop = provider_request_stop;
   provider_manifest.is_quiescent = provider_is_quiescent;

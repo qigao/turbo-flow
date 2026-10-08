@@ -69,7 +69,7 @@ plugin_cflow_destroy(void *self) {
 }
 
 static cmeta_plugin_export fixture_export;
-static salts_once_t fixture_once = SALTS_ONCE_INIT;
+static cmeta_once_t fixture_once = SALTS_ONCE_INIT;
 
 static void plugin_cflow_init_export(void) {
   fixture_export = (cmeta_plugin_export){
@@ -106,6 +106,6 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&fixture_once, plugin_cflow_init_export);
+  cmeta_once(&fixture_once, plugin_cflow_init_export);
   return &fixture_manifest;
 }

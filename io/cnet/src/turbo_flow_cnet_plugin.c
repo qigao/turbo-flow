@@ -60,7 +60,7 @@ struct cnet_plugin_owner_s {
 static cnet_plugin_root_t provider_root;
 static turbo_flow_provider_factory provider_factories[CNET_TYPED_KIND_COUNT];
 static cmeta_plugin_export provider_exports[CNET_TYPED_KIND_COUNT];
-static salts_once_t provider_once = SALTS_ONCE_INIT;
+static cmeta_once_t provider_once = SALTS_ONCE_INIT;
 
 static const char *provider_identity(unsigned kind) {
   switch (kind) {
@@ -1254,7 +1254,7 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&provider_once, provider_init);
+  cmeta_once(&provider_once, provider_init);
   provider_manifest.exports = provider_exports;
   provider_manifest.export_count = CNET_TYPED_KIND_COUNT;
   provider_manifest.start = provider_start;

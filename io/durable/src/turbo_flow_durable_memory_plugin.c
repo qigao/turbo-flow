@@ -347,7 +347,7 @@ CMETA_IMPLEMENTS(
 static turbo_flow_provider_factory provider_factory;
 static turbo_flow_durable_memory_resource resource_handle;
 static cmeta_plugin_export plugin_exports[2];
-static salts_once_t provider_once = SALTS_ONCE_INIT;
+static cmeta_once_t provider_once = SALTS_ONCE_INIT;
 
 static void provider_init(void) {
   memset(&provider_state, 0, sizeof(provider_state));
@@ -433,7 +433,7 @@ CMETA_PLUGIN_QUERY_EXPORT
 const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
 cmeta_plugin_query(uint32_t host_abi) {
   if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&provider_once, provider_init);
+  cmeta_once(&provider_once, provider_init);
   provider_manifest.exports = plugin_exports;
   provider_manifest.export_count = 2u;
   provider_manifest.start = provider_start;
