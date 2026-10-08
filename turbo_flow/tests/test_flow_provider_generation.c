@@ -18,9 +18,9 @@
 #endif
 
 typedef struct generation_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref provider;
-  salts_plugin_ref resource;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref provider;
+  cmeta_plugin_ref resource;
   unsigned provider_calls;
   unsigned resource_calls;
 } generation_resolver_fixture_t;
@@ -94,43 +94,43 @@ static void setup_resolvers(
 }
 
 static void start_registry(
-    salts_plugin_registry *registry,
-    salts_plugin_ref *provider,
-    salts_plugin_ref *resource) {
-  salts_plugin_registry_config config = {2u};
+    cmeta_plugin_registry *registry,
+    cmeta_plugin_ref *provider,
+    cmeta_plugin_ref *resource) {
+  cmeta_plugin_registry_config config = {2u};
   check_equal(
-      salts_plugin_registry_init(registry, &config),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_init(registry, &config),
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_load(
+      cmeta_plugin_registry_load(
           registry, FLOW_SALTS_PROVIDER_FIXTURE, provider),
-      SALTS_PLUGIN_OK);
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_load(
+      cmeta_plugin_registry_load(
           registry, FLOW_SALTS_RESOURCE_FIXTURE, resource),
-      SALTS_PLUGIN_OK);
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_start(registry, *provider),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_start(registry, *provider),
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_start(registry, *resource),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_start(registry, *resource),
+      CMETA_PLUGIN_OK);
 }
 
 static void stop_unload(
-    salts_plugin_registry *registry, salts_plugin_ref ref) {
+    cmeta_plugin_registry *registry, cmeta_plugin_ref ref) {
   bool quiescent = false;
   check_equal(
-      salts_plugin_registry_request_stop(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_request_stop(registry, ref),
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_poll_quiescent(
+      cmeta_plugin_registry_poll_quiescent(
           registry, ref, &quiescent),
-      SALTS_PLUGIN_OK);
+      CMETA_PLUGIN_OK);
   check_true(quiescent);
   check_equal(
-      salts_plugin_registry_unload(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_unload(registry, ref),
+      CMETA_PLUGIN_OK);
 }
 
 spec("canonical provider generation aggregate") {
@@ -202,9 +202,9 @@ spec("canonical provider generation aggregate") {
         "stage main {\n"
         "  ingress -> response\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     generation_resolver_fixture_t fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
@@ -251,22 +251,22 @@ spec("canonical provider generation aggregate") {
         SALTS_OK);
 
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &registry, provider_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &registry, resource_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
 
     turbo_flow_destroy(flow);
@@ -282,24 +282,24 @@ spec("canonical provider generation aggregate") {
     check_null(generation);
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, provider_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, provider_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_unload(&registry, resource_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, resource_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_destroy(&registry),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
   }
 
   it("counts a source-only provider as its own materialization root") {
@@ -309,9 +309,9 @@ spec("canonical provider generation aggregate") {
         "  batch 7\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     generation_resolver_fixture_t fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
@@ -346,8 +346,8 @@ spec("canonical provider generation aggregate") {
     stop_unload(&registry, provider_ref);
     stop_unload(&registry, resource_ref);
     check_equal(
-        salts_plugin_registry_destroy(&registry),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
   }
 
   it("rejects owner capacity before acquiring any provider or resource lease") {
@@ -362,9 +362,9 @@ spec("canonical provider generation aggregate") {
         "  batch 7\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     generation_resolver_fixture_t fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
@@ -395,8 +395,8 @@ spec("canonical provider generation aggregate") {
     stop_unload(&registry, provider_ref);
     stop_unload(&registry, resource_ref);
     check_equal(
-        salts_plugin_registry_destroy(&registry),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
   }
 
   it("releases earlier leases when a later typed config fails preflight") {
@@ -411,9 +411,9 @@ spec("canonical provider generation aggregate") {
         "  batch 0\n"
         "  concurrency 2\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     generation_resolver_fixture_t fixture = {0};
     turbo_flow_provider_resolver_v1_t provider_resolver;
     turbo_flow_resource_resolver_v1_t resource_resolver;
@@ -444,7 +444,7 @@ spec("canonical provider generation aggregate") {
     stop_unload(&registry, provider_ref);
     stop_unload(&registry, resource_ref);
     check_equal(
-        salts_plugin_registry_destroy(&registry),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
   }
 }
