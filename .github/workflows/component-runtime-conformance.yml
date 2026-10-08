@@ -231,6 +231,6 @@ jobs:
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
             build/component-runtime/dependency-results.xml
-            _deps/salts-utils/build/ci-sdk/Testing/Temporary/LastTest.log
+            _deps/salts-utils/build/ci-sdk/linux-x64/Testing/Temporary/LastTest.log
             build/component-runtime/Testing/Temporary/LastTest.log
             tests/install_consumer/component/build/component-installed/Testing/Temporary/LastTest.log
