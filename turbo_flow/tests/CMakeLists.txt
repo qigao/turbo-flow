@@ -70,6 +70,7 @@ cmake_add_test(
   test_flow_databind_service_plan
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_databind_service_plan.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/databind_service_business.c
     ${CMAKE_CURRENT_SOURCE_DIR}/databind_service_header_cpp.cpp
   LIBS
     TurboFlow::Product

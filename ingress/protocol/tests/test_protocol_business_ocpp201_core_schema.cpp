@@ -172,7 +172,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(encoded_json) - 1u);
     check_equal(encoded, encoded_json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     ResetRequest_clear(&request);
     data_bind_free(codec);
   }
@@ -196,7 +196,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(json) - 1u);
     check_equal(encoded, json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     UnlockConnectorRequest_clear(&request);
     data_bind_free(codec);
   }
