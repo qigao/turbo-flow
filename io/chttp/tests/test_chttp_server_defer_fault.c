@@ -59,7 +59,7 @@ static void chttp_fault_gated_completion(void *ctx,
                                          const turbo_flow_publish_result_t *result) {
   (void)ctx;
   atomic_store_explicit(&completion_entered, 1, memory_order_release);
-  while (!atomic_load_explicit(&completion_allowed, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&completion_allowed, memory_order_acquire)) cmeta_thread_yield();
   gated_completion(gated_completion_ctx, result);
 }
 
@@ -77,7 +77,7 @@ int chttp_test_publish_async(turbo_flow_t *flow, const char *source_name,
   }
   if (status == SALTS_OK && atomic_load_explicit(&publish_gate, memory_order_acquire)) {
     atomic_store_explicit(&publish_entered, 1, memory_order_release);
-    while (!atomic_load_explicit(&publish_allowed, memory_order_acquire)) salts_thread_yield();
+    while (!atomic_load_explicit(&publish_allowed, memory_order_acquire)) cmeta_thread_yield();
   }
   return status;
 }
@@ -236,7 +236,7 @@ static int chttp_fault_wait_active(turbo_flow_chttp_server_t *server, size_t exp
     const int status = turbo_flow_chttp_server_snapshot(server, &snapshot);
     if (status != SALTS_OK) return status;
     if (snapshot.active_requests == expected) return SALTS_OK;
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
   return SALTS_ETIMEDOUT;
 }
@@ -275,24 +275,24 @@ spec("CHTTP managed deferred server fault boundaries") {
     chttp_fault_client_t client = {0};
     turbo_flow_chttp_server_snapshot_t native = TURBO_FLOW_CHTTP_SERVER_SNAPSHOT_INIT;
     turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
     atomic_store_explicit(&defer_status, SALTS_EIO, memory_order_relaxed);
     atomic_store_explicit(&completion_allowed, 0, memory_order_relaxed);
     atomic_store_explicit(&completion_gate, 1, memory_order_release);
     client.port = owner.port;
-    check_equal(salts_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
     for (unsigned int elapsed = 0u;
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&completion_entered, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&completion_entered, memory_order_acquire), 1);
     for (unsigned int elapsed = 0u;
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&client.completed, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&client.completed, memory_order_acquire), 1);
     check_equal(turbo_flow_chttp_server_snapshot(owner.server, &native), SALTS_OK);
     check_equal(native.active_requests, (size_t)1u);
@@ -302,7 +302,7 @@ spec("CHTTP managed deferred server fault boundaries") {
     check_equal(managed.completed, (uint64_t)0u);
     check_equal(managed.in_flight, (uint64_t)1u);
     atomic_store_explicit(&completion_allowed, 1, memory_order_release);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     check_equal(client.status, SALTS_OK);
     check_equal(chttp_fault_wait_active(owner.server, 0u), SALTS_OK);
     check_equal(turbo_flow_chttp_server_snapshot(owner.server, &native), SALTS_OK);
@@ -376,21 +376,21 @@ spec("CHTTP managed deferred server fault boundaries") {
     chttp_fault_owner_t owner;
     chttp_fault_client_t client = {0};
     turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
     atomic_store_explicit(&publish_allowed, 0, memory_order_relaxed);
     atomic_store_explicit(&publish_gate, 1, memory_order_release);
     client.port = owner.port;
-    check_equal(salts_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
     for (unsigned int elapsed = 0u;
          elapsed < CHTTP_FAULT_TIMEOUT_MS &&
          !atomic_load_explicit(&publish_entered, memory_order_acquire);
          ++elapsed)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&publish_entered, memory_order_acquire), 1);
     check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_EBUSY);
     atomic_store_explicit(&publish_allowed, 1, memory_order_release);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     check_equal(client.status, SALTS_OK);
     check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);
     check_equal(managed.accepted, (uint64_t)1u);
@@ -433,24 +433,24 @@ spec("CHTTP managed deferred server fault boundaries") {
     chttp_fault_owner_t owner;
     chttp_fault_client_t client = {0};
     turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     check_equal(chttp_fault_owner_open(&owner), SALTS_OK);
     atomic_store_explicit(&reply_status, SALTS_ENOBUFS, memory_order_relaxed);
     atomic_store_explicit(&cancel_status, SALTS_EIO, memory_order_relaxed);
     client.port = owner.port;
-    check_equal(salts_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_fault_client_thread, &client), SALTS_OK);
     for (unsigned int elapsed = 0u; elapsed < CHTTP_FAULT_TIMEOUT_MS; ++elapsed) {
       if (turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed) == SALTS_OK &&
           managed.in_flight == 1u)
         break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(managed.in_flight, (uint64_t)1u);
     check_equal(managed.completed, (uint64_t)0u);
     atomic_store_explicit(&reply_status, SALTS_OK, memory_order_relaxed);
     atomic_store_explicit(&cancel_status, SALTS_OK, memory_order_relaxed);
     check_equal(chttp_test_server_retry_first(owner.server), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     check_equal(client.status, SALTS_OK);
     check_equal(chttp_fault_wait_active(owner.server, 0u), SALTS_OK);
     check_equal(turbo_flow_managed_boundary_snapshot_at(owner.flow, 0u, &managed), SALTS_OK);

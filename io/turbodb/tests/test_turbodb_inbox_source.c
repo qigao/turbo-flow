@@ -4,7 +4,7 @@
 #include "turbo_flow_turbodb.h"
 #include "turbodb_test_runtime.h"
 
-#include <salts_error.h>
+#include <salts/error_codes.h>
 
 #include <stdint.h>
 #include <stdlib.h>

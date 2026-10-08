@@ -79,9 +79,9 @@ spec("CHTTP bounded client stop failure") {
       check_equal(turbo_flow_publish_async(flow, "input", &message,
                                            chttp_adapter_publication_complete, &probe),
                   SALTS_OK);
-      deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+      deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
       while (atomic_load_explicit(&deferred.acquired, memory_order_acquire) == 0 &&
-             salts_monotonic_ms() < deadline)
+             cmeta_monotonic_ms() < deadline)
         check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
       check_equal(atomic_load_explicit(&deferred.acquired, memory_order_acquire), 1);
       check_equal(snapshot.active_requests, (size_t)1u);

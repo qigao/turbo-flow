@@ -1,8 +1,8 @@
 #include "tinytest.h"
 #include "turbo_flow_inbox.h"
 
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <salts/error_codes.h>
+#include <salts/thread.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -870,7 +870,7 @@ spec("flow intake inbox") {
     turbo_flow_inbox_memory_config_t config = inbox_test_config();
     turbo_flow_inbox_record_t record = inbox_test_record(correlation, payload);
     inbox_admit_worker_t workers[INBOX_TEST_ADMIT_THREADS] = {0};
-    salts_thread_t threads[INBOX_TEST_ADMIT_THREADS] = {0};
+    cmeta_thread_t threads[INBOX_TEST_ADMIT_THREADS] = {0};
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_inbox_t inbox = TURBO_FLOW_INBOX_INIT;
     const size_t attempted_admissions = INBOX_TEST_ADMIT_THREADS * INBOX_TEST_ADMITS_PER_THREAD;
@@ -885,11 +885,11 @@ spec("flow intake inbox") {
       workers[index].record = &record;
       workers[index].count = INBOX_TEST_ADMITS_PER_THREAD;
       workers[index].status = SALTS_EALREADY;
-      check_equal(salts_thread_create(&threads[index], inbox_admit_worker_run, &workers[index]),
+      check_equal(cmeta_thread_create(&threads[index], inbox_admit_worker_run, &workers[index]),
                   SALTS_OK);
     }
     for (size_t index = 0u; index < INBOX_TEST_ADMIT_THREADS; ++index) {
-      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
+      check_equal(cmeta_thread_join(&threads[index]), SALTS_OK);
       check_equal(workers[index].status, SALTS_OK);
       check_not_equal(workers[index].record_id, (uint64_t)0u);
       if (index != 0u) check_equal(workers[index].record_id, workers[0].record_id);

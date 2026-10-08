@@ -11,8 +11,8 @@
 #endif
 
 typedef struct resource_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
 } resource_resolver_fixture_t;
 
@@ -54,9 +54,9 @@ resource_requirement(void) {
 
 spec("TurboFlow deployment resource binding") {
   it("acquires exact Interface and keeps the resource module leased") {
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {1u};
+    cmeta_plugin_ref resource_ref = {0};
     resource_resolver_fixture_t fixture = {0};
     turbo_flow_resource_resolver_v1_t resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
@@ -69,13 +69,13 @@ spec("TurboFlow deployment resource binding") {
     flow_test_resource *resource;
     bool quiescent = false;
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_RESOURCE_FIXTURE, &resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
 
     fixture.registry = &registry;
     fixture.plugin = resource_ref;
@@ -99,30 +99,30 @@ spec("TurboFlow deployment resource binding") {
     check_true(flow_test_resource_valid(resource));
     check_equal(flow_test_resource_ping(resource), 7);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_request_stop(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_false(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
-                SALTS_PLUGIN_BUSY);
+    check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
+                CMETA_PLUGIN_BUSY);
 
     check_equal(turbo_flow_resource_binding_release(&binding), SALTS_OK);
     check_null(binding);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("rejects an incompatible exact resource contract and releases its lease") {
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {1u};
+    cmeta_plugin_ref resource_ref = {0};
     resource_resolver_fixture_t fixture = {0};
     turbo_flow_resource_resolver_v1_t resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
@@ -132,13 +132,13 @@ spec("TurboFlow deployment resource binding") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     bool quiescent = false;
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_RESOURCE_FIXTURE, &resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
 
     fixture.registry = &registry;
     fixture.plugin = resource_ref;
@@ -152,15 +152,15 @@ spec("TurboFlow deployment resource binding") {
     check_null(binding);
     check_equal(error.status, SALTS_EPROTO);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_request_stop(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("propagates explicit missing-resource failure without plugin discovery") {

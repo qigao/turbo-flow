@@ -2,7 +2,7 @@
 #include <tinytest.h>
 #include <turbo_flow_turbodb.h>
 
-#include <salts_error.h>
+#include <salts/error_codes.h>
 
 #include <stddef.h>
 #include <stdint.h>

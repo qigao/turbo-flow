@@ -2,7 +2,7 @@
 
 #include <cflow/publishers.h>
 #include <cstl/vec.h>
-#include <salts_error.h>
+#include <salts/error_codes.h>
 #include <tstr.h>
 
 #include <assert.h>
