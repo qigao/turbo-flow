@@ -509,7 +509,7 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     b->request.limits.max_steps = v.max_steps;
     turbo_flow_plugin_operation_error_v3_init(&b->error);
     atomic_init(&b->admission, 0);
-    salts_mutex_init(&b->error_mutex);
+    cmeta_mutex_init(&b->error_mutex);
     if (!b->error_mutex) return operation_error(error, i, "allocation", SALTS_ENOMEM);
   }
   return required > budget ? operation_error(error, 0, "memory", SALTS_ENOSPC) : SALTS_OK;
@@ -617,9 +617,9 @@ done:
   if (rc != SALTS_OK) {
     error.status = rc;
     error.message[sizeof(error.message) - 1] = 0;
-    salts_mutex_lock(&b->error_mutex);
+    cmeta_mutex_lock(&b->error_mutex);
     b->error = error;
-    salts_mutex_unlock(&b->error_mutex);
+    cmeta_mutex_unlock(&b->error_mutex);
   }
   if (accepted) atomic_fetch_sub(&b->admission, 1);
   return rc;
@@ -676,7 +676,7 @@ int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *e
 void flow_plugin_operations_free(vec_t *bindings) {
   for (size_t i = 0; i < vec_size(bindings); ++i) {
     flow_plugin_operation_binding_t *b = vec_at(bindings, i);
-    if (b->error_mutex) salts_mutex_destroy(&b->error_mutex);
+    if (b->error_mutex) cmeta_mutex_destroy(&b->error_mutex);
   }
   vec_destroy(bindings);
 }

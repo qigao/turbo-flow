@@ -27,7 +27,7 @@ static int flow_execution_task_cancel_status(flow_execution_task_t *task) {
 
 static int flow_execution_task_complete(flow_execution_task_t *task, int status) {
   int completed = 0;
-  salts_mutex_lock(&task->mutex);
+  cmeta_mutex_lock(&task->mutex);
   if (atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_COMPLETED &&
       atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_CANCELED) {
     task->status = status;
@@ -36,10 +36,10 @@ static int flow_execution_task_complete(flow_execution_task_t *task, int status)
                           status == SALTS_ECANCELED ? FLOW_EXECUTION_CANCELED
                                                     : FLOW_EXECUTION_COMPLETED,
                           memory_order_release);
-    salts_cond_broadcast(&task->cond);
+    cmeta_cond_broadcast(&task->cond);
     completed = 1;
   }
-  salts_mutex_unlock(&task->mutex);
+  cmeta_mutex_unlock(&task->mutex);
   return completed;
 }
 
@@ -60,8 +60,8 @@ int flow_execution_task_init(flow_execution_task_t *task, flow_execution_backend
   task->deadline_ms = deadline_ms;
   task->status = SALTS_EALREADY;
   turbo_flow_msg_init(&task->msg);
-  salts_mutex_init(&task->mutex);
-  salts_cond_init(&task->cond);
+  cmeta_mutex_init(&task->mutex);
+  cmeta_cond_init(&task->cond);
   task->sync_initialized = 1;
   atomic_init(&task->state, FLOW_EXECUTION_NEW);
   atomic_init(&task->cancel_requested, 0);
@@ -94,14 +94,14 @@ void flow_execution_task_run(flow_execution_task_t *task) {
     return;
   }
   if (task->deadline_ms != 0u) {
-    salts_mutex_lock(&task->mutex);
+    cmeta_mutex_lock(&task->mutex);
     atomic_store_explicit(&task->deadline_at_ns,
                           salts_hrtime() + task->deadline_ms * FLOW_NANOSECONDS_PER_MILLISECOND,
                           memory_order_release);
     task->completion.entry.deadline_at_ns =
         atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
-    salts_cond_broadcast(&task->cond);
-    salts_mutex_unlock(&task->mutex);
+    cmeta_cond_broadcast(&task->cond);
+    cmeta_mutex_unlock(&task->mutex);
   }
   status = flow_execution_task_cancel_status(task);
   if (status != SALTS_OK) {
@@ -134,7 +134,7 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
   int status;
   if (!task || !msg || !completion || !task->sync_initialized) return SALTS_EINVAL;
 
-  salts_mutex_lock(&task->mutex);
+  cmeta_mutex_lock(&task->mutex);
   while (atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_COMPLETED &&
          atomic_load_explicit(&task->state, memory_order_acquire) != FLOW_EXECUTION_CANCELED) {
     uint64_t deadline_at_ns = atomic_load_explicit(&task->deadline_at_ns, memory_order_acquire);
@@ -142,19 +142,19 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
         !atomic_load_explicit(&task->deadline_expired, memory_order_acquire)) {
       uint64_t now = salts_hrtime();
       if (now >= deadline_at_ns ||
-          salts_cond_timedwait(&task->cond, &task->mutex, deadline_at_ns - now) != 0) {
+          cmeta_cond_timedwait(&task->cond, &task->mutex, deadline_at_ns - now) != 0) {
         atomic_store_explicit(&task->deadline_expired, 1, memory_order_release);
         atomic_store_explicit(&task->cancel_requested, 1, memory_order_release);
       }
     } else {
-      salts_cond_wait(&task->cond, &task->mutex);
+      cmeta_cond_wait(&task->cond, &task->mutex);
     }
   }
   status = task->status;
   *completion = task->completion;
   completion->entry.completion_handle = completion;
   completion->entry.cancel_handle = NULL;
-  salts_mutex_unlock(&task->mutex);
+  cmeta_mutex_unlock(&task->mutex);
 
   rc = turbo_flow_msg_move(msg, &task->msg);
   return rc == SALTS_OK ? status : rc;
@@ -162,18 +162,18 @@ int flow_execution_task_wait(flow_execution_task_t *task, turbo_flow_msg_t *msg,
 
 void flow_execution_task_mark_accounting_done(flow_execution_task_t *task) {
   if (!task || !task->sync_initialized) return;
-  salts_mutex_lock(&task->mutex);
+  cmeta_mutex_lock(&task->mutex);
   atomic_store_explicit(&task->accounting_done, 1, memory_order_release);
-  salts_cond_broadcast(&task->cond);
-  salts_mutex_unlock(&task->mutex);
+  cmeta_cond_broadcast(&task->cond);
+  cmeta_mutex_unlock(&task->mutex);
 }
 
 void flow_execution_task_wait_accounting(flow_execution_task_t *task) {
   if (!task || !task->sync_initialized) return;
-  salts_mutex_lock(&task->mutex);
+  cmeta_mutex_lock(&task->mutex);
   while (!atomic_load_explicit(&task->accounting_done, memory_order_acquire))
-    salts_cond_wait(&task->cond, &task->mutex);
-  salts_mutex_unlock(&task->mutex);
+    cmeta_cond_wait(&task->cond, &task->mutex);
+  cmeta_mutex_unlock(&task->mutex);
 }
 
 int flow_execution_task_abort(flow_execution_task_t *task) {
@@ -203,7 +203,7 @@ int flow_execution_yield(void) {
   if (task->backend == FLOW_EXECUTION_CORO) {
     if (coro_yield() != 0) return SALTS_EINVAL;
   } else {
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
   return flow_execution_task_cancel_status(task);
 }
@@ -244,8 +244,8 @@ void flow_execution_task_cleanup(flow_execution_task_t *task) {
   if (!task) return;
   turbo_flow_msg_cleanup(&task->msg);
   if (task->sync_initialized) {
-    salts_cond_destroy(&task->cond);
-    salts_mutex_destroy(&task->mutex);
+    cmeta_cond_destroy(&task->cond);
+    cmeta_mutex_destroy(&task->mutex);
   }
   memset(task, 0, sizeof(*task));
 }

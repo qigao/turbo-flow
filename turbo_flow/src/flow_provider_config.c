@@ -1,6 +1,6 @@
 #include "flow_provider_config_internal.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include "turbo_flow_stl_error_internal.h"
 
 #include <stddef.h>

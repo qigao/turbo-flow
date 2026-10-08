@@ -26,7 +26,7 @@ struct flow_async_publication_s {
   const char *source_name;
   turbo_flow_msg_t message;
   uint64_t observe_start;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   size_t pending;
   int sealed;
   int owner_active;
@@ -71,18 +71,18 @@ static void flow_async_publication_finalize(flow_async_publication_t *publicatio
   flow_observer_emit(flow, &event);
   if (publication->finish) publication->finish(publication->finish_ctx, &result);
   turbo_flow_msg_cleanup(&publication->message);
-  salts_mutex_destroy(&publication->mutex);
+  cmeta_mutex_destroy(&publication->mutex);
   free(publication);
   flow_publish_leave(flow);
 }
 
 static void flow_async_publication_release(flow_async_publication_t *publication, int status) {
   int finalize = 0;
-  salts_mutex_lock(&publication->mutex);
+  cmeta_mutex_lock(&publication->mutex);
   if (publication->status == SALTS_OK && status != SALTS_OK) publication->status = status;
   if (publication->pending > 0u) --publication->pending;
   if (publication->sealed && !publication->owner_active && publication->pending == 0u) finalize = 1;
-  salts_mutex_unlock(&publication->mutex);
+  cmeta_mutex_unlock(&publication->mutex);
   if (finalize) flow_async_publication_finalize(publication);
 }
 
@@ -110,10 +110,10 @@ flow_async_publication_t *flow_async_publication_create(turbo_flow_t *flow, cons
   publication->finish = finish;
   publication->finish_ctx = ctx;
   publication->previous_scope = flow_current_async_publication;
-  salts_mutex_init(&publication->mutex);
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_init(&publication->mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   ++flow->active_publishes;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   flow_current_async_publication = publication;
   return publication;
 }
@@ -124,21 +124,21 @@ void flow_async_publication_seal(flow_async_publication_t *publication, int stat
   if (flow_current_async_publication == publication) {
     flow_current_async_publication = publication->previous_scope;
   }
-  salts_mutex_lock(&publication->mutex);
+  cmeta_mutex_lock(&publication->mutex);
   if (publication->status == SALTS_OK && status != SALTS_OK) publication->status = status;
   publication->sealed = 1;
   if (!publication->owner_active && publication->pending == 0u) finalize = 1;
-  salts_mutex_unlock(&publication->mutex);
+  cmeta_mutex_unlock(&publication->mutex);
   if (finalize) flow_async_publication_finalize(publication);
 }
 
 void flow_async_publication_owner_leave(flow_async_publication_t *publication) {
   int finalize = 0;
   if (!publication) return;
-  salts_mutex_lock(&publication->mutex);
+  cmeta_mutex_lock(&publication->mutex);
   if (publication->owner_active) publication->owner_active = 0;
   if (publication->sealed && publication->pending == 0u) finalize = 1;
-  salts_mutex_unlock(&publication->mutex);
+  cmeta_mutex_unlock(&publication->mutex);
   if (finalize) flow_async_publication_finalize(publication);
 }
 
@@ -347,9 +347,9 @@ int flow_async_terminal_submit_stage(turbo_flow_t *flow, const flow_stage_plan_i
   impl->stage_index = completion->entry.stage_index;
   impl->completion = *completion;
   impl->sink_observer = flow_sink_completion_scope_current();
-  salts_mutex_lock(&impl->publication->mutex);
+  cmeta_mutex_lock(&impl->publication->mutex);
   ++impl->publication->pending;
-  salts_mutex_unlock(&impl->publication->mutex);
+  cmeta_mutex_unlock(&impl->publication->mutex);
   claim._impl = impl;
   view = flow_compiled_stage_view(flow, completion->entry.stage_index);
   if (!view) {
@@ -406,9 +406,9 @@ int flow_async_emit_submit_stage(turbo_flow_t *flow, const flow_stage_plan_impl_
   impl->stage_index = completion->entry.stage_index;
   impl->completion = *completion;
   impl->sink_observer = flow_sink_completion_scope_current();
-  salts_mutex_lock(&impl->publication->mutex);
+  cmeta_mutex_lock(&impl->publication->mutex);
   ++impl->publication->pending;
-  salts_mutex_unlock(&impl->publication->mutex);
+  cmeta_mutex_unlock(&impl->publication->mutex);
   claim._impl = impl;
   view = flow_compiled_stage_view(flow, completion->entry.stage_index);
   if (!view) {

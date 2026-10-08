@@ -54,7 +54,7 @@ static int flow_async_message_retained_bytes(const turbo_flow_msg_t *message, si
 
 static int flow_async_ingress_reserve(turbo_flow_t *flow, size_t bytes) {
   int rc = SALTS_OK;
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   if (bytes > flow->async_ingress_config.max_message_bytes ||
       flow->async_ingress_inflight_bytes >
           flow->async_ingress_config.max_inflight_bytes - bytes) {
@@ -62,14 +62,14 @@ static int flow_async_ingress_reserve(turbo_flow_t *flow, size_t bytes) {
   } else {
     flow->async_ingress_inflight_bytes += bytes;
   }
-  salts_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
   return rc;
 }
 
 static void flow_async_ingress_release(turbo_flow_t *flow, size_t bytes) {
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   flow->async_ingress_inflight_bytes -= bytes;
-  salts_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
 }
 
 int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
@@ -79,53 +79,53 @@ int turbo_flow_configure_async_ingress(turbo_flow_t *flow,
     return SALTS_EINVAL;
   if (flow->state == TURBO_FLOW_STATE_STARTED) return SALTS_EBUSY;
 
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   if (flow->async_ingress_pool) {
-    salts_mutex_unlock(&flow->async_ingress_mutex);
+    cmeta_mutex_unlock(&flow->async_ingress_mutex);
     return SALTS_EBUSY;
   }
   flow->async_ingress_config = resolved;
-  salts_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
   return SALTS_OK;
 }
 
-static salts_threadpool_t *flow_async_ingress_get_or_create(turbo_flow_t *flow) {
+static cmeta_threadpool_t *flow_async_ingress_get_or_create(turbo_flow_t *flow) {
   turbo_flow_async_ingress_config_t ingress_config;
-  salts_threadpool_config_t pool_config;
-  salts_threadpool_t *candidate;
-  salts_threadpool_t *pool;
+  cmeta_threadpool_config_t pool_config;
+  cmeta_threadpool_t *candidate;
+  cmeta_threadpool_t *pool;
 
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   pool = flow->async_ingress_pool;
   ingress_config = flow->async_ingress_config;
-  salts_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
   if (pool) return pool;
 
   pool_config.num_threads = (int)ingress_config.workers;
   pool_config.queue_capacity = ingress_config.queue_capacity;
-  candidate = salts_threadpool_create_with_config(&pool_config);
+  candidate = cmeta_threadpool_create_with_config(&pool_config);
   if (!candidate) return NULL;
 
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   if (!flow->async_ingress_pool) {
     flow->async_ingress_pool = candidate;
     candidate = NULL;
   }
   pool = flow->async_ingress_pool;
-  salts_mutex_unlock(&flow->async_ingress_mutex);
-  salts_threadpool_destroy(candidate);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_threadpool_destroy(candidate);
   return pool;
 }
 
 void flow_stop_async_ingress(turbo_flow_t *flow) {
-  salts_threadpool_t *pool;
+  cmeta_threadpool_t *pool;
   if (!flow || !flow->runtime_sync_initialized) return;
 
-  salts_mutex_lock(&flow->async_ingress_mutex);
+  cmeta_mutex_lock(&flow->async_ingress_mutex);
   pool = flow->async_ingress_pool;
   flow->async_ingress_pool = NULL;
-  salts_mutex_unlock(&flow->async_ingress_mutex);
-  salts_threadpool_destroy(pool);
+  cmeta_mutex_unlock(&flow->async_ingress_mutex);
+  cmeta_threadpool_destroy(pool);
 }
 
 static void flow_async_publish_task_run(void *arg) {
@@ -164,7 +164,7 @@ int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
                              turbo_flow_publish_completion_fn completion, void *ctx) {
   flow_async_publish_task_t *task = NULL;
   const flow_stage_plan_impl_t *source;
-  salts_threadpool_t *pool;
+  cmeta_threadpool_t *pool;
   int source_index;
   int entered = 0;
   int budget_reserved = 0;
@@ -245,7 +245,7 @@ int turbo_flow_publish_async(turbo_flow_t *flow, const char *source_name,
                                    "async ingress worker pool creation failed");
     goto cleanup;
   }
-  if (salts_threadpool_try_submit(pool, flow_async_publish_task_run, task) != 0) {
+  if (cmeta_threadpool_try_submit(pool, flow_async_publish_task_run, task) != 0) {
     rc = flow_set_error_keep_state(flow, SALTS_ENOSPC, 0, 0, "async ingress capacity is exhausted");
     goto cleanup;
   }

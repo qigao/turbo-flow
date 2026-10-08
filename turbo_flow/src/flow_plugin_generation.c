@@ -842,8 +842,8 @@ int turbo_flow_plugin_generation_operation_error(const turbo_flow_plugin_generat
       index >= vec_size(&generation->bindings))
     return SALTS_EINVAL;
   binding = (flow_plugin_operation_binding_t *)vec_at_const(&generation->bindings, index);
-  salts_mutex_lock(&binding->error_mutex);
+  cmeta_mutex_lock(&binding->error_mutex);
   *out = binding->error;
-  salts_mutex_unlock(&binding->error_mutex);
+  cmeta_mutex_unlock(&binding->error_mutex);
   return SALTS_OK;
 }

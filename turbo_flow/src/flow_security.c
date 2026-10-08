@@ -1,10 +1,10 @@
 #include "turbo_flow_security.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include "turbo_flow_stl_error_internal.h"
 #include <json_parser.h>
 #include "tstr.h"
-#include "salts_thread.h"
+#include <cmeta_thread.h>
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -73,7 +73,7 @@ struct turbo_flow_security_realm_s {
   tstr owner_name;
   tstr policy_source;
   turbo_flow_security_matcher_t matcher;
-  salts_mutex_t snapshot_lock;
+  cmeta_mutex_t snapshot_lock;
   flow_security_policy_snapshot_t *active;
   const turbo_flow_security_policy_provider_t *policy_provider;
   const turbo_flow_security_authorization_provider_t *authorization_provider;
@@ -749,10 +749,10 @@ static int flow_security_policy_snapshot_create(uint64_t policy_version, uint64_
 static flow_security_policy_snapshot_t *
 flow_security_policy_snapshot_acquire(turbo_flow_security_realm_t *realm) {
   flow_security_policy_snapshot_t *snapshot;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   snapshot = realm->active;
   if (snapshot) (void)atomic_fetch_add_explicit(&snapshot->references, 1u, memory_order_relaxed);
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   return snapshot;
 }
 
@@ -765,7 +765,7 @@ int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *c
   if (!out || !flow_security_realm_config_valid(config)) return SALTS_EINVAL;
   realm = (turbo_flow_security_realm_t *)calloc(1u, sizeof(*realm));
   if (!realm) return SALTS_ENOMEM;
-  salts_mutex_init(&realm->snapshot_lock);
+  cmeta_mutex_init(&realm->snapshot_lock);
   policy_source = config->size >= sizeof(*config) ? config->policy_source : NULL;
   realm->resource_uid = tstr_dup(config->resource_uid);
   realm->owner_name = tstr_dup(config->owner_name);
@@ -795,14 +795,14 @@ int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *c
 void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm) {
   flow_security_policy_snapshot_t *active;
   if (!realm) return;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   active = realm->active;
   realm->active = NULL;
   realm->policy_provider = NULL;
   realm->authorization_provider = NULL;
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   flow_security_policy_snapshot_release(active);
-  salts_mutex_destroy(&realm->snapshot_lock);
+  cmeta_mutex_destroy(&realm->snapshot_lock);
   tstr_freep(&realm->resource_uid);
   tstr_freep(&realm->owner_name);
   tstr_freep(&realm->policy_source);
@@ -819,13 +819,13 @@ int turbo_flow_security_realm_bind_policy_provider(
   if (!realm || !realm->policy_source || !provider || provider->size < sizeof(*provider) ||
       !provider->load || !provider->release)
     return SALTS_EINVAL;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   if (realm->authorization_provider)
     rc = SALTS_EBUSY;
   else if (realm->policy_provider)
     rc = realm->policy_provider == provider ? SALTS_EALREADY : SALTS_EBUSY;
   else realm->policy_provider = provider;
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   return rc;
 }
 
@@ -836,14 +836,14 @@ int turbo_flow_security_realm_bind_authorization_provider(
   if (!realm || !realm->policy_source || !provider || provider->size < sizeof(*provider) ||
       !provider->authorize)
     return SALTS_EINVAL;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   if (realm->policy_provider)
     rc = SALTS_EBUSY;
   else if (realm->authorization_provider)
     rc = realm->authorization_provider == provider ? SALTS_EALREADY : SALTS_EBUSY;
   else
     realm->authorization_provider = provider;
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   return rc;
 }
 
@@ -857,10 +857,10 @@ int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm, uint64
   int bundle_loaded = 0;
   int rc;
   if (!realm || !realm->policy_source) return SALTS_EINVAL;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   provider = realm->policy_provider;
   if (realm->active) active_version = realm->active->policy_version;
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   if (!provider) return SALTS_ENOTSUP;
   rc = provider->load(provider->ctx, required_version, &bundle);
   if (rc != SALTS_OK) goto done;
@@ -878,7 +878,7 @@ int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm, uint64
   rc = flow_security_policy_snapshot_create(bundle.policy_version, bundle.expires_at, bundle.rules,
                                             bundle.rule_count, &realm->matcher, &replacement);
   if (rc != SALTS_OK) goto done;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   if (realm->active && realm->active->policy_version > replacement->policy_version) {
     rc = SALTS_EBUSY;
   } else if (realm->active && realm->active->policy_version == replacement->policy_version) {
@@ -891,7 +891,7 @@ int turbo_flow_security_realm_refresh(turbo_flow_security_realm_t *realm, uint64
     realm->active = replacement;
     replacement = NULL;
   }
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
 
 done:
   flow_security_policy_snapshot_release(previous);
@@ -1193,9 +1193,9 @@ int turbo_flow_security_realm_authorize(turbo_flow_security_realm_t *realm,
   int needs_refresh = 0;
   int rc;
   if (!flow_security_request_valid(realm, request, decision)) return SALTS_EINVAL;
-  salts_mutex_lock(&realm->snapshot_lock);
+  cmeta_mutex_lock(&realm->snapshot_lock);
   authorization_provider = realm->authorization_provider;
-  salts_mutex_unlock(&realm->snapshot_lock);
+  cmeta_mutex_unlock(&realm->snapshot_lock);
   if (authorization_provider) {
     turbo_flow_security_decision_t remote = TURBO_FLOW_SECURITY_DECISION_INIT;
     rc = authorization_provider->authorize(authorization_provider->ctx, request,

@@ -381,16 +381,16 @@ turbo_flow_t *turbo_flow_create(void) {
   turbo_flow_t *flow = (turbo_flow_t *)calloc(1, sizeof(turbo_flow_t));
   if (!flow) return NULL;
 
-  salts_mutex_init(&flow->runtime_mutex);
-  salts_cond_init(&flow->runtime_cond);
-  salts_mutex_init(&flow->broadcast_mutex);
-  salts_mutex_init(&flow->async_ingress_mutex);
+  cmeta_mutex_init(&flow->runtime_mutex);
+  cmeta_cond_init(&flow->runtime_cond);
+  cmeta_mutex_init(&flow->broadcast_mutex);
+  cmeta_mutex_init(&flow->async_ingress_mutex);
   if (!flow->runtime_mutex || !flow->runtime_cond || !flow->broadcast_mutex ||
       !flow->async_ingress_mutex) {
-    salts_cond_destroy(&flow->runtime_cond);
-    salts_mutex_destroy(&flow->async_ingress_mutex);
-    salts_mutex_destroy(&flow->broadcast_mutex);
-    salts_mutex_destroy(&flow->runtime_mutex);
+    cmeta_cond_destroy(&flow->runtime_cond);
+    cmeta_mutex_destroy(&flow->async_ingress_mutex);
+    cmeta_mutex_destroy(&flow->broadcast_mutex);
+    cmeta_mutex_destroy(&flow->runtime_mutex);
     free(flow);
     return NULL;
   }
@@ -528,10 +528,10 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
   }
   if (flow->runtime_sync_initialized) {
-    salts_cond_destroy(&flow->runtime_cond);
-    salts_mutex_destroy(&flow->async_ingress_mutex);
-    salts_mutex_destroy(&flow->broadcast_mutex);
-    salts_mutex_destroy(&flow->runtime_mutex);
+    cmeta_cond_destroy(&flow->runtime_cond);
+    cmeta_mutex_destroy(&flow->async_ingress_mutex);
+    cmeta_mutex_destroy(&flow->broadcast_mutex);
+    cmeta_mutex_destroy(&flow->runtime_mutex);
   }
   if (flow_active_error_owner == flow) flow_active_error_owner = NULL;
   if (flow_last_publish_error_owner == flow) flow_last_publish_error_owner = NULL;
@@ -2516,15 +2516,15 @@ const turbo_flow_adapter_schema_t *turbo_flow_find_adapter_schema(const turbo_fl
 turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow) {
   turbo_flow_state_t state;
   if (!flow || !flow->runtime_sync_initialized) return TURBO_FLOW_STATE_FAILED;
-  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&flow->runtime_mutex);
   state = flow->state;
-  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&flow->runtime_mutex);
   return state;
 }
 
 int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_snapshot_t *out) {
   if (!flow || !out || !flow->runtime_sync_initialized) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&flow->runtime_mutex);
   memset(out, 0, sizeof(*out));
   out->state = flow->state;
   out->accepting_publishes = flow->admission_state == FLOW_ADMISSION_OPEN;
@@ -2533,7 +2533,7 @@ int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_sna
   out->edge_count = vec_size(&flow->edges);
   out->adapter_count = vec_size(&flow->adapters);
   out->pool_count = vec_size(&flow->pool_records);
-  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&flow->runtime_mutex);
   return SALTS_OK;
 }
 

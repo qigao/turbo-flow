@@ -129,17 +129,17 @@ static int flow_stop_adapter_phase(turbo_flow_t *flow, int source_phase) {
 
     if (adapter->ops.stop) {
       turbo_flow_t *previous_stop_owner = flow_active_adapter_stop_owner;
-      salts_mutex_lock(&flow->runtime_mutex);
+      cmeta_mutex_lock(&flow->runtime_mutex);
       flow->adapter_stop_callback_active = 1;
       flow->adapter_stop_callback_status = SALTS_OK;
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       flow_active_adapter_stop_owner = flow;
       adapter->ops.stop(adapter->ctx, flow, view);
       flow_active_adapter_stop_owner = previous_stop_owner;
-      salts_mutex_lock(&flow->runtime_mutex);
+      cmeta_mutex_lock(&flow->runtime_mutex);
       status = flow->adapter_stop_callback_status;
       flow->adapter_stop_callback_active = 0;
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
     } else {
       status = SALTS_OK;
     }
@@ -208,14 +208,14 @@ int turbo_flow_adapter_report_stop_status(turbo_flow_t *flow, int status) {
   if (!flow || status == SALTS_OK || !flow->runtime_sync_initialized ||
       flow_active_adapter_stop_owner != flow)
     return SALTS_EINVAL;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (!flow->adapter_stop_callback_active) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_EINVAL;
   }
   if (flow->adapter_stop_callback_status == SALTS_OK)
     flow->adapter_stop_callback_status = status;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return SALTS_OK;
 }
 
@@ -330,14 +330,14 @@ fail:
   {
     const int rollback_status = flow_stop_adapters(flow);
     if (rollback_status != SALTS_OK) {
-      salts_mutex_lock(&flow->runtime_mutex);
+      cmeta_mutex_lock(&flow->runtime_mutex);
       (void)flow_set_error_keep_state(flow, rollback_status, 0, 0,
                                       "adapter stop failed during start rollback");
       flow->state = TURBO_FLOW_STATE_FAILED;
       flow->admission_state = FLOW_ADMISSION_CLOSED;
       flow->adapter_stop_retryable = 1;
-      salts_cond_broadcast(&flow->runtime_cond);
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_cond_broadcast(&flow->runtime_cond);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       return rollback_status;
     }
   }

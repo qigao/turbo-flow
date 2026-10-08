@@ -10,8 +10,8 @@
 
 struct turbo_flow_run_s {
   atomic_uint ref_count;
-  salts_mutex_t mutex;
-  salts_cond_t cond;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t cond;
   turbo_flow_t *flow;
   uint32_t source_index;
   const char *source_name;
@@ -51,10 +51,10 @@ static void flow_run_notify_graph_complete(turbo_flow_run_t *run, int status) {
   flow_run_completion_observer_fn fn = NULL;
   void *ctx = NULL;
   if (!run) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   fn = run->graph_complete;
   ctx = run->completion_observer_ctx;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (fn) fn(ctx, status);
 }
 
@@ -62,8 +62,8 @@ static void flow_run_release(turbo_flow_run_t *run) {
   if (!run || atomic_fetch_sub_explicit(&run->ref_count, 1u, memory_order_acq_rel) != 1u) return;
   cflow_subscription_close(&run->subscription);
   cflow_graph_destroy(&run->graph);
-  salts_cond_destroy(&run->cond);
-  salts_mutex_destroy(&run->mutex);
+  cmeta_cond_destroy(&run->cond);
+  cmeta_mutex_destroy(&run->mutex);
   free(run);
 }
 
@@ -129,13 +129,13 @@ static void flow_run_registry_remove(turbo_flow_run_t *run) {
   turbo_flow_t *flow;
   size_t count;
   if (!run) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (!atomic_load_explicit(&run->registered, memory_order_acquire) ||
       !(flow = run->flow)) {
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
     return;
   }
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (atomic_load_explicit(&run->registered, memory_order_relaxed)) {
     count = vec_size(&flow->active_runs);
     for (size_t i = 0u; i < count; ++i) {
@@ -148,27 +148,27 @@ static void flow_run_registry_remove(turbo_flow_run_t *run) {
     }
     atomic_store_explicit(&run->registered, 0, memory_order_release);
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&run->mutex);
 }
 
 static void flow_run_cancel_deadline(turbo_flow_run_t *run) {
   cflow_task_id task_id = 0u;
   int release_ref = 0;
   if (!run) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (run->deadline_ref_pending && run->deadline_task_id != 0u) {
     task_id = run->deadline_task_id;
     run->deadline_task_id = 0u;
   }
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (task_id != 0u && cflow_scheduler_cancel(run->scheduler, task_id)) {
-    salts_mutex_lock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
     if (run->deadline_ref_pending) {
       run->deadline_ref_pending = 0;
       release_ref = 1;
     }
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
   }
   if (release_ref) flow_run_release(run);
 }
@@ -178,7 +178,7 @@ static int flow_run_finish(turbo_flow_run_t *run, turbo_flow_run_state_t state, 
   turbo_flow_t *flow;
   int won = 0;
   if (!run) return 0;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   flow = run->flow;
   if (!run->terminal) {
     run->terminal = 1;
@@ -186,23 +186,23 @@ static int flow_run_finish(turbo_flow_run_t *run, turbo_flow_run_state_t state, 
     run->status = status;
     if (status != SALTS_OK) flow_run_copy_error(run, status, message);
     won = 1;
-    salts_cond_broadcast(&run->cond);
+    cmeta_cond_broadcast(&run->cond);
   }
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (!won) return 0;
   flow_run_cancel_deadline(run);
   if (detach) flow_run_registry_remove(run);
   /* Deadlines retain registry membership. Publish allowance and the actual
    * lifetime release must change atomically even on that detach=0 path. */
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   run->lifetime_counted = 0;
   if (flow->active_publishes > 0u) --flow->active_publishes;
-  if (flow->active_publishes == 0u) salts_cond_broadcast(&flow->runtime_cond);
-  salts_mutex_unlock(&flow->runtime_mutex);
+  if (flow->active_publishes == 0u) cmeta_cond_broadcast(&flow->runtime_cond);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   if (detach) {
-    salts_mutex_lock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
     run->flow = NULL;
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
   }
   return 1;
 }
@@ -212,9 +212,9 @@ static void flow_run_async_value_finish(void *user, const turbo_flow_publish_res
   int fail = 0;
   int complete = 0;
   if (!run || !result) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (run->pending_values > 0u) --run->pending_values;
-  if (run->pending_values == 0u) salts_cond_broadcast(&run->cond);
+  if (run->pending_values == 0u) cmeta_cond_broadcast(&run->cond);
   if (!run->terminal) {
     if (result->status == SALTS_OK) {
       ++run->values;
@@ -225,7 +225,7 @@ static void flow_run_async_value_finish(void *user, const turbo_flow_publish_res
       fail = 1;
     }
   }
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (fail) {
     cflow_subscription_cancel(&run->subscription);
     cflow_subscription_close(&run->subscription);
@@ -255,16 +255,16 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
     return false;
   }
   flow_run_retain(run);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   flow = run->flow;
   if (run->terminal || !flow) {
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
     flow_run_release(run);
     return false;
   }
   sink_complete = run->sink_complete;
   completion_observer_ctx = run->completion_observer_ctx;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
 
   /* A managed subscription owns a lifetime count even while idle. Its values
    * additionally own an admission-fenced execution region, so durable retirement
@@ -277,16 +277,16 @@ static bool flow_run_on_value(void *user, const cmeta_type_desc *type, const voi
 
   if (!run->drain_on_stop && flow->has_async_stage) {
     flow_run_retain(run);
-    salts_mutex_lock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
     ++run->pending_values;
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
     publication = flow_async_publication_create(
         flow, run->source_name, (const turbo_flow_msg_t *)value,
         flow_observer_has_handlers(flow) ? salts_hrtime() : 0u, flow_run_async_value_finish, run);
     if (!publication) {
-      salts_mutex_lock(&run->mutex);
+      cmeta_mutex_lock(&run->mutex);
       --run->pending_values;
-      salts_mutex_unlock(&run->mutex);
+      cmeta_mutex_unlock(&run->mutex);
       flow_run_release(run);
       rc = SALTS_ENOMEM;
       goto record_result;
@@ -322,14 +322,14 @@ record_result:
     flow_sink_completion_scope_leave(previous_sink_scope);
     sink_scope_entered = 0;
   }
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (!publication && rc == SALTS_OK) {
     ++run->values;
   } else if (!publication && rc != SALTS_OK) {
     run->pending_status = rc;
     if (error) run->error = *error;
   }
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (error_context_entered) flow_publish_error_context_end(flow);
   if (publication) flow_async_publication_owner_leave(publication);
   if (region_entered) flow_publish_leave(flow);
@@ -342,9 +342,9 @@ static void flow_run_on_error(void *user, const char *message) {
   int status;
   if (!run) return;
   flow_run_retain(run);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   status = run->pending_status;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (status == SALTS_OK) {
     status = flow_run_status_from_cflow(cflow_subscription_status(&run->subscription));
     if (status == SALTS_OK) status = SALTS_EIO;
@@ -360,10 +360,10 @@ static void flow_run_on_done(void *user) {
   if (!run) return;
   flow_run_retain(run);
   cflow_subscription_close(&run->subscription);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   run->upstream_done = 1;
   complete = !run->terminal && run->pending_values == 0u;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (complete) (void)flow_run_finish(run, TURBO_FLOW_RUN_COMPLETED, SALTS_OK, NULL, 1);
   flow_run_release(run);
 }
@@ -374,9 +374,9 @@ static int flow_run_cancel_with_status(turbo_flow_run_t *run, int status) {
   int terminal;
   if (!run) return SALTS_EINVAL;
   flow_run_retain(run);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   terminal = run->terminal;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (terminal) {
     flow_run_release(run);
     return SALTS_EALREADY;
@@ -395,19 +395,19 @@ static void flow_run_deadline_task(void *user) {
   turbo_flow_run_t *run = (turbo_flow_run_t *)user;
   int setup_complete;
   if (!run) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   run->deadline_task_id = 0u;
   setup_complete = run->setup_complete;
   if (!setup_complete) run->deadline_fired = 1;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (setup_complete) {
     cflow_subscription_cancel(&run->subscription);
     (void)flow_run_finish(run, TURBO_FLOW_RUN_FAILED, SALTS_ETIMEDOUT,
                           "Reactive run deadline expired", 0);
   }
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   run->deadline_ref_pending = 0;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   flow_run_release(run);
 }
 
@@ -425,7 +425,7 @@ static int flow_run_graph_init(turbo_flow_run_t *run) {
 static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
                                  int managed_source_start, int buffer_drain) {
   int rc = SALTS_OK;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (!flow->reactive_scheduler_initialized ||
       (!managed_source_start &&
        (flow->state != TURBO_FLOW_STATE_STARTED ||
@@ -444,7 +444,7 @@ static int flow_run_registry_add(turbo_flow_t *flow, turbo_flow_run_t *run,
     run->lifetime_counted = 1;
     atomic_store_explicit(&run->registered, 1, memory_order_release);
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
@@ -474,7 +474,7 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     effective = *config;
   }
   if (buffer_drain) {
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     if (buffer_origin && flow->state == TURBO_FLOW_STATE_STARTED &&
         (flow->admission_state == FLOW_ADMISSION_OPEN ||
          flow->admission_state == FLOW_ADMISSION_PAUSED)) {
@@ -483,9 +483,9 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     } else {
       rc = SALTS_ESHUTDOWN;
     }
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
   } else if (managed_source_start) {
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     if ((flow->state == TURBO_FLOW_STATE_COMPILED || flow->state == TURBO_FLOW_STATE_STOPPED) &&
         (flow->admission_state == FLOW_ADMISSION_CLOSED ||
          flow->admission_state == FLOW_ADMISSION_STOPPING) &&
@@ -495,7 +495,7 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     } else {
       rc = SALTS_EINVAL;
     }
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
   } else {
     rc = flow_publish_enter(flow);
   }
@@ -526,8 +526,8 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
   }
   atomic_init(&run->ref_count, 1u);
   atomic_init(&run->registered, 0);
-  salts_mutex_init(&run->mutex);
-  salts_cond_init(&run->cond);
+  cmeta_mutex_init(&run->mutex);
+  cmeta_cond_init(&run->cond);
   if (!run->mutex || !run->cond) {
     rc = SALTS_ENOMEM;
     goto cleanup;
@@ -569,9 +569,9 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
       rc = flow_run_status_from_admission(deadline_result.status);
       goto cleanup;
     }
-    salts_mutex_lock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
     if (run->deadline_ref_pending) run->deadline_task_id = deadline_result.task_id;
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
   }
 
   rc = flow_run_registry_add(flow, run, managed_source_start, buffer_drain);
@@ -583,10 +583,10 @@ static int flow_run_open_origin_internal(turbo_flow_t *flow, const char *source_
     flow_run_registry_remove(run);
     goto cleanup;
   }
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   run->setup_complete = 1;
   deadline_fired = run->deadline_fired;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   *run_out = run;
   entered = 0;
   if (deadline_fired) (void)flow_run_cancel_with_status(run, SALTS_ETIMEDOUT);
@@ -644,25 +644,25 @@ int flow_run_set_completion_observers(turbo_flow_run_t *run,
                                       flow_run_completion_observer_fn sink_complete,
                                       void *ctx) {
   if (!run || (!graph_complete && !sink_complete)) return SALTS_EINVAL;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (run->terminal || run->state != TURBO_FLOW_RUN_OPEN || run->values != 0u ||
       run->pending_values != 0u || run->graph_complete || run->sink_complete) {
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
     return SALTS_EBUSY;
   }
   run->graph_complete = graph_complete;
   run->sink_complete = sink_complete;
   run->completion_observer_ctx = ctx;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   return SALTS_OK;
 }
 
 int flow_run_has_pending_values(const turbo_flow_run_t *run) {
   int pending;
   if (!run) return 0;
-  salts_mutex_lock((salts_mutex_t *)&run->mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&run->mutex);
   pending = run->pending_values != 0u;
-  salts_mutex_unlock((salts_mutex_t *)&run->mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&run->mutex);
   return pending;
 }
 
@@ -678,34 +678,34 @@ int turbo_flow_run_request(turbo_flow_run_t *run, size_t demand) {
   int terminal;
   int status;
   if (!run || demand == 0u) return SALTS_EINVAL;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   terminal = run->terminal;
   status = run->status;
   managed_source = run->managed_source;
   flow = run->flow;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (terminal) return status == SALTS_OK ? SALTS_ESHUTDOWN : status;
   if (managed_source) {
     if (!flow) return SALTS_ESHUTDOWN;
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     status = flow->state == TURBO_FLOW_STATE_STARTED &&
              flow->admission_state == FLOW_ADMISSION_OPEN ? SALTS_OK : SALTS_ESHUTDOWN;
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     if (status != SALTS_OK) return status;
   }
   /* Pause may race the demand check; on_value repeats the admission fence before
    * entering an execution region, so queued demand cannot admit late input. */
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   terminal = run->terminal;
   status = run->status;
   if (!terminal) run->state = TURBO_FLOW_RUN_ACTIVE;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (terminal) return status == SALTS_OK ? SALTS_ESHUTDOWN : status;
   result = cflow_subscription_request_result(&run->subscription, demand);
   status = flow_run_status_from_cflow(result.status);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   if (run->terminal && run->status != SALTS_OK) status = run->status;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   return status;
 }
 
@@ -716,10 +716,10 @@ int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
   for (;;) {
     size_t subscriptions = 0u;
     uint32_t active;
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     if (flow->state != TURBO_FLOW_STATE_STARTED ||
         flow->admission_state != FLOW_ADMISSION_PAUSED) {
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       return SALTS_ESHUTDOWN;
     }
     /* Exclude only managed lifetimes still held, not registry membership alone:
@@ -732,13 +732,13 @@ int flow_run_prepare_buffer_retire(turbo_flow_t *flow, uint64_t timeout_ms) {
       if (slot && *slot && (*slot)->managed_source && (*slot)->lifetime_counted) ++subscriptions;
     }
     active = flow->active_publishes;
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     if (active < subscriptions) return SALTS_EPROTO;
     if (active == subscriptions) return SALTS_OK;
     if (timeout_ms != UINT64_MAX &&
         (salts_hrtime() - started) / UINT64_C(1000000) >= timeout_ms)
       return SALTS_ETIMEDOUT;
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
 }
 
@@ -750,12 +750,12 @@ static int flow_run_result_valid(const turbo_flow_run_result_t *result) {
 int turbo_flow_run_snapshot(const turbo_flow_run_t *run, turbo_flow_run_result_t *result) {
   turbo_flow_run_result_t snapshot = TURBO_FLOW_RUN_RESULT_INIT;
   if (!run || !flow_run_result_valid(result)) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&run->mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&run->mutex);
   snapshot.state = run->state;
   snapshot.status = run->status;
   snapshot.values = run->values;
   snapshot.error = run->error;
-  salts_mutex_unlock((salts_mutex_t *)&run->mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&run->mutex);
   snapshot.outstanding_demand = cflow_subscription_outstanding_demand(&run->subscription);
   *result = snapshot;
   return SALTS_OK;
@@ -772,23 +772,23 @@ int turbo_flow_run_wait(turbo_flow_run_t *run, uint64_t timeout_ms,
   timeout_ns = timeout_ms == UINT64_MAX || timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : timeout_ms * UINT64_C(1000000);
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   while (!run->terminal) {
     uint64_t elapsed;
     if (timeout_ns == 0u) break;
     if (timeout_ns == UINT64_MAX) {
-      salts_cond_wait(&run->cond, &run->mutex);
+      cmeta_cond_wait(&run->cond, &run->mutex);
       continue;
     }
     elapsed = salts_hrtime() - started_at;
     if (elapsed >= timeout_ns ||
-        salts_cond_timedwait(&run->cond, &run->mutex, timeout_ns - elapsed) != 0) {
+        cmeta_cond_timedwait(&run->cond, &run->mutex, timeout_ns - elapsed) != 0) {
       break;
     }
   }
   terminal = run->terminal;
   status = run->status;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   (void)turbo_flow_run_snapshot(run, result);
   return terminal ? status : SALTS_ETIMEDOUT;
 }
@@ -801,16 +801,16 @@ void turbo_flow_run_close(turbo_flow_run_t *run) {
   int terminal;
   int managed_source;
   if (!run) return;
-  salts_mutex_lock(&run->mutex);
+  cmeta_mutex_lock(&run->mutex);
   terminal = run->terminal;
   managed_source = run->managed_source;
-  salts_mutex_unlock(&run->mutex);
+  cmeta_mutex_unlock(&run->mutex);
   if (!terminal) (void)flow_run_cancel_with_status(run, SALTS_ECANCELED);
   cflow_subscription_close(&run->subscription);
   if (managed_source) {
-    salts_mutex_lock(&run->mutex);
-    while (run->pending_values > 0u) salts_cond_wait(&run->cond, &run->mutex);
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
+    while (run->pending_values > 0u) cmeta_cond_wait(&run->cond, &run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
   }
   flow_run_registry_remove(run);
   flow_run_release(run);
@@ -838,7 +838,7 @@ void flow_reactive_runtime_cancel(turbo_flow_t *flow) {
   for (;;) {
     turbo_flow_run_t *run = NULL;
     int terminal;
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     if (!vec_empty(&flow->active_runs)) {
       for (size_t i = 0u; i < vec_size(&flow->active_runs); ++i) {
         turbo_flow_run_t *const *entry =
@@ -850,11 +850,11 @@ void flow_reactive_runtime_cancel(turbo_flow_t *flow) {
         }
       }
     }
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     if (!run) break;
-    salts_mutex_lock(&run->mutex);
+    cmeta_mutex_lock(&run->mutex);
     terminal = run->terminal;
-    salts_mutex_unlock(&run->mutex);
+    cmeta_mutex_unlock(&run->mutex);
     if (terminal) {
       cflow_subscription_close(&run->subscription);
       flow_run_registry_remove(run);

@@ -3,7 +3,7 @@
 #include <salts/clock.h>
 
 #include "turbo_flow_projection.h"
-#include "salts_uuid.h"
+#include <cmeta_uuid.h>
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -216,7 +216,7 @@ static int flow_durable_latency_claim_begin(void *ctx) {
   if (!binding ||
       !atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
     return 0;
-  salts_mutex_lock(&binding->latency_mutex);
+  cmeta_mutex_lock(&binding->latency_mutex);
   return 1;
 }
 
@@ -253,7 +253,7 @@ static void flow_durable_latency_claim_end(void *ctx, int observed,
       (void)vec_erase(&binding->latency_pending, index, NULL);
     }
   }
-  salts_mutex_unlock(&binding->latency_mutex);
+  cmeta_mutex_unlock(&binding->latency_mutex);
 }
 
 static int flow_durable_buffer_admit_observed(
@@ -266,12 +266,12 @@ static int flow_durable_buffer_admit_observed(
   if (!atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
     return turbo_flow_inbox_admit(binding->inbox, record, receipt);
 
-  salts_mutex_lock(&binding->latency_mutex);
+  cmeta_mutex_lock(&binding->latency_mutex);
   rc = turbo_flow_inbox_snapshot(binding->inbox, &before);
   if (rc != SALTS_OK) {
     binding->latency_tracking_uncertain = 1;
     rc = turbo_flow_inbox_admit(binding->inbox, record, receipt);
-    salts_mutex_unlock(&binding->latency_mutex);
+    cmeta_mutex_unlock(&binding->latency_mutex);
     return rc;
   }
 
@@ -291,7 +291,7 @@ static int flow_durable_buffer_admit_observed(
       binding->latency_tracking_uncertain = 1;
     }
   }
-  salts_mutex_unlock(&binding->latency_mutex);
+  cmeta_mutex_unlock(&binding->latency_mutex);
   return rc;
 }
 
@@ -543,10 +543,10 @@ int turbo_flow_durable_buffer_bind(
     return SALTS_ENOMEM;
   }
   if (config->identity_mode == TURBO_FLOW_DURABLE_IDENTITY_GENERATED) {
-    salts_uuid_t uuid;
-    rc = salts_uuid_v4_generate(&uuid);
+    cmeta_uuid_t uuid;
+    rc = cmeta_uuid_v4_generate(&uuid);
     if (rc == SALTS_OK)
-      rc = salts_uuid_format(&uuid, binding->admission_namespace, sizeof(binding->admission_namespace));
+      rc = cmeta_uuid_format(&uuid, binding->admission_namespace, sizeof(binding->admission_namespace));
     if (rc != SALTS_OK) {
       tstr_freep(&binding->resource_name);
       free(binding);
@@ -582,12 +582,12 @@ int turbo_flow_durable_buffer_bind(
   atomic_init(&binding->graph_failed, 0u);
   atomic_init(&binding->sink_completed, 0u);
   atomic_init(&binding->sink_failed, 0u);
-  salts_mutex_init(&binding->latency_mutex);
+  cmeta_mutex_init(&binding->latency_mutex);
   rc = turbo_flow_stl_error(vec_init_bytes(
       &binding->latency_pending, sizeof(flow_durable_latency_pending_t),
       _Alignof(flow_durable_latency_pending_t), SIZE_MAX));
   if (rc != SALTS_OK) {
-    salts_mutex_destroy(&binding->latency_mutex);
+    cmeta_mutex_destroy(&binding->latency_mutex);
     tstr_freep(&binding->resource_name);
     free(binding);
     return rc;
@@ -598,7 +598,7 @@ int turbo_flow_durable_buffer_bind(
   rc = turbo_flow_stl_error(vec_push(&flow->durable_buffer_bindings, &binding));
   if (rc != SALTS_OK) {
     vec_destroy(&binding->latency_pending);
-    salts_mutex_destroy(&binding->latency_mutex);
+    cmeta_mutex_destroy(&binding->latency_mutex);
     tstr_freep(&binding->resource_name);
     free(binding);
     return rc;
@@ -627,7 +627,7 @@ int turbo_flow_durable_buffer_unbind(turbo_flow_durable_buffer_binding_t *bindin
   binding->flow = NULL;
   binding->inbox = NULL;
   vec_destroy(&binding->latency_pending);
-  salts_mutex_destroy(&binding->latency_mutex);
+  cmeta_mutex_destroy(&binding->latency_mutex);
   tstr_freep(&binding->resource_name);
   free(binding);
   return SALTS_OK;
@@ -645,7 +645,7 @@ void flow_durable_buffer_clear_bindings(turbo_flow_t *flow) {
     binding->flow = NULL;
     binding->inbox = NULL;
     vec_destroy(&binding->latency_pending);
-    salts_mutex_destroy(&binding->latency_mutex);
+    cmeta_mutex_destroy(&binding->latency_mutex);
     tstr_freep(&binding->resource_name);
     free(binding);
   }
@@ -923,7 +923,7 @@ int turbo_flow_durable_buffer_drain(turbo_flow_durable_buffer_binding_t *binding
                  ? SALTS_OK
                  : SALTS_ETIMEDOUT;
     }
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
 }
 
@@ -1321,10 +1321,10 @@ int turbo_flow_durable_buffer_latency_snapshot(
   rc = flow_durable_buffer_validate_provider(binding);
   if (rc != SALTS_OK) return rc;
 
-  salts_mutex_lock(&binding->latency_mutex);
+  cmeta_mutex_lock(&binding->latency_mutex);
   rc = turbo_flow_inbox_snapshot(binding->inbox, &provider);
   if (rc != SALTS_OK) {
-    salts_mutex_unlock(&binding->latency_mutex);
+    cmeta_mutex_unlock(&binding->latency_mutex);
     return rc;
   }
   now = salts_hrtime();
@@ -1371,7 +1371,7 @@ int turbo_flow_durable_buffer_latency_snapshot(
   observed.max_claim_latency_ns = binding->latency_claim_max_ns;
   observed.untracked_claims = binding->latency_untracked_claims;
   *snapshot = observed;
-  salts_mutex_unlock(&binding->latency_mutex);
+  cmeta_mutex_unlock(&binding->latency_mutex);
   return SALTS_OK;
 }
 
@@ -1408,9 +1408,9 @@ int turbo_flow_durable_buffer_retry_failed(turbo_flow_t *flow, const char *resou
   if (rc != SALTS_OK) return rc;
   if (!atomic_load_explicit(&binding->latency_enabled, memory_order_acquire))
     return turbo_flow_inbox_retry(binding->inbox, record_id);
-  salts_mutex_lock(&binding->latency_mutex);
+  cmeta_mutex_lock(&binding->latency_mutex);
   rc = turbo_flow_inbox_retry(binding->inbox, record_id);
-  salts_mutex_unlock(&binding->latency_mutex);
+  cmeta_mutex_unlock(&binding->latency_mutex);
   return rc;
 }
 

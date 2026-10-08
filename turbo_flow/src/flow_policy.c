@@ -2,7 +2,7 @@
 
 #include "flow_expr_internal.h"
 #include "flow_internal.h"
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include <json_parser.h>
 #include "tstr.h"
 #include "turbo_flow_stl_error_internal.h"

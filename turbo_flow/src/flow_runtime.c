@@ -1,6 +1,6 @@
 #include "flow_internal.h"
 
-#include "salts_buffer.h"
+#include <cmeta_buffer.h>
 
 #include <limits.h>
 #include <string.h>
@@ -95,41 +95,41 @@ static void flow_runtime_workspace_cleanup(flow_runtime_workspace_t *workspace) 
 int flow_publish_enter(turbo_flow_t *flow) {
   int rc = SALTS_EINVAL;
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state == TURBO_FLOW_STATE_STARTED && flow->admission_state == FLOW_ADMISSION_OPEN) {
     ++flow->active_publishes;
     rc = SALTS_OK;
   } else if (flow->state == TURBO_FLOW_STATE_STARTED) {
     rc = SALTS_ESHUTDOWN;
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
 void flow_publish_leave(turbo_flow_t *flow) {
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->active_publishes > 0u) --flow->active_publishes;
-  if (flow->active_publishes == 0u) salts_cond_broadcast(&flow->runtime_cond);
-  salts_mutex_unlock(&flow->runtime_mutex);
+  if (flow->active_publishes == 0u) cmeta_cond_broadcast(&flow->runtime_cond);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 }
 
 void flow_close_publish_admission(turbo_flow_t *flow) {
   if (!flow || !flow->runtime_sync_initialized) return;
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   flow->admission_state = FLOW_ADMISSION_STOPPING;
-  salts_cond_broadcast(&flow->runtime_cond);
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_cond_broadcast(&flow->runtime_cond);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 }
 
 void flow_wait_for_publishes(turbo_flow_t *flow) {
   if (!flow || !flow->runtime_sync_initialized) return;
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   while (flow->active_publishes > 0u) {
-    salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+    cmeta_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 }
 
 int turbo_flow_start(turbo_flow_t *flow) {
@@ -193,18 +193,18 @@ int turbo_flow_start(turbo_flow_t *flow) {
     return flow->last_error.code;
   }
   flow_runtime_generation_commit(flow);
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STARTED;
   flow->admission_state = FLOW_ADMISSION_OPEN;
   flow->adapter_stop_retryable = 0;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return SALTS_OK;
 }
 
 int turbo_flow_pause(turbo_flow_t *flow) {
   int rc = SALTS_OK;
   if (!flow) return SALTS_EINVAL;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
     rc = SALTS_EINVAL;
   } else if (flow->admission_state == FLOW_ADMISSION_OPEN) {
@@ -214,14 +214,14 @@ int turbo_flow_pause(turbo_flow_t *flow) {
   } else if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
     rc = SALTS_ESHUTDOWN;
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
 int turbo_flow_resume(turbo_flow_t *flow) {
   int rc = SALTS_OK;
   if (!flow) return SALTS_EINVAL;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
     rc = SALTS_EINVAL;
   } else if (flow->admission_state == FLOW_ADMISSION_PAUSED) {
@@ -231,7 +231,7 @@ int turbo_flow_resume(turbo_flow_t *flow) {
   } else if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
     rc = SALTS_ESHUTDOWN;
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
@@ -246,7 +246,7 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
                    ? UINT64_MAX
                    : timeout_ms * UINT64_C(1000000);
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
     rc = SALTS_EINVAL;
     goto done;
@@ -267,7 +267,7 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
       break;
     }
     if (timeout_ns == UINT64_MAX) {
-      salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+      cmeta_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
     elapsed = salts_hrtime() - started_at;
@@ -275,7 +275,7 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
       rc = SALTS_ETIMEDOUT;
       break;
     }
-    if (salts_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex, timeout_ns - elapsed) !=
+    if (cmeta_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex, timeout_ns - elapsed) !=
             0 &&
         salts_hrtime() - started_at >= timeout_ns) {
       rc = SALTS_ETIMEDOUT;
@@ -283,7 +283,7 @@ int turbo_flow_drain(turbo_flow_t *flow, uint64_t timeout_ms) {
     }
   }
 done:
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return rc;
 }
 
@@ -399,30 +399,30 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
                        command->drain_timeout_ms > UINT64_MAX / UINT64_C(1000000)
                    ? UINT64_MAX
                    : command->drain_timeout_ms * UINT64_C(1000000);
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0,
                                      "pool resize requires a started flow");
   }
   if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_ESHUTDOWN;
   }
   if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_EBUSY;
   }
   if (command->expected_generation != flow->runtime_generation) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "pool resource generation conflict");
   }
   if (target.previous_parallelism == command->parallelism) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_OK;
   }
   if (flow_runtime_generation_can_advance(flow) != SALTS_OK) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_ERANGE;
   }
   previous_admission = flow->admission_state;
@@ -430,19 +430,19 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
   while (flow->active_publishes > 0u) {
     uint64_t elapsed;
     if (timeout_ns == UINT64_MAX) {
-      salts_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
+      cmeta_cond_wait(&flow->runtime_cond, &flow->runtime_mutex);
       continue;
     }
     elapsed = salts_hrtime() - started_at;
-    if (elapsed >= timeout_ns || (salts_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex,
+    if (elapsed >= timeout_ns || (cmeta_cond_timedwait(&flow->runtime_cond, &flow->runtime_mutex,
                                                        timeout_ns - elapsed) != 0 &&
                                   salts_hrtime() - started_at >= timeout_ns)) {
       flow->admission_state = FLOW_ADMISSION_PAUSED;
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       return SALTS_ETIMEDOUT;
     }
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 
   flow_apply_pool_parallelism(&target, command->kind, command->parallelism);
   resize_rc = flow_rebuild_pool_resources(flow);
@@ -454,7 +454,7 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
       flow_stop_data_planes(flow);
       flow_stop_reorder_states(flow);
       flow_stop_executor_adapters(flow);
-      salts_mutex_lock(&flow->runtime_mutex);
+      cmeta_mutex_lock(&flow->runtime_mutex);
       if (adapter_stop_status != SALTS_OK) {
         (void)flow_set_error_keep_state(flow, adapter_stop_status, 0, 0,
                                         "adapter stop failed during pool resize rollback");
@@ -465,23 +465,23 @@ int turbo_flow_resize_pool(turbo_flow_t *flow, const turbo_flow_pool_resize_comm
       flow->state = TURBO_FLOW_STATE_FAILED;
       flow->admission_state = FLOW_ADMISSION_CLOSED;
       flow->adapter_stop_retryable = adapter_stop_status != SALTS_OK;
-      salts_cond_broadcast(&flow->runtime_cond);
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_cond_broadcast(&flow->runtime_cond);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       return adapter_stop_status != SALTS_OK ? adapter_stop_status : rc;
     }
     flow_runtime_generation_commit(flow);
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     flow->admission_state = previous_admission;
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, resize_rc, 0, 0,
                                      "pool resize failed; previous configuration restored");
   }
 
   flow_runtime_generation_commit(flow);
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   flow->admission_state = previous_admission;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   flow_clear_error(flow);
   return SALTS_OK;
 }
@@ -493,25 +493,25 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   int retrying;
 
   if (!flow) return SALTS_EINVAL;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->admission_state == FLOW_ADMISSION_STOPPING) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_EBUSY;
   }
   retrying = flow->state == TURBO_FLOW_STATE_FAILED && flow->adapter_stop_retryable;
   if (flow->state != TURBO_FLOW_STATE_STARTED && !retrying) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return flow_set_error_keep_state(flow, SALTS_EINVAL, 0, 0, "flow is not started");
   }
   if (flow->admission_state == FLOW_ADMISSION_RESIZING) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return SALTS_EBUSY;
   }
   flow->admission_state = FLOW_ADMISSION_STOPPING;
   flow->adapter_stop_callback_active = 0;
   flow->adapter_stop_callback_status = SALTS_OK;
-  salts_cond_broadcast(&flow->runtime_cond);
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_cond_broadcast(&flow->runtime_cond);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 
   if (!retrying) {
     flow_reactive_runtime_cancel(flow);
@@ -533,22 +533,22 @@ int turbo_flow_stop(turbo_flow_t *flow) {
   }
 
   if (stop_status != SALTS_OK) {
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     (void)flow_set_error_keep_state(flow, stop_status, 0, 0, "adapter stop failed");
     flow->state = TURBO_FLOW_STATE_FAILED;
     flow->admission_state = FLOW_ADMISSION_CLOSED;
     flow->adapter_stop_retryable = 1;
-    salts_cond_broadcast(&flow->runtime_cond);
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_cond_broadcast(&flow->runtime_cond);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return stop_status;
   }
 
   turbo_flow_stl_error(vec_clear(&flow->active_adapters));
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   flow->state = TURBO_FLOW_STATE_STOPPED;
   flow->admission_state = FLOW_ADMISSION_CLOSED;
   flow->adapter_stop_retryable = 0;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   flow_clear_error(flow);
   return SALTS_OK;
 }
@@ -680,7 +680,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
     if (rc != SALTS_OK) goto cleanup;
   }
 
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;
   for (size_t i = 0; i < stage_count; ++i) {
     const flow_stage_plan_impl_t *stage =
@@ -701,7 +701,7 @@ int flow_run_message_from_stage(turbo_flow_t *flow, uint32_t origin_stage,
       }
     }
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   if (rc != SALTS_OK) goto cleanup;
 
   for (size_t i = 0; i < vec_size(&flow->compiled_plan.edges); ++i) {
@@ -920,12 +920,12 @@ int flow_publish_local(turbo_flow_t *flow, const char *source_name, uint32_t sou
 
   if (flow->broadcast_ring && !flow_msg_transport_context_is_borrowed(local)) {
     uint64_t sequence;
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     sequence = atomic_fetch_add_explicit(&flow->next_sequence, 1u, memory_order_relaxed) + 1u;
-    salts_mutex_unlock(&flow->runtime_mutex);
-    salts_mutex_lock(&flow->broadcast_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->broadcast_mutex);
     rc = flow_publish_broadcast_data_plane(flow, source_index, local, sequence, result);
-    salts_mutex_unlock(&flow->broadcast_mutex);
+    cmeta_mutex_unlock(&flow->broadcast_mutex);
   } else {
     rc = flow_run_message_from_stage(flow, source_index, local);
   }

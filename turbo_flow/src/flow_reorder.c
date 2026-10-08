@@ -28,8 +28,8 @@ void flow_clear_reorder_states(turbo_flow_t *flow) {
       hash_set_destroy(&state->canceled_sequences);
       state->canceled_sequences_initialized = 0;
     }
-    salts_cond_destroy(&state->cond);
-    salts_mutex_destroy(&state->mutex);
+    cmeta_cond_destroy(&state->cond);
+    cmeta_mutex_destroy(&state->mutex);
   }
   turbo_flow_stl_error(vec_clear(&flow->reorder_states));
 }
@@ -59,11 +59,11 @@ int flow_start_reorder_states(turbo_flow_t *flow) {
                                        "cannot create reorder cancellation state");
     }
     state.canceled_sequences_initialized = 1;
-    salts_mutex_init(&state.mutex);
-    salts_cond_init(&state.cond);
+    cmeta_mutex_init(&state.mutex);
+    cmeta_cond_init(&state.cond);
     if (!state.mutex || !state.cond || turbo_flow_stl_error(vec_push(&flow->reorder_states, &state)) != SALTS_OK) {
-      salts_cond_destroy(&state.cond);
-      salts_mutex_destroy(&state.mutex);
+      cmeta_cond_destroy(&state.cond);
+      cmeta_mutex_destroy(&state.mutex);
       hash_set_destroy(&state.canceled_sequences);
       flow_clear_reorder_states(flow);
       return flow_set_error_keep_state(flow, SALTS_ENOMEM, stage->line, stage->column,
@@ -78,18 +78,18 @@ int flow_reorder_reserve(turbo_flow_t *flow, uint32_t stage_index, uint64_t *seq
   if (!sequence) return SALTS_EINVAL;
   if (!state) return SALTS_ENOTSUP;
 
-  salts_mutex_lock(&state->mutex);
+  cmeta_mutex_lock(&state->mutex);
   if (state->stopping) {
-    salts_mutex_unlock(&state->mutex);
+    cmeta_mutex_unlock(&state->mutex);
     return SALTS_ESHUTDOWN;
   }
   if (state->issued_sequence >= state->next_sequence &&
       state->issued_sequence - state->next_sequence >= state->capacity) {
-    salts_mutex_unlock(&state->mutex);
+    cmeta_mutex_unlock(&state->mutex);
     return SALTS_ENOSPC;
   }
   *sequence = ++state->issued_sequence;
-  salts_mutex_unlock(&state->mutex);
+  cmeta_mutex_unlock(&state->mutex);
   return SALTS_OK;
 }
 
@@ -98,16 +98,16 @@ int flow_reorder_cancel(turbo_flow_t *flow, uint32_t stage_index, uint64_t seque
   int rc = SALTS_OK;
   if (!state || sequence == 0u) return SALTS_OK;
 
-  salts_mutex_lock(&state->mutex);
+  cmeta_mutex_lock(&state->mutex);
   if (sequence >= state->next_sequence) {
     rc = turbo_flow_stl_error(hash_set_add(&state->canceled_sequences, &sequence));
     if (rc == SALTS_EALREADY) rc = SALTS_OK;
     if (rc == SALTS_OK) {
       flow_reorder_advance_canceled(state);
-      salts_cond_broadcast(&state->cond);
+      cmeta_cond_broadcast(&state->cond);
     }
   }
-  salts_mutex_unlock(&state->mutex);
+  cmeta_mutex_unlock(&state->mutex);
   return rc;
 }
 
@@ -116,10 +116,10 @@ void flow_stop_reorder_states(turbo_flow_t *flow) {
   for (size_t i = 0; i < vec_size(&flow->reorder_states); ++i) {
     flow_reorder_state_t *state = (flow_reorder_state_t *)vec_at(&flow->reorder_states, i);
     if (!state) continue;
-    salts_mutex_lock(&state->mutex);
+    cmeta_mutex_lock(&state->mutex);
     state->stopping = 1;
-    salts_cond_broadcast(&state->cond);
-    salts_mutex_unlock(&state->mutex);
+    cmeta_cond_broadcast(&state->cond);
+    cmeta_mutex_unlock(&state->mutex);
   }
 }
 
@@ -128,7 +128,7 @@ int flow_reorder_enter(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequen
   int rc = SALTS_OK;
   if (!state) return SALTS_OK;
 
-  salts_mutex_lock(&state->mutex);
+  cmeta_mutex_lock(&state->mutex);
   if (state->stopping) {
     rc = SALTS_ESHUTDOWN;
     goto done;
@@ -145,7 +145,7 @@ int flow_reorder_enter(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequen
     ++state->waiting;
     while (!state->stopping && (sequence != state->next_sequence || state->active)) {
       int wait_rc =
-          salts_cond_timedwait(&state->cond, &state->mutex, (uint64_t)state->timeout_ms * 1000000u);
+          cmeta_cond_timedwait(&state->cond, &state->mutex, (uint64_t)state->timeout_ms * 1000000u);
       if (wait_rc == -ETIMEDOUT) {
         rc = SALTS_ETIMEDOUT;
         break;
@@ -157,7 +157,7 @@ int flow_reorder_enter(turbo_flow_t *flow, uint32_t stage_index, uint64_t sequen
   if (rc == SALTS_OK) state->active = 1;
 
 done:
-  salts_mutex_unlock(&state->mutex);
+  cmeta_mutex_unlock(&state->mutex);
   return rc;
 }
 
@@ -165,12 +165,12 @@ void flow_reorder_leave(turbo_flow_t *flow, uint32_t stage_index, uint64_t seque
   flow_reorder_state_t *state = flow_reorder_for_stage(flow, stage_index);
   if (!state) return;
 
-  salts_mutex_lock(&state->mutex);
+  cmeta_mutex_lock(&state->mutex);
   if (state->active && sequence == state->next_sequence) {
     state->active = 0;
     ++state->next_sequence;
     flow_reorder_advance_canceled(state);
-    salts_cond_broadcast(&state->cond);
+    cmeta_cond_broadcast(&state->cond);
   }
-  salts_mutex_unlock(&state->mutex);
+  cmeta_mutex_unlock(&state->mutex);
 }
