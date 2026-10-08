@@ -207,6 +207,20 @@ set_target_properties(test_flow_salts_provider_fixture PROPERTIES
   C_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES)
 
+add_library(test_flow_salts_provider_second SHARED salts_provider_fixture.c)
+target_link_libraries(test_flow_salts_provider_second PRIVATE
+  TurboFlow::Product Salts::Plugin
+  ${turbo_flow_provider_config_fixture_NATIVE_TARGET})
+target_include_directories(test_flow_salts_provider_second PRIVATE
+  ${turbo_flow_provider_config_fixture_GENERATED_DIR})
+target_compile_definitions(test_flow_salts_provider_second PRIVATE
+  FLOW_PROVIDER_PLUGIN_ID="test.turboflow.provider.2" FLOW_PROVIDER_MARKER=200u)
+add_dependencies(test_flow_salts_provider_second
+  turbo_flow_provider_config_fixture_idl_codegen)
+set_target_properties(test_flow_salts_provider_second PROPERTIES
+  FOLDER "turbo_flow/tests/fixtures" C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 add_library(test_flow_salts_resource_fixture SHARED
   salts_resource_fixture.c
   salts_resource_fixture.h)
@@ -226,10 +240,12 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_salts_provider_binding
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture
   turbo_flow_provider_config_fixture_idl_codegen)
 target_compile_definitions(test_flow_salts_provider_binding PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_tests_properties(test_flow_salts_provider_binding PROPERTIES
   LABELS "graph;provider;plugin;interface;lease"
@@ -246,10 +262,12 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_provider_binding
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture
   turbo_flow_provider_config_fixture_idl_codegen)
 target_compile_definitions(test_flow_provider_binding PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_target_properties(test_flow_provider_binding PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
@@ -267,9 +285,11 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_compiled_provider_instance
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture)
 target_compile_definitions(test_flow_compiled_provider_instance PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_target_properties(test_flow_compiled_provider_instance PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -286,9 +306,11 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 add_dependencies(test_flow_provider_generation
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture)
 target_compile_definitions(test_flow_provider_generation PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 set_target_properties(test_flow_provider_generation PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -305,9 +327,11 @@ cmake_add_test(
   FOLDER "turbo_flow/tests")
 target_compile_definitions(test_flow_component_generation PRIVATE
   FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
   FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
 add_dependencies(test_flow_component_generation
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture)
 set_target_properties(test_flow_component_generation PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -1234,6 +1258,7 @@ cmake_add_test(
 target_compile_definitions(
   test_flow_plugin_generation
   PRIVATE FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_PROVIDER_SECOND="$<TARGET_FILE:test_flow_salts_provider_second>"
           FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>"
           FLOW_PLUGIN_GENERATION_FIXTURE_DURABLE="$<TARGET_FILE:test_flow_plugin_generation_durable>"
           FLOW_PLUGIN_GENERATION_FIXTURE_LEGACY="$<TARGET_FILE:test_flow_plugin_good_one>"
@@ -1263,6 +1288,7 @@ target_compile_definitions(
 add_dependencies(
   test_flow_plugin_generation
   test_flow_salts_provider_fixture
+  test_flow_salts_provider_second
   test_flow_salts_resource_fixture
   test_flow_plugin_generation_durable
   test_flow_plugin_good_one

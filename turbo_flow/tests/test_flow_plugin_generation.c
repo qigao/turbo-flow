@@ -1,4 +1,5 @@
 #include "salts_resource_fixture.h"
+#include "salts_provider_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_provider_binding.h"
@@ -25,6 +26,7 @@
 typedef struct generation_resolver_fixture_s {
   cmeta_plugin_registry *registry;
   cmeta_plugin_ref resource;
+  const char *module_identity;
   unsigned provider_calls;
   unsigned resource_calls;
 } generation_resolver_fixture_t;
@@ -69,7 +71,7 @@ static int resolve_provider(
     }
     return SALTS_ENOENT;
   }
-  out->module_identity = "test.turboflow.provider";
+  out->module_identity = fixture->module_identity;
   out->component_identity = FLOW_TEST_PROVIDER_COMPONENT_ID;
   return SALTS_OK;
 }
@@ -181,7 +183,7 @@ static int test_open(
       "adapters: {}\n";
   turbo_flow_plugin_host_config_t host_config =
       TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
-  const cmeta_plugin_registry_config registry_config = {2u};
+  const cmeta_plugin_registry_config registry_config = {3u};
   int rc;
 
   memset(test, 0, sizeof(*test));
@@ -223,6 +225,7 @@ static int test_open(
   rc = component_generation_open(test);
   if (rc != SALTS_OK) return rc;
 
+  test->resolver.module_identity = "test.turboflow.provider";
   test->resolver.registry = &test->registry;
   test->resolver.resource = test->resource_ref;
 
@@ -285,8 +288,21 @@ static void test_close(
   memset(test, 0, sizeof(*test));
 }
 
+static const fixture_provider_state_t *provider_state(
+    const salts_component_plugin_scope *scope) {
+  salts_component_service service = {0};
+  if (salts_component_plugin_scope_find_service_from(scope,
+      FLOW_TEST_PROVIDER_COMPONENT_ID, turbo_flow_provider_factory_interface(),
+      &service) != SALTS_COMPONENT_PLUGIN_OK) return NULL;
+  cmeta_interface_projection projection = CMETA_INTERFACE_PROJECTION_INIT;
+  if (cmeta_object_interface_project_borrowed(service.object, service.interfaces,
+      turbo_flow_provider_factory_interface(), &projection) != CMETA_OK)
+    return NULL;
+  return projection.self;
+}
+
 spec("Component-backed Graph generation") {
-  it("pins one Component generation through compile, run and provider retirement") {
+  it("executes old and new Graphs in their owning DSO through provider retirement") {
     static const char graph[] =
         "source input\n"
         "stage provider_stage adapter fixture.provider {\n"
@@ -309,6 +325,19 @@ spec("Component-backed Graph generation") {
     turbo_flow_msg_t message;
     cmeta_plugin_lifecycle_info provider_info;
     bool quiescent = true;
+    cmeta_plugin_ref second_plugin = {0};
+    salts_component_plugin_generation second_component = {0};
+    salts_component_deployment deployments[1];
+    salts_component_instance instances[1];
+    salts_component_dependency dependencies[1];
+    size_t order[1];
+    salts_component_plugin_module modules[1];
+    const salts_component_plugin_generation_storage storage = {
+        deployments, 1u, instances, 1u, dependencies, 1u, order, 1u, modules, 1u};
+    salts_component_plugin_generation *previous = NULL;
+    salts_component_plugin_scope old_scope = {0}, new_scope = {0}, rejected = {0};
+    turbo_flow_plugin_generation_t *second_graph = NULL;
+    const fixture_provider_state_t *old_state, *new_state;
 
     check_equal(
         test_open(&test, graph, &plugin_error, &error),
@@ -337,6 +366,11 @@ spec("Component-backed Graph generation") {
     check_equal(test.resolver.provider_calls, 1u);
     check_equal(test.resolver.resource_calls, 1u);
 
+    check_equal(salts_component_plugin_scope_acquire(
+        &test.component_runtime, &old_scope), SALTS_COMPONENT_PLUGIN_OK);
+    old_state = provider_state(&old_scope);
+    check_not_null(old_state);
+
     check_equal(
         cmeta_plugin_registry_get_lifecycle(
             &test.registry, test.provider_ref, &provider_info),
@@ -359,6 +393,59 @@ spec("Component-backed Graph generation") {
             "input", &message),
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
+
+    check_equal(old_state->consumed, 1u);
+    check_equal(old_state->last_marker, 100u);
+    check_equal(cmeta_plugin_registry_load(&test.registry,
+        FLOW_SALTS_PROVIDER_SECOND, &second_plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&test.registry, second_plugin), CMETA_PLUGIN_OK);
+    {
+      const salts_component_plugin_source source = {
+          second_plugin, FLOW_TEST_PROVIDER_EXPORT_ID, NULL, NULL};
+      check_equal(salts_component_plugin_generation_build(&second_component,
+          UINT64_C(92), &test.registry, &storage, NULL, 0u, &source, 1u,
+          NULL, 0u), SALTS_COMPONENT_PLUGIN_OK);
+    }
+    check_equal(salts_component_plugin_runtime_publish(&test.component_runtime,
+        &second_component, &previous), SALTS_COMPONENT_PLUGIN_OK);
+    check_true(previous == &test.component_generation);
+    test.resolver.module_identity = "test.turboflow.provider.2";
+    test.flow = turbo_flow_create();
+    check_not_null(test.flow);
+    check_equal(turbo_flow_parse_string(test.flow, graph, strlen(graph)), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(test.snapshot, test.resolved,
+        &test.flow, &config, NULL, &second_graph, &cleanup, &error), SALTS_OK);
+    check_null(cleanup);
+    check_equal(turbo_flow_plugin_generation_component_generation_id(second_graph), UINT64_C(92));
+    check_equal(salts_component_plugin_scope_acquire(&test.component_runtime,
+        &new_scope), SALTS_COMPONENT_PLUGIN_OK);
+    new_state = provider_state(&new_scope);
+    check_not_null(new_state);
+    check_true(old_state != new_state);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(second_graph)), SALTS_OK);
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_publish(turbo_flow_plugin_generation_flow(second_graph),
+        "input", &message), SALTS_OK);
+    turbo_flow_msg_cleanup(&message);
+    check_equal(new_state->consumed, 1u);
+    check_equal(new_state->last_marker, 200u);
+    turbo_flow_msg_init(&message);
+    check_equal(turbo_flow_publish(turbo_flow_plugin_generation_flow(generation),
+        "input", &message), SALTS_OK);
+    turbo_flow_msg_cleanup(&message);
+    check_equal(old_state->consumed, 2u);
+    check_equal(new_state->consumed, 1u);
+    check_equal(salts_component_plugin_generation_drain(&test.component_runtime,
+        &test.component_generation), SALTS_COMPONENT_PLUGIN_BUSY);
+    check_equal(cmeta_plugin_registry_unload(&test.registry, test.provider_ref), CMETA_PLUGIN_BUSY);
+    check_equal(salts_component_plugin_runtime_close(&test.component_runtime,
+        &previous), SALTS_COMPONENT_PLUGIN_OK);
+    check_true(previous == &second_component);
+    check_equal(salts_component_plugin_scope_acquire(&test.component_runtime,
+        &rejected), SALTS_COMPONENT_PLUGIN_INVALID_STATE);
+    check_false(rejected.live);
+    check_equal(salts_component_plugin_scope_release(&old_scope), SALTS_COMPONENT_PLUGIN_OK);
+    check_equal(salts_component_plugin_scope_release(&new_scope), SALTS_COMPONENT_PLUGIN_OK);
 
     check_equal(
         cmeta_plugin_registry_request_stop(
@@ -397,7 +484,13 @@ spec("Component-backed Graph generation") {
         cmeta_plugin_registry_poll_quiescent(
             &test.registry, test.resource_ref, &quiescent),
         CMETA_PLUGIN_OK);
-    check_true(quiescent);
+    check_false(quiescent);
+
+    check_equal(turbo_flow_plugin_generation_destroy(second_graph, 10u, &error), SALTS_OK);
+    second_graph = NULL;
+    check_equal(salts_component_plugin_generation_drain(&test.component_runtime,
+        &second_component), SALTS_COMPONENT_PLUGIN_OK);
+    stop_unload(&test.registry, second_plugin);
 
     check_equal(component_generation_close(&test), SALTS_OK);
     check_equal(

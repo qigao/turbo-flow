@@ -10,15 +10,13 @@
 #include <stdbool.h>
 #include <string.h>
 
-typedef struct fixture_provider_state_s {
-  bool started;
-  bool stopping;
-  unsigned owner_quiesce_calls;
-  unsigned owner_drain_calls;
-  unsigned owner_shutdown_calls;
-  unsigned owner_poll_calls;
-  unsigned owner_destroy_calls;
-} fixture_provider_state_t;
+#include "salts_provider_fixture.h"
+#ifndef FLOW_PROVIDER_PLUGIN_ID
+#define FLOW_PROVIDER_PLUGIN_ID "test.turboflow.provider"
+#endif
+#ifndef FLOW_PROVIDER_MARKER
+#define FLOW_PROVIDER_MARKER 100u
+#endif
 
 static fixture_provider_state_t fixture_state;
 
@@ -130,9 +128,12 @@ static int fixture_adapter_consume(
     void *self, turbo_flow_t *flow,
     const turbo_flow_stage_plan_t *stage,
     turbo_flow_msg_t *message) {
-  (void)self;
+  fixture_provider_state_t *state = self;
   (void)flow;
-  return stage && message ? SALTS_OK : SALTS_EINVAL;
+  if (!state || !stage || !message) return SALTS_EINVAL;
+  ++state->consumed;
+  state->last_marker = FLOW_PROVIDER_MARKER;
+  return SALTS_OK;
 }
 
 static int fixture_register_exact_stage_adapter(
@@ -313,7 +314,7 @@ static cmeta_plugin_export fixture_export;
 static cmeta_plugin_manifest fixture_manifest = {
     .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
     .abi_version = CMETA_PLUGIN_ABI_VERSION,
-    .plugin_id = "test.turboflow.provider",
+    .plugin_id = FLOW_PROVIDER_PLUGIN_ID,
     .version = {1u, 0u, 0u},
     .self = &fixture_state,
 };
@@ -350,6 +351,8 @@ static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_start(void *self) {
   state->owner_shutdown_calls = 0u;
   state->owner_poll_calls = 0u;
   state->owner_destroy_calls = 0u;
+  state->consumed = 0u;
+  state->last_marker = 0u;
   return CMETA_PLUGIN_OK;
 }
 
