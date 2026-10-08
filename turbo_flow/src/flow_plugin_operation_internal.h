@@ -61,8 +61,8 @@ int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *e
 void flow_plugin_operations_free(vec_t *bindings);
 
 typedef struct flow_plugin_cflow_function_binding_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   const char *export_id;
   const char *contract_id;
   uint32_t contract_version;
