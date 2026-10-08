@@ -28,8 +28,10 @@ if(DEFINED Chttp_DIR AND NOT "${Chttp_DIR}" STREQUAL "")
   endif()
 endif()
 
+# Use the verified CMake-native absolute path: a Windows environment root
+# contains backslashes that vcpkg's find_package wrapper cannot re-parse.
 find_package(Chttp CONFIG REQUIRED
-             PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${_turbo_flow_chttp_root}" NO_DEFAULT_PATH)
 file(REAL_PATH "${Chttp_DIR}" _turbo_flow_chttp_dir)
 cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_dir}"
            NORMALIZE _turbo_flow_chttp_dir_in_root)
