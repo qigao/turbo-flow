@@ -1,6 +1,6 @@
 #include "../../tests/flow_operation_fixture.h"
 #include "flow_internal.h"
-#include "salts_coro.h"
+#include <coro_pool.h>
 #include "salts/thread.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
@@ -5185,7 +5185,7 @@ suite("Turbo Flow") {
       check_equal(adapter->lanes, 2);
       for (size_t i = 0; i < 2; ++i) {
         check_not_null(adapter->pools[i]);
-        check_equal(salts_coro_pool_capacity(adapter->pools[i]), 8);
+        check_equal(coro_pool_capacity(adapter->pools[i]), 8);
         memset(&publishes[i], 0, sizeof(publishes[i]));
         publishes[i].flow = flow;
         publishes[i].source_name = "input";
