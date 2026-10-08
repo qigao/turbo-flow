@@ -195,7 +195,7 @@ static int flow_resource_apply_pool(turbo_flow_t *flow, size_t metadata_index,
   metadata_index -= provider_count + native_count;
   rc = turbo_flow_pool_resource_status_at(flow, metadata_index, &status);
   if (rc != SALTS_OK) return rc;
-  now = salts_hrtime();
+  now = cmeta_hrtime();
   if (command->deadline_ns == UINT64_MAX) {
     remaining_ms = command->drain_timeout_ms;
   } else {
@@ -247,7 +247,7 @@ static int flow_resource_command_execute(turbo_flow_t *flow,
   }
   record_slot = (flow_resource_command_record_t *)vec_at(&flow->resource_command_history, record_index);
   if (scope) --scope->remaining;
-  if (command->deadline_ns != UINT64_MAX && salts_hrtime() >= command->deadline_ns) {
+  if (command->deadline_ns != UINT64_MAX && cmeta_hrtime() >= command->deadline_ns) {
     rc = SALTS_ETIMEDOUT;
     goto record;
   }

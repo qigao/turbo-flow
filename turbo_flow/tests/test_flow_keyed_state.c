@@ -1,5 +1,5 @@
 #include "../../tests/flow_operation_fixture.h"
-#include "salts_thread.h"
+#include "cmeta_thread.h"
 #include "tinytest.h"
 #include "turbo_flow.h"
 
@@ -107,7 +107,7 @@ static int keyed_count_stage(turbo_flow_msg_t *message, turbo_flow_keyed_state_t
   if (probe->synchronize_callbacks) {
     atomic_fetch_add_explicit(&probe->barrier_count, 1u, memory_order_acq_rel);
     while (atomic_load_explicit(&probe->barrier_count, memory_order_acquire) < 2u) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
   }
   return probe->fail_after_put ? SALTS_EIO : SALTS_OK;
@@ -156,7 +156,7 @@ static int keyed_window_stage(const turbo_flow_msg_t *message,
   if (probe->synchronize_callbacks) {
     atomic_fetch_add_explicit(&probe->barrier_count, 1u, memory_order_acq_rel);
     while (atomic_load_explicit(&probe->barrier_count, memory_order_acquire) < 2u) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
   }
   return SALTS_OK;
@@ -191,7 +191,7 @@ static int event_window_accumulate(const turbo_flow_msg_t *message,
   if (probe->synchronize_event) {
     atomic_store_explicit(&probe->event_entered, 1u, memory_order_release);
     while (!atomic_load_explicit(&probe->event_release, memory_order_acquire)) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
   }
   return SALTS_OK;
@@ -493,7 +493,7 @@ suite("Turbo Flow keyed state") {
     turbo_flow_t *flow = turbo_flow_create();
     keyed_probe_t probe;
     keyed_publish_t publishes[2];
-    salts_thread_t threads[2] = {NULL, NULL};
+    cmeta_thread_t threads[2] = {NULL, NULL};
     int first_status;
     int second_status;
     memset(&probe, 0, sizeof(probe));
@@ -509,11 +509,11 @@ suite("Turbo Flow keyed state") {
       publishes[index].flow = flow;
       publishes[index].id = 9u;
       atomic_init(&publishes[index].status, SALTS_EIO);
-      check_equal(salts_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
+      check_equal(cmeta_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
                    SALTS_OK);
     }
     for (size_t index = 0u; index < 2u; ++index) {
-      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
+      check_equal(cmeta_thread_join(&threads[index]), SALTS_OK);
     }
     first_status = atomic_load_explicit(&publishes[0].status, memory_order_acquire);
     second_status = atomic_load_explicit(&publishes[1].status, memory_order_acquire);
@@ -651,7 +651,7 @@ suite("Turbo Flow keyed emitting state") {
     turbo_flow_t *flow = turbo_flow_create();
     keyed_window_probe_t probe;
     keyed_publish_t publishes[2];
-    salts_thread_t threads[2] = {NULL, NULL};
+    cmeta_thread_t threads[2] = {NULL, NULL};
     int first_status;
     int second_status;
     memset(&probe, 0, sizeof(probe));
@@ -666,11 +666,11 @@ suite("Turbo Flow keyed emitting state") {
       publishes[index].flow = flow;
       publishes[index].id = 8u;
       atomic_init(&publishes[index].status, SALTS_EIO);
-      check_equal(salts_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
+      check_equal(cmeta_thread_create(&threads[index], keyed_publish_thread, &publishes[index]),
                    SALTS_OK);
     }
     for (size_t index = 0u; index < 2u; ++index) {
-      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
+      check_equal(cmeta_thread_join(&threads[index]), SALTS_OK);
     }
     first_status = atomic_load_explicit(&publishes[0].status, memory_order_acquire);
     second_status = atomic_load_explicit(&publishes[1].status, memory_order_acquire);
@@ -829,7 +829,7 @@ suite("Turbo Flow event-time tumbling windows") {
     turbo_flow_t *flow = turbo_flow_create();
     event_window_probe_t probe;
     event_window_publish_t publish;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     size_t closed = 0u;
     memset(&probe, 0, sizeof(probe));
     memset(&publish, 0, sizeof(publish));
@@ -843,14 +843,14 @@ suite("Turbo Flow event-time tumbling windows") {
                  SALTS_OK);
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_OK);
-    check_equal(salts_thread_create(&thread, event_window_publish_thread, &publish), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, event_window_publish_thread, &publish), SALTS_OK);
     while (!atomic_load_explicit(&probe.event_entered, memory_order_acquire)) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
     check_equal(turbo_flow_advance_event_time_watermark(flow, store, 10u, &closed), SALTS_OK);
     check_equal(closed, 0u);
     atomic_store_explicit(&probe.event_release, 1u, memory_order_release);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     check_equal(atomic_load_explicit(&publish.status, memory_order_acquire), SALTS_ETIMEDOUT);
     check_equal(turbo_flow_keyed_state_store_size(store), 0u);
     check_equal(atomic_load_explicit(&probe.close_count, memory_order_relaxed), 0u);

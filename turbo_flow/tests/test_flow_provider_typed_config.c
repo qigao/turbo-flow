@@ -39,11 +39,12 @@ spec("flow typed provider config") {
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, src, strlen(src)), SALTS_OK);
 
-    check_equal(
-        flow_provider_typed_config_bind(
-            find_stage(flow, "http"), ProviderConfig_codec_create,
-            HttpConfig_native_artifact(), &http, &diagnostic),
-        SALTS_OK);
+    const int bind_status = flow_provider_typed_config_bind(
+        find_stage(flow, "http"), ProviderConfig_codec_create,
+        HttpConfig_native_artifact(), &http, &diagnostic);
+    info("typed bind status=%d diagnostic=%d field=%s reason=%s",
+        bind_status, diagnostic.status, diagnostic.schema_field, diagnostic.message);
+    check_equal(bind_status, SALTS_OK);
     check_equal(flow_provider_typed_config_view(&http, &view), SALTS_OK);
     check_equal(view.type_name, "HttpConfig");
     check_true(view.data == http.native.data);

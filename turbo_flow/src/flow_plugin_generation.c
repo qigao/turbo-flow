@@ -393,7 +393,8 @@ int turbo_flow_plugin_generation_create(
    * preflight for every materialization root before Graph ownership moves.
    */
   rc = flow_provider_generation_prepare(
-      *flow_io, config->provider_resolver, config->resource_resolver,
+      *flow_io, config->component_runtime,
+      config->provider_resolver, config->resource_resolver,
       config->owner_capacity, &generation->providers, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
@@ -511,6 +512,14 @@ size_t turbo_flow_plugin_generation_owner_count(
   return generation && generation->providers
              ? flow_provider_generation_count(generation->providers)
              : 0u;
+}
+
+uint64_t turbo_flow_plugin_generation_component_generation_id(
+    const turbo_flow_plugin_generation_t *generation) {
+  return generation && generation->providers
+             ? flow_provider_generation_component_generation_id(
+                   generation->providers)
+             : UINT64_C(0);
 }
 
 size_t turbo_flow_plugin_generation_materializer_count(
@@ -833,8 +842,8 @@ int turbo_flow_plugin_generation_operation_error(const turbo_flow_plugin_generat
       index >= vec_size(&generation->bindings))
     return SALTS_EINVAL;
   binding = (flow_plugin_operation_binding_t *)vec_at_const(&generation->bindings, index);
-  salts_mutex_lock(&binding->error_mutex);
+  cmeta_mutex_lock(&binding->error_mutex);
   *out = binding->error;
-  salts_mutex_unlock(&binding->error_mutex);
+  cmeta_mutex_unlock(&binding->error_mutex);
   return SALTS_OK;
 }

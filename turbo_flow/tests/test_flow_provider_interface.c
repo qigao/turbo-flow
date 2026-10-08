@@ -134,9 +134,9 @@ spec("canonical TurboFlow provider Interface") {
     fixture_provider_state_t state = {0};
     turbo_flow_provider_factory factory =
         fixture_provider_as_turbo_flow_provider_factory(&state);
-    salts_plugin_export entry = {
-        SALTS_PLUGIN_EXPORT_SIZE,
-        SALTS_PLUGIN_EXPORT_INTERFACE,
+    cmeta_plugin_export entry = {
+        CMETA_PLUGIN_EXPORT_SIZE,
+        CMETA_PLUGIN_EXPORT_INTERFACE,
         TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
         0u,
         "fixture.provider",
@@ -146,17 +146,17 @@ spec("canonical TurboFlow provider Interface") {
     check_true(turbo_flow_provider_factory_valid(&factory));
     check_true(cmeta_interface_desc_valid(turbo_flow_provider_factory_interface()));
     check_equal(
-        salts_plugin_export_require_interface(
+        cmeta_plugin_export_require_interface(
             &entry, TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
             TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION, 0u,
             turbo_flow_provider_factory_interface()),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_export_require_interface(
+        cmeta_plugin_export_require_interface(
             &entry, TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
             TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION + 1u, 0u,
             turbo_flow_provider_factory_interface()),
-        SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+        CMETA_PLUGIN_INCOMPATIBLE_CONTRACT);
   }
 
   it("describes typed config and materializes one CMeta runtime owner") {

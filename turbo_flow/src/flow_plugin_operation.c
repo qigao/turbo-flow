@@ -8,41 +8,41 @@
 
 typedef struct flow_plugin_cflow_adapter_capture_s {
   void *context;
-  salts_plugin_function_invoke_fn invoke;
+  cmeta_plugin_function_invoke_fn invoke;
 } flow_plugin_cflow_adapter_capture_t;
 
 typedef struct flow_plugin_cflow_lease_owner_s {
-  salts_plugin_registry *registry;
-  salts_plugin_lease lease;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_lease lease;
 } flow_plugin_cflow_lease_owner_t;
 
 _Static_assert(sizeof(flow_plugin_cflow_adapter_capture_t) <= CMETA_CAPTURE_INLINE,
                "plugin CFlow adapter capture must remain inline");
 
-static int flow_plugin_status_to_salts(salts_plugin_status status) {
+static int flow_plugin_status_to_salts(cmeta_plugin_status status) {
   switch (status) {
-    case SALTS_PLUGIN_OK: return SALTS_OK;
-    case SALTS_PLUGIN_INVALID_ARGUMENT:
-    case SALTS_PLUGIN_INVALID_MANIFEST:
-    case SALTS_PLUGIN_INVALID_STATE:
+    case CMETA_PLUGIN_OK: return SALTS_OK;
+    case CMETA_PLUGIN_INVALID_ARGUMENT:
+    case CMETA_PLUGIN_INVALID_MANIFEST:
+    case CMETA_PLUGIN_INVALID_STATE:
       return SALTS_EINVAL;
-    case SALTS_PLUGIN_UNKNOWN_EXPORT:
-    case SALTS_PLUGIN_UNKNOWN_PLUGIN:
+    case CMETA_PLUGIN_UNKNOWN_EXPORT:
+    case CMETA_PLUGIN_UNKNOWN_PLUGIN:
       return SALTS_ENOENT;
-    case SALTS_PLUGIN_UNSUPPORTED_ABI:
-    case SALTS_PLUGIN_INCOMPATIBLE_CONTRACT:
+    case CMETA_PLUGIN_UNSUPPORTED_ABI:
+    case CMETA_PLUGIN_INCOMPATIBLE_CONTRACT:
       return SALTS_ENOTSUP;
-    case SALTS_PLUGIN_CAPACITY_EXCEEDED: return SALTS_ENOSPC;
-    case SALTS_PLUGIN_ALLOCATION_FAILED: return SALTS_ENOMEM;
-    case SALTS_PLUGIN_ALREADY: return SALTS_EALREADY;
-    case SALTS_PLUGIN_BUSY: return SALTS_EBUSY;
-    case SALTS_PLUGIN_STALE:
-    case SALTS_PLUGIN_DUPLICATE_PLUGIN_ID:
-    case SALTS_PLUGIN_DUPLICATE_EXPORT:
-    case SALTS_PLUGIN_LOAD_FAILED:
-    case SALTS_PLUGIN_QUERY_MISSING:
-    case SALTS_PLUGIN_QUERY_REJECTED:
-    case SALTS_PLUGIN_UNLOAD_FAILED:
+    case CMETA_PLUGIN_CAPACITY_EXCEEDED: return SALTS_ENOSPC;
+    case CMETA_PLUGIN_ALLOCATION_FAILED: return SALTS_ENOMEM;
+    case CMETA_PLUGIN_ALREADY: return SALTS_EALREADY;
+    case CMETA_PLUGIN_BUSY: return SALTS_EBUSY;
+    case CMETA_PLUGIN_STALE:
+    case CMETA_PLUGIN_DUPLICATE_PLUGIN_ID:
+    case CMETA_PLUGIN_DUPLICATE_EXPORT:
+    case CMETA_PLUGIN_LOAD_FAILED:
+    case CMETA_PLUGIN_QUERY_MISSING:
+    case CMETA_PLUGIN_QUERY_REJECTED:
+    case CMETA_PLUGIN_UNLOAD_FAILED:
       return SALTS_EPROTO;
   }
   return SALTS_EPROTO;
@@ -61,7 +61,7 @@ static bool flow_plugin_cflow_adapter_invoke(
 }
 
 static cmeta_callable flow_plugin_cflow_adapter(
-    const salts_plugin_function_export *function) {
+    const cmeta_plugin_function_export *function) {
   cmeta_callable adapter = {0};
   flow_plugin_cflow_adapter_capture_t capture = {0};
   if (!function || !function->desc || !function->invoke) return adapter;
@@ -81,8 +81,8 @@ static void flow_plugin_cflow_lease_release(void *ctx) {
   flow_plugin_cflow_lease_owner_t *owner =
       (flow_plugin_cflow_lease_owner_t *)ctx;
   if (!owner) return;
-  if (owner->registry && salts_plugin_lease_valid(owner->lease)) {
-    (void)salts_plugin_registry_release(owner->registry, &owner->lease);
+  if (owner->registry && cmeta_plugin_lease_valid(owner->lease)) {
+    (void)cmeta_plugin_registry_release(owner->registry, &owner->lease);
   }
   free(owner);
 }
@@ -90,21 +90,21 @@ static void flow_plugin_cflow_lease_release(void *ctx) {
 TURBO_FLOW_API int flow_plugin_bind_cflow_function(
     turbo_flow_t *flow,
     const flow_plugin_cflow_function_binding_t *binding) {
-  const salts_plugin_manifest *manifest = NULL;
-  const salts_plugin_export *entry = NULL;
-  const salts_plugin_function_export *function;
+  const cmeta_plugin_manifest *manifest = NULL;
+  const cmeta_plugin_export *entry = NULL;
+  const cmeta_plugin_function_export *function;
   const cmeta_param_desc *param;
   turbo_flow_reflected_operation_registration_t registration =
       TURBO_FLOW_REFLECTED_OPERATION_REGISTRATION_INIT;
   turbo_flow_operation_port_binding_t ports[2];
   flow_plugin_cflow_lease_owner_t *owner = NULL;
-  salts_plugin_lease lease = {0};
-  salts_plugin_status plugin_status;
+  cmeta_plugin_lease lease = {0};
+  cmeta_plugin_status plugin_status;
   cmeta_callable adapter;
   int rc;
 
   if (!flow || !binding || !binding->registry ||
-      !salts_plugin_ref_valid(binding->plugin) ||
+      !cmeta_plugin_ref_valid(binding->plugin) ||
       !binding->export_id || !binding->export_id[0] ||
       !binding->contract_id || !binding->contract_id[0] ||
       binding->contract_version == 0u ||
@@ -119,30 +119,30 @@ TURBO_FLOW_API int flow_plugin_bind_cflow_function(
     return SALTS_EINVAL;
   }
 
-  plugin_status = salts_plugin_registry_acquire(
+  plugin_status = cmeta_plugin_registry_acquire(
       binding->registry, binding->plugin, &lease, &manifest);
-  if (plugin_status != SALTS_PLUGIN_OK) {
+  if (plugin_status != CMETA_PLUGIN_OK) {
     return flow_set_error_keep_state(
         flow, flow_plugin_status_to_salts(plugin_status), 0u, 0u,
-        salts_plugin_status_string(plugin_status));
+        cmeta_plugin_status_string(plugin_status));
   }
-  plugin_status = salts_plugin_manifest_find_export(
+  plugin_status = cmeta_plugin_manifest_find_export(
       manifest, binding->export_id, &entry);
-  if (plugin_status == SALTS_PLUGIN_OK && entry) {
-    plugin_status = salts_plugin_export_require_function(
+  if (plugin_status == CMETA_PLUGIN_OK && entry) {
+    plugin_status = cmeta_plugin_export_require_function(
         entry, binding->contract_id, binding->contract_version,
         binding->required_capabilities);
   }
-  if (plugin_status != SALTS_PLUGIN_OK || !entry) {
+  if (plugin_status != CMETA_PLUGIN_OK || !entry) {
     rc = flow_set_error_keep_state(
         flow,
-        plugin_status == SALTS_PLUGIN_OK
+        plugin_status == CMETA_PLUGIN_OK
             ? SALTS_EPROTO
             : flow_plugin_status_to_salts(plugin_status),
         0u, 0u,
-        plugin_status == SALTS_PLUGIN_OK
+        plugin_status == CMETA_PLUGIN_OK
             ? "plugin export lookup returned no entry"
-            : salts_plugin_status_string(plugin_status));
+            : cmeta_plugin_status_string(plugin_status));
     goto release_lease;
   }
 
@@ -244,8 +244,8 @@ release_owner:
   return rc;
 
 release_lease:
-  if (salts_plugin_lease_valid(lease))
-    (void)salts_plugin_registry_release(binding->registry, &lease);
+  if (cmeta_plugin_lease_valid(lease))
+    (void)cmeta_plugin_registry_release(binding->registry, &lease);
   return rc;
 }
 
@@ -509,7 +509,7 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     b->request.limits.max_steps = v.max_steps;
     turbo_flow_plugin_operation_error_v3_init(&b->error);
     atomic_init(&b->admission, 0);
-    salts_mutex_init(&b->error_mutex);
+    cmeta_mutex_init(&b->error_mutex);
     if (!b->error_mutex) return operation_error(error, i, "allocation", SALTS_ENOMEM);
   }
   return required > budget ? operation_error(error, 0, "memory", SALTS_ENOSPC) : SALTS_OK;
@@ -617,9 +617,9 @@ done:
   if (rc != SALTS_OK) {
     error.status = rc;
     error.message[sizeof(error.message) - 1] = 0;
-    salts_mutex_lock(&b->error_mutex);
+    cmeta_mutex_lock(&b->error_mutex);
     b->error = error;
-    salts_mutex_unlock(&b->error_mutex);
+    cmeta_mutex_unlock(&b->error_mutex);
   }
   if (accepted) atomic_fetch_sub(&b->admission, 1);
   return rc;
@@ -676,7 +676,7 @@ int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *e
 void flow_plugin_operations_free(vec_t *bindings) {
   for (size_t i = 0; i < vec_size(bindings); ++i) {
     flow_plugin_operation_binding_t *b = vec_at(bindings, i);
-    if (b->error_mutex) salts_mutex_destroy(&b->error_mutex);
+    if (b->error_mutex) cmeta_mutex_destroy(&b->error_mutex);
   }
   vec_destroy(bindings);
 }

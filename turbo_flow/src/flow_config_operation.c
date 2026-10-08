@@ -1,6 +1,6 @@
 #include "flow_config_internal.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 
 #include <math.h>
 #include <stdio.h>

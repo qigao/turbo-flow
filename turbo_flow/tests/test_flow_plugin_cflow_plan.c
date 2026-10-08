@@ -62,13 +62,13 @@ static const turbo_flow_data_schema_t plugin_cflow_int_schema = {
     NULL};
 
 static void plugin_cflow_registry_open(
-    salts_plugin_registry *registry, salts_plugin_ref *ref) {
-  const salts_plugin_registry_config config = {4u};
-  check_equal(salts_plugin_registry_init(registry, &config), SALTS_PLUGIN_OK);
+    cmeta_plugin_registry *registry, cmeta_plugin_ref *ref) {
+  const cmeta_plugin_registry_config config = {4u};
+  check_equal(cmeta_plugin_registry_init(registry, &config), CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_load(registry, FLOW_PLUGIN_CFLOW_FIXTURE, ref),
-      SALTS_PLUGIN_OK);
-  check_equal(salts_plugin_registry_start(registry, *ref), SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_load(registry, FLOW_PLUGIN_CFLOW_FIXTURE, ref),
+      CMETA_PLUGIN_OK);
+  check_equal(cmeta_plugin_registry_start(registry, *ref), CMETA_PLUGIN_OK);
 }
 
 suite("TurboFlow Salts Plugin CFlow binding") {
@@ -79,9 +79,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
         "stage main {\n"
         "  input -> plugin\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref plugin = {0};
-    salts_plugin_lifecycle_info lifecycle = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref plugin = {0};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         plugin_cflow_operation_descriptor("test.plugin.cflow.double");
@@ -155,8 +155,8 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
     check_equal(
         turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
@@ -183,35 +183,35 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     turbo_flow_msg_cleanup(&message);
 
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     check_equal(
-        salts_plugin_registry_request_stop(&registry, plugin), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, plugin), CMETA_PLUGIN_OK);
     quiescent = true;
     check_equal(
-        salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_BUSY);
+        cmeta_plugin_registry_unload(&registry, plugin), CMETA_PLUGIN_BUSY);
 
     turbo_flow_destroy(flow);
     flow = NULL;
 
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)0u);
     quiescent = false;
     check_equal(
-        salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("keeps the plugin lease transactional across compile failure") {
@@ -221,9 +221,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
         "stage main {\n"
         "  input -> plugin\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref plugin = {0};
-    salts_plugin_lifecycle_info lifecycle = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref plugin = {0};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         plugin_cflow_operation_descriptor(
@@ -252,38 +252,38 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     check_equal(flow_plugin_bind_cflow_function(flow, &binding), SALTS_OK);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     check_equal(turbo_flow_compile(flow), SALTS_ENOTSUP);
     check_false(flow->compiled_plan.sealed);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)1u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)0u);
 
     turbo_flow_destroy(flow);
     check_equal(
-        salts_plugin_registry_request_stop(&registry, plugin), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, plugin), CMETA_PLUGIN_OK);
     {
       bool quiescent = false;
       check_equal(
-          salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
-          SALTS_PLUGIN_OK);
+          cmeta_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+          CMETA_PLUGIN_OK);
       check_true(quiescent);
     }
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("rejects a mismatched plugin contract before plan retention") {
@@ -293,9 +293,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
         "stage main {\n"
         "  input -> plugin\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref plugin = {0};
-    salts_plugin_lifecycle_info lifecycle = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref plugin = {0};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         plugin_cflow_operation_descriptor(
@@ -319,23 +319,23 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     check_equal(flow_plugin_bind_cflow_function(flow, &binding), SALTS_ENOTSUP);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)0u);
 
     turbo_flow_destroy(flow);
     check_equal(
-        salts_plugin_registry_request_stop(&registry, plugin), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, plugin), CMETA_PLUGIN_OK);
     {
       bool quiescent = false;
       check_equal(
-          salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
-          SALTS_PLUGIN_OK);
+          cmeta_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+          CMETA_PLUGIN_OK);
       check_true(quiescent);
     }
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("rejects mismatched DataDesc without retaining the plugin lease") {
@@ -345,9 +345,9 @@ suite("TurboFlow Salts Plugin CFlow binding") {
         "stage main {\n"
         "  input -> plugin\n"
         "}\n";
-    salts_plugin_registry registry = {0};
-    salts_plugin_ref plugin = {0};
-    salts_plugin_lifecycle_info lifecycle = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_ref plugin = {0};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_operation_descriptor_t operation =
         plugin_cflow_operation_descriptor("test.plugin.cflow.mismatch");
@@ -370,22 +370,22 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     check_equal(flow_plugin_bind_cflow_function(flow, &binding), SALTS_EPROTO);
     check_equal(vec_size(&flow->pending_plan_resources), (size_t)0u);
     check_equal(
-        salts_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)0u);
 
     turbo_flow_destroy(flow);
     check_equal(
-        salts_plugin_registry_request_stop(&registry, plugin), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, plugin), CMETA_PLUGIN_OK);
     {
       bool quiescent = false;
       check_equal(
-          salts_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
-          SALTS_PLUGIN_OK);
+          cmeta_plugin_registry_poll_quiescent(&registry, plugin, &quiescent),
+          CMETA_PLUGIN_OK);
       check_true(quiescent);
     }
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin), SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 }

@@ -1,9 +1,9 @@
 #include "turbo_flow_turbodb.h"
 
 #include <cstl/vec.h>
-#include <salts_buffer.h>
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <cmeta_buffer.h>
+#include <cmeta_error.h>
+#include <cmeta_thread.h>
 
 #include <limits.h>
 #include <stdbool.h>
@@ -37,7 +37,7 @@ typedef struct inbox_lease_s {
 } inbox_lease_t;
 
 typedef struct inbox_owner_s {
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   vec_t connections;
   vec_t leases;
   size_t connection_count;
@@ -128,7 +128,7 @@ static int inbox_affected_one(orm_result_t *result, orm_error_t *error) {
 
 static inbox_connection_slot_t *inbox_connection_acquire(inbox_owner_t *owner) {
   inbox_connection_slot_t *slot = NULL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   for (size_t i = 0u; i < owner->connection_count; ++i) {
     inbox_connection_slot_t *candidate = inbox_connection_at(owner, i);
     if (candidate && !candidate->busy) {
@@ -137,21 +137,21 @@ static inbox_connection_slot_t *inbox_connection_acquire(inbox_owner_t *owner) {
       break;
     }
   }
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return slot;
 }
 
 static void inbox_connection_release(inbox_owner_t *owner, inbox_connection_slot_t *slot) {
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   slot->busy = false;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
 }
 
 static bool inbox_is_accepting(inbox_owner_t *owner) {
   bool accepting;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   accepting = owner->accepting;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return accepting;
 }
 
@@ -605,7 +605,7 @@ static int inbox_preflight(inbox_owner_t *owner, inbox_connection_slot_t *slot,
 
 static inbox_lease_t *inbox_lease_reserve(inbox_owner_t *owner) {
   inbox_lease_t *lease = NULL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   for (size_t i = 0u; i < owner->max_claims; ++i) {
     inbox_lease_t *candidate = inbox_lease_at(owner, i);
     if (candidate && candidate->state == INBOX_LEASE_FREE) {
@@ -614,13 +614,13 @@ static inbox_lease_t *inbox_lease_reserve(inbox_owner_t *owner) {
       break;
     }
   }
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return lease;
 }
 
 static inbox_lease_t *inbox_lease_begin_settle(inbox_owner_t *owner, uint64_t id, uint64_t token) {
   inbox_lease_t *lease = NULL;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   for (size_t i = 0u; i < owner->max_claims; ++i) {
     inbox_lease_t *candidate = inbox_lease_at(owner, i);
     if (candidate && candidate->state == INBOX_LEASE_ACTIVE && candidate->record_id == id &&
@@ -630,28 +630,28 @@ static inbox_lease_t *inbox_lease_begin_settle(inbox_owner_t *owner, uint64_t id
       break;
     }
   }
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return lease;
 }
 
 static void inbox_lease_activate(inbox_owner_t *owner, inbox_lease_t *lease, uint64_t record_id,
                                  uint64_t claim_token) {
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   lease->record_id = record_id;
   lease->claim_token = claim_token;
   lease->state = INBOX_LEASE_ACTIVE;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
 }
 
 static void inbox_lease_restore(inbox_owner_t *owner, inbox_lease_t *lease) {
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   if (lease->state == INBOX_LEASE_SETTLING) lease->state = INBOX_LEASE_ACTIVE;
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
 }
 
 static bool inbox_has_live_lease(inbox_owner_t *owner) {
   bool live = false;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   for (size_t i = 0u; i < owner->max_claims; ++i) {
     const inbox_lease_t *lease = inbox_lease_at(owner, i);
     if (lease && lease->state != INBOX_LEASE_FREE) {
@@ -659,16 +659,16 @@ static bool inbox_has_live_lease(inbox_owner_t *owner) {
       break;
     }
   }
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   return live;
 }
 
 static void inbox_lease_release(inbox_owner_t *owner, inbox_lease_t *lease) {
   mem_buffer_t *storage;
-  salts_mutex_lock(&owner->mutex);
+  cmeta_mutex_lock(&owner->mutex);
   storage = lease->storage;
   memset(lease, 0, sizeof(*lease));
-  salts_mutex_unlock(&owner->mutex);
+  cmeta_mutex_unlock(&owner->mutex);
   mem_buffer_release(storage);
 }
 
@@ -1385,10 +1385,10 @@ static int inbox_close(void *ctx) {
   inbox_owner_t *o = ctx;
   inbox_connection_slot_t *s = inbox_connection_acquire(o);
   if (!s) return SALTS_EBUSY;
-  salts_mutex_lock(&o->mutex);
+  cmeta_mutex_lock(&o->mutex);
   if (!o->accepting) {
     int rc = o->closing ? SALTS_EBUSY : SALTS_OK;
-    salts_mutex_unlock(&o->mutex);
+    cmeta_mutex_unlock(&o->mutex);
     inbox_connection_release(o, s);
     return rc;
   }
@@ -1399,12 +1399,12 @@ static int inbox_close(void *ctx) {
     if (candidate != s && candidate && candidate->busy) {
       o->accepting = true;
       o->closing = false;
-      salts_mutex_unlock(&o->mutex);
+      cmeta_mutex_unlock(&o->mutex);
       inbox_connection_release(o, s);
       return SALTS_EBUSY;
     }
   }
-  salts_mutex_unlock(&o->mutex);
+  cmeta_mutex_unlock(&o->mutex);
   orm_error_t e;
   orm_transaction_t *transaction = NULL;
   orm_result_t *r = NULL;
@@ -1420,10 +1420,10 @@ static int inbox_close(void *ctx) {
   orm_result_destroy(r);
   rc = inbox_finish(transaction, rc, &e);
   inbox_connection_release(o, s);
-  salts_mutex_lock(&o->mutex);
+  cmeta_mutex_lock(&o->mutex);
   o->closing = false;
   if (rc != SALTS_OK) o->accepting = true;
-  salts_mutex_unlock(&o->mutex);
+  cmeta_mutex_unlock(&o->mutex);
   return rc;
 }
 static int inbox_snapshot(void *ctx, turbo_flow_inbox_snapshot_t *x) {
@@ -1463,7 +1463,7 @@ static void inbox_owner_free(inbox_owner_t *o) {
     inbox_lease_t *lease = inbox_lease_at(o, i);
     if (lease) mem_buffer_release(lease->storage);
   }
-  if (o->mutex) salts_mutex_destroy(&o->mutex);
+  if (o->mutex) cmeta_mutex_destroy(&o->mutex);
   vec_destroy(&o->connections);
   vec_destroy(&o->leases);
   free(o);
@@ -1604,7 +1604,7 @@ int turbo_flow_turbodb_inbox_create(const turbo_flow_turbodb_inbox_config_t *c,
   (void)snprintf(o->meta_table, sizeof(o->meta_table), "%s_inbox_meta_v3", c->namespace_name);
   (void)snprintf(o->records_table, sizeof(o->records_table), "%s_inbox_records_v3",
                  c->namespace_name);
-  salts_mutex_init(&o->mutex);
+  cmeta_mutex_init(&o->mutex);
   if (!o->mutex) {
     inbox_owner_free(o);
     return SALTS_ENOMEM;

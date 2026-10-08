@@ -219,9 +219,9 @@ static int managed_source_start(void *ctx, turbo_flow_t *flow,
   }
   if (fixture->try_other_thread) {
     managed_source_thread_open_t call = {fixture, flow, stage, SALTS_OK, 0};
-    salts_thread_t thread = NULL;
-    check_equal(salts_thread_create(&thread, managed_source_open_from_thread, &call), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    cmeta_thread_t thread = NULL;
+    check_equal(cmeta_thread_create(&thread, managed_source_open_from_thread, &call), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     fixture->other_thread_status = call.status;
     fixture->other_thread_publisher_valid = call.publisher_valid;
   }
@@ -258,7 +258,7 @@ static int managed_source_sink(turbo_flow_msg_t *message, void *ctx) {
     atomic_store_explicit(&fixture->sink_entered, 1, memory_order_release);
     while (fixture->block_sink &&
            !atomic_load_explicit(&fixture->sink_release, memory_order_acquire)) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
     managed_source_record_event(fixture, MANAGED_SOURCE_EVENT_SINK);
     (void)atomic_fetch_add_explicit(&fixture->sink_calls, 1, memory_order_release);
@@ -780,7 +780,7 @@ spec("Flow managed Source registration") {
     turbo_flow_managed_boundary_provider_ops_t boundary_ops;
     turbo_flow_managed_source_registration_t registration;
     managed_source_stop_call_t stop_call;
-    salts_thread_t stop_thread = NULL;
+    cmeta_thread_t stop_thread = NULL;
     flow_admission_state_t admission = FLOW_ADMISSION_OPEN;
     turbo_flow_t *flow = turbo_flow_create();
 
@@ -805,25 +805,25 @@ spec("Flow managed Source registration") {
     for (size_t attempt = 0u;
          attempt < 2000u && atomic_load_explicit(&fixture.sink_entered, memory_order_acquire) == 0;
          ++attempt) {
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&fixture.publisher_emits, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&fixture.sink_entered, memory_order_acquire), 1);
 
     stop_call.flow = flow;
     atomic_init(&stop_call.status, INT_MIN);
-    check_equal(salts_thread_create(&stop_thread, managed_source_stop_flow, &stop_call), SALTS_OK);
+    check_equal(cmeta_thread_create(&stop_thread, managed_source_stop_flow, &stop_call), SALTS_OK);
     for (size_t attempt = 0u; attempt < 2000u; ++attempt) {
-      salts_mutex_lock(&flow->runtime_mutex);
+      cmeta_mutex_lock(&flow->runtime_mutex);
       admission = flow->admission_state;
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       if (admission == FLOW_ADMISSION_STOPPING) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(admission, FLOW_ADMISSION_STOPPING);
     check_equal(atomic_load_explicit(&stop_call.status, memory_order_acquire), INT_MIN);
     atomic_store_explicit(&fixture.sink_release, 1, memory_order_release);
-    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&stop_call.status, memory_order_acquire), SALTS_OK);
     check_equal(atomic_load_explicit(&fixture.sink_calls, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&fixture.publisher_destroys, memory_order_acquire), 1);

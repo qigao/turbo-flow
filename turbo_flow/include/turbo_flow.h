@@ -4,8 +4,7 @@
 #include "turbo_flow_export.h"
 #include "platform.h"
 #include <salts/clock.h>
-#include "salts_buffer.h"
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include "turbo_flow_domain.h"
 #include "turbo_flow_config_limits.h"
 #include "tstr.h"
@@ -957,7 +956,7 @@ typedef struct turbo_flow_resource_command_s {
   char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
   char idempotency_key[TURBO_FLOW_RESOURCE_COMMAND_KEY_MAX + 1u];
   uint64_t expected_generation;
-  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute cmeta_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
   uint32_t parallelism;
   /** Resize-only owner drain budget; UINT64_MAX waits without a drain deadline. */
@@ -1059,7 +1058,7 @@ typedef struct turbo_flow_resize_workflow_spec_s {
   uint64_t pool_generation;
   uint32_t parallelism;
   uint64_t drain_timeout_ms;
-  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute cmeta_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
 } turbo_flow_resize_workflow_spec_t;
 

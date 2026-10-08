@@ -593,9 +593,9 @@ int protocol_network_e2e_tcp_connect(protocol_network_e2e_fixture_t *fixture,
   memset(&fixture->connection, 0, sizeof(fixture->connection));
   rc = cnet_connect(&fixture->client, &options, &fixture->connection);
   if (rc != SALTS_OK) return rc;
-  deadline = salts_monotonic_ms() + timeout_ms;
+  deadline = cmeta_monotonic_ms() + timeout_ms;
   while (fixture->tcp.connected == connected_before && fixture->tcp.failed == 0 &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     rc = protocol_network_e2e_poll(fixture, 1u, &snapshot);
     if (rc != SALTS_OK) return rc;
   }
@@ -635,8 +635,8 @@ int protocol_network_e2e_tcp_close(protocol_network_e2e_fixture_t *fixture, uint
   if (!fixture || !fixture->client_initialized) return SALTS_EINVAL;
   rc = cnet_close(&fixture->client, fixture->connection);
   if (rc != SALTS_OK && rc != SALTS_EALREADY) return rc;
-  deadline = salts_monotonic_ms() + timeout_ms;
-  while (fixture->tcp.terminal == terminal_before && salts_monotonic_ms() < deadline) {
+  deadline = cmeta_monotonic_ms() + timeout_ms;
+  while (fixture->tcp.terminal == terminal_before && cmeta_monotonic_ms() < deadline) {
     rc = protocol_network_e2e_poll(fixture, 1u, &snapshot);
     if (rc != SALTS_OK) return rc;
   }
@@ -652,8 +652,8 @@ int protocol_network_e2e_business_request_and_drive(
   uint64_t deadline;
   int rc;
   if (!fixture || !fixture->business_generation) return SALTS_EINVAL;
-  deadline = salts_monotonic_ms() + timeout_ms;
-  while (salts_monotonic_ms() < deadline) {
+  deadline = cmeta_monotonic_ms() + timeout_ms;
+  while (cmeta_monotonic_ms() < deadline) {
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
     rc = turbo_flow_plugin_generation_poll(fixture->business_generation, 1u, &error);
     if (rc != SALTS_OK) return rc;
@@ -664,7 +664,7 @@ int protocol_network_e2e_business_request_and_drive(
     if (fixture->business.stage_completions > completed_before &&
         fixture->udp.received > received_before)
       return SALTS_OK;
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
   return SALTS_ETIMEDOUT;
 }

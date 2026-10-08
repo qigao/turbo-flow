@@ -70,7 +70,7 @@ endforeach()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" TURBO_FLOW_SALTS_ROOT)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" TURBO_FLOW_SALTS_UTILS_ROOT)
 
-find_package(Salts CONFIG REQUIRED
+find_package(Salts 3 CONFIG REQUIRED
              PATHS "${TURBO_FLOW_SALTS_ROOT}" NO_DEFAULT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED
              PATHS "${TURBO_FLOW_SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
@@ -88,6 +88,11 @@ endif()
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR
           "resolved SaltsUtils package is missing required target Salts::DataBind")
+endif()
+
+if(NOT TARGET Salts::ComponentPlugin)
+  message(FATAL_ERROR
+          "resolved Salts package is missing required integration target Salts::ComponentPlugin")
 endif()
 
 include(TurboFlowRequireCNet)

@@ -151,8 +151,8 @@ $dataBindHeader = Get-Content -LiteralPath (Join-Path $saltsUtilsRoot "include/d
 if ($dataBindHeader -notmatch '#define\s+DATA_BIND_VERSION_MAJOR\s+3') {
   throw "latest SaltsUtils.Native does not expose DataBind 3"
 }
-if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+9') {
-  throw "latest SaltsUtils.Native does not expose DataBind ABI 9"
+if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
+  throw "latest SaltsUtils.Native does not expose DataBind ABI 10"
 }
 
 "SALTS_ROOT=$saltsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8

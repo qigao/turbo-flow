@@ -21,9 +21,9 @@ static void lifecycle(void *ctx, turbo_flow_plugin_lifecycle_event_t event,
   (void)status;
   if (strcmp(plugin_id, "fixture.projection") ||
       (event != TURBO_FLOW_PLUGIN_LIFECYCLE_DESTROY && event != TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD)) return;
-  salts_mutex_lock(&observer->mutex);
+  cmeta_mutex_lock(&observer->mutex);
   if (observer->count < PROJECTION_TEST_EVENTS) observer->events[observer->count++] = event;
-  salts_mutex_unlock(&observer->mutex);
+  cmeta_mutex_unlock(&observer->mutex);
 }
 typedef struct projection_test_s {
   projection_observer_t observer;
@@ -40,8 +40,8 @@ static int test_open(projection_test_t *test, int generation) {
   projection_fixture_protocol_t *protocol;
   int rc;
   memset(test, 0, sizeof(*test));
-  salts_mutex_init(&test->observer.mutex);
-  salts_cond_init(&test->observer.cond);
+  cmeta_mutex_init(&test->observer.mutex);
+  cmeta_cond_init(&test->observer.cond);
   config.module_capacity = 2u;
   config.lifecycle_observer = lifecycle;
   config.lifecycle_observer_ctx = &test->observer;
@@ -72,8 +72,8 @@ static int host_destroy(projection_test_t *test) {
   return turbo_flow_plugin_host_destroy(test->host, 0u, &error);
 }
 static void observer_destroy(projection_test_t *test) {
-  salts_cond_destroy(&test->observer.cond);
-  salts_mutex_destroy(&test->observer.mutex);
+  cmeta_cond_destroy(&test->observer.cond);
+  cmeta_mutex_destroy(&test->observer.mutex);
 }
 static int create_stack_owner(projection_test_t *test, turbo_flow_projection_owner_t **owner) {
   turbo_flow_projection_owner_config_t config = test->config;
@@ -206,18 +206,18 @@ spec("PluginHost retained projection DLL leases") {
     turbo_flow_msg_cleanup(&clone);
     turbo_flow_plugin_catalog_snapshot_destroy(test.snapshot);
     check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
-    salts_mutex_lock(&test.observer.mutex);
+    cmeta_mutex_lock(&test.observer.mutex);
     test.observer.release_busy = 1;
-    salts_mutex_unlock(&test.observer.mutex);
+    cmeta_mutex_unlock(&test.observer.mutex);
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_EBUSY);
     check_equal(host_destroy(&test), SALTS_EBUSY);
     check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
     check_equal(state.outstanding, (size_t)0);
     check_equal(state.retained_bytes, (size_t)0);
     check_equal(state.accepting, 0);
-    salts_mutex_lock(&test.observer.mutex);
+    cmeta_mutex_lock(&test.observer.mutex);
     test.observer.release_busy = 0;
-    salts_mutex_unlock(&test.observer.mutex);
+    cmeta_mutex_unlock(&test.observer.mutex);
     check_equal(turbo_flow_projection_owner_destroy(owner), SALTS_OK);
     check_equal(host_destroy(&test), SALTS_OK);
     check_equal(test.observer.release_attempts, 2);
@@ -281,9 +281,9 @@ spec("PluginHost retained projection DLL leases") {
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     turbo_flow_msg_init(&source);
     check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, test.value), SALTS_OK);
-    salts_mutex_lock(&test.observer.mutex);
+    cmeta_mutex_lock(&test.observer.mutex);
     test.observer.clone_error = 1;
-    salts_mutex_unlock(&test.observer.mutex);
+    cmeta_mutex_unlock(&test.observer.mutex);
     check_equal(turbo_flow_msg_clone(&clone, &source), SALTS_EIO);
     check_null(turbo_flow_msg_projection(&clone, NULL));
     check_equal(test.observer.count, (size_t)1);
@@ -292,9 +292,9 @@ spec("PluginHost retained projection DLL leases") {
     check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
     check_equal(state.outstanding, (size_t)1);
     check_equal(state.retained_bytes, sizeof(int));
-    salts_mutex_lock(&test.observer.mutex);
+    cmeta_mutex_lock(&test.observer.mutex);
     test.observer.clone_error = 0;
-    salts_mutex_unlock(&test.observer.mutex);
+    cmeta_mutex_unlock(&test.observer.mutex);
     check_equal(turbo_flow_msg_clone(&clone, &source), SALTS_OK);
     turbo_flow_msg_cleanup(&clone);
     turbo_flow_msg_cleanup(&source);
@@ -314,32 +314,32 @@ spec("PluginHost retained projection DLL leases") {
       turbo_flow_projection_owner_t *owner = NULL;
       turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
       turbo_flow_msg_t source, rejected;
-      salts_thread_t thread;
+      cmeta_thread_t thread;
       projection_worker_t worker = {&source, destroying, SALTS_EIO, 0};
       check_equal(test_open(&test, 0), SALTS_OK);
       check_equal(create_stack_owner(&test, &owner), SALTS_OK);
       turbo_flow_msg_init(&source);
       check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, test.value), SALTS_OK);
-      salts_mutex_lock(&test.observer.mutex);
+      cmeta_mutex_lock(&test.observer.mutex);
       test.observer.block_clone = !destroying;
       test.observer.block_destroy = destroying;
-      salts_mutex_unlock(&test.observer.mutex);
+      cmeta_mutex_unlock(&test.observer.mutex);
       turbo_flow_plugin_catalog_snapshot_destroy(test.snapshot);
-      check_equal(salts_thread_create(&thread, projection_worker, &worker), 0);
-      salts_mutex_lock(&test.observer.mutex);
-      while (!test.observer.entered) salts_cond_wait(&test.observer.cond, &test.observer.mutex);
-      salts_mutex_unlock(&test.observer.mutex);
+      check_equal(cmeta_thread_create(&thread, projection_worker, &worker), 0);
+      cmeta_mutex_lock(&test.observer.mutex);
+      while (!test.observer.entered) cmeta_cond_wait(&test.observer.cond, &test.observer.mutex);
+      cmeta_mutex_unlock(&test.observer.mutex);
       check_equal(host_destroy(&test), SALTS_EBUSY);
       check_equal(turbo_flow_projection_owner_snapshot(owner, &state), SALTS_OK);
       check_equal(state.outstanding, destroying ? (size_t)1 : (size_t)2);
       check_equal(state.retained_bytes, (destroying ? 1u : 2u) * sizeof(int));
       check_equal(turbo_flow_projection_owner_stop(owner), SALTS_OK);
       if (!destroying) check_equal(turbo_flow_msg_clone(&rejected, &source), SALTS_ECANCELED);
-      salts_mutex_lock(&test.observer.mutex);
+      cmeta_mutex_lock(&test.observer.mutex);
       test.observer.proceed = 1;
-      salts_cond_broadcast(&test.observer.cond);
-      salts_mutex_unlock(&test.observer.mutex);
-      check_equal(salts_thread_join(&thread), 0);
+      cmeta_cond_broadcast(&test.observer.cond);
+      cmeta_mutex_unlock(&test.observer.mutex);
+      check_equal(cmeta_thread_join(&thread), 0);
       check_equal(worker.result, SALTS_OK);
       if (!destroying) {
         check_equal(worker.observed, PROJECTION_TEST_VALUE);

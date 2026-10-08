@@ -357,7 +357,7 @@ static int chttp_server_adapter_gate(turbo_flow_msg_t *message, void *ctx) {
   if (!gate) return SALTS_EINVAL;
   (void)atomic_fetch_add_explicit(&gate->entered, 1u, memory_order_release);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   return SALTS_OK;
 }
 
@@ -397,7 +397,7 @@ static void chttp_server_adapter_snapshot_thread(void *ctx) {
       return;
     }
     (void)atomic_fetch_add_explicit(&probe->observations, 1u, memory_order_relaxed);
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
 }
 
@@ -1207,7 +1207,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
                 SALTS_OK);
     for (int wait = 0;
          wait < 2000 && !atomic_load_explicit(&completion.called, memory_order_acquire); ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&completion.called, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ENOENT);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1448,7 +1448,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
     chttp_server_adapter_gate_t gate = {0};
     chttp_server_adapter_client_thread_t clients[2] = {0};
     chttp_server_adapter_result_t rejected = {0};
-    salts_thread_t threads[2] = {0};
+    cmeta_thread_t threads[2] = {0};
     turbo_flow_t *flow = turbo_flow_create();
     size_t index;
 
@@ -1481,12 +1481,12 @@ spec("TurboFlow CHTTP deferred server adapter") {
       clients[index].target = "/flow";
       clients[index].body = index == 0u ? "one" : "two";
       check_equal(
-          salts_thread_create(&threads[index], chttp_server_adapter_client_thread, &clients[index]),
+          cmeta_thread_create(&threads[index], chttp_server_adapter_client_thread, &clients[index]),
           SALTS_OK);
       for (int wait = 0; wait < 5000; ++wait) {
         check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
         if (snapshot.admitted_requests >= index + 1u) break;
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
       }
       check_equal(snapshot.admitted_requests, (uint64_t)(index + 1u));
     }
@@ -1497,7 +1497,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
 
     atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
     for (index = 0u; index < 2u; ++index) {
-      check_equal(salts_thread_join(&threads[index]), SALTS_OK);
+      check_equal(cmeta_thread_join(&threads[index]), SALTS_OK);
       check_equal(clients[index].result.status, SALTS_OK);
       check_equal(clients[index].result.response_status,
                   TURBO_FLOW_CHTTP_SERVER_DEFAULT_SUCCESS_STATUS);
@@ -1742,8 +1742,8 @@ spec("TurboFlow CHTTP deferred server adapter") {
     chttp_server_adapter_stop_thread_t stop = {0};
     chttp_server_adapter_result_t rejected = {0};
     turbo_flow_runtime_snapshot_t runtime = {0};
-    salts_thread_t client_thread = NULL;
-    salts_thread_t stop_thread = NULL;
+    cmeta_thread_t client_thread = NULL;
+    cmeta_thread_t stop_thread = NULL;
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
@@ -1770,20 +1770,20 @@ spec("TurboFlow CHTTP deferred server adapter") {
     accepted.port = snapshot.bound_port;
     accepted.target = "/flow";
     accepted.body = "accepted";
-    check_equal(salts_thread_create(&client_thread, chttp_server_adapter_client_thread, &accepted),
+    check_equal(cmeta_thread_create(&client_thread, chttp_server_adapter_client_thread, &accepted),
                 SALTS_OK);
     for (int wait = 0;
          wait < 5000 && atomic_load_explicit(&gate.entered, memory_order_acquire) == 0u; ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), (size_t)1u);
 
     stop.flow = flow;
-    check_equal(salts_thread_create(&stop_thread, chttp_server_adapter_stop_thread, &stop),
+    check_equal(cmeta_thread_create(&stop_thread, chttp_server_adapter_stop_thread, &stop),
                 SALTS_OK);
     for (int wait = 0; wait < 5000; ++wait) {
       check_equal(turbo_flow_runtime_snapshot(flow, &runtime), SALTS_OK);
       if (!runtime.accepting_publishes) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(runtime.accepting_publishes, 0);
     check_equal(turbo_flow_chttp_server_snapshot(server, &snapshot), SALTS_OK);
@@ -1792,8 +1792,8 @@ spec("TurboFlow CHTTP deferred server adapter") {
                 SALTS_OK);
     check_equal(rejected.response_status, TURBO_FLOW_CHTTP_SERVER_DEFAULT_UNAVAILABLE_STATUS);
     atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
-    check_equal(salts_thread_join(&client_thread), SALTS_OK);
-    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
     check_equal(accepted.result.status, SALTS_OK);
     check_equal(accepted.result.response_status, TURBO_FLOW_CHTTP_SERVER_DEFAULT_SUCCESS_STATUS);
     check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
@@ -1823,8 +1823,8 @@ spec("TurboFlow CHTTP deferred server adapter") {
     chttp_server_adapter_holding_sink_t sink = {0};
     chttp_server_adapter_client_thread_t client = {0};
     chttp_server_adapter_stop_thread_t stop = {0};
-    salts_thread_t client_thread = NULL;
-    salts_thread_t stop_thread = NULL;
+    cmeta_thread_t client_thread = NULL;
+    cmeta_thread_t stop_thread = NULL;
     turbo_flow_t *flow = turbo_flow_create();
 
     check_not_null(flow);
@@ -1856,19 +1856,19 @@ spec("TurboFlow CHTTP deferred server adapter") {
     client.port = snapshot.bound_port;
     client.target = "/flow";
     client.body = "held";
-    check_equal(salts_thread_create(&client_thread, chttp_server_adapter_client_thread, &client),
+    check_equal(cmeta_thread_create(&client_thread, chttp_server_adapter_client_thread, &client),
                 SALTS_OK);
     for (int wait = 0;
          wait < 5000 && atomic_load_explicit(&sink.submissions, memory_order_acquire) == 0u; ++wait)
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&sink.submissions, memory_order_acquire), (size_t)1u);
 
     stop.flow = flow;
     atomic_init(&stop.result, SALTS_EBUSY);
-    check_equal(salts_thread_create(&stop_thread, chttp_server_adapter_stop_thread, &stop),
+    check_equal(cmeta_thread_create(&stop_thread, chttp_server_adapter_stop_thread, &stop),
                 SALTS_OK);
-    check_equal(salts_thread_join(&client_thread), SALTS_OK);
-    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&stop.result, memory_order_acquire), SALTS_OK);
     check_equal(atomic_load_explicit(&sink.stops, memory_order_acquire), (size_t)1u);
     check_equal(client.result.status, SALTS_OK);
@@ -1895,7 +1895,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
     turbo_flow_chttp_server_t *server = NULL;
     chttp_server_adapter_result_t result = {0};
     chttp_server_adapter_snapshot_thread_t snapshot_probe = {0};
-    salts_thread_t snapshot_thread = NULL;
+    cmeta_thread_t snapshot_thread = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     size_t cycle;
 
@@ -1913,7 +1913,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
     atomic_init(&snapshot_probe.stop, 0);
     atomic_init(&snapshot_probe.status, SALTS_OK);
     atomic_init(&snapshot_probe.observations, 0u);
-    check_equal(salts_thread_create(&snapshot_thread, chttp_server_adapter_snapshot_thread,
+    check_equal(cmeta_thread_create(&snapshot_thread, chttp_server_adapter_snapshot_thread,
                                     &snapshot_probe),
                 SALTS_OK);
     for (cycle = 0u; cycle < 8u; ++cycle) {
@@ -1930,7 +1930,7 @@ spec("TurboFlow CHTTP deferred server adapter") {
       check_equal(snapshot.bound_port, 0u);
     }
     atomic_store_explicit(&snapshot_probe.stop, 1, memory_order_release);
-    check_equal(salts_thread_join(&snapshot_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&snapshot_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&snapshot_probe.status, memory_order_acquire), SALTS_OK);
     check_true(atomic_load_explicit(&snapshot_probe.observations, memory_order_relaxed) != 0u);
     check_equal(snapshot.admitted_requests, (uint64_t)8u);

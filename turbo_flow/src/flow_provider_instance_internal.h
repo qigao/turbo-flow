@@ -16,8 +16,9 @@ typedef struct flow_compiled_provider_instance_s
  * Bind one exact .flow stage to its canonical provider/config/resource and
  * complete provider preflight before any provider materialization side effect.
  *
- * Success owns provider/resource Salts Plugin leases plus the typed native
- * config until flow_compiled_provider_instance_release().
+ * Success borrows the provider factory from one generation-owned Salts
+ * Component scope, while resource bindings and typed native config remain
+ * owned by this compiled instance until release.
  *
  * Normal failure leaves *out NULL. If cleanup itself fails, *out remains
  * non-NULL so the caller can retry release; there is no force-release path.
@@ -25,7 +26,8 @@ typedef struct flow_compiled_provider_instance_s
 int flow_compiled_provider_instance_prepare(
     turbo_flow_t *flow,
     size_t stage_index,
-    const turbo_flow_provider_resolver_v1_t *provider_resolver,
+    const salts_component_plugin_scope *component_scope,
+    const turbo_flow_provider_resolver_v2_t *provider_resolver,
     const turbo_flow_resource_resolver_v1_t *resource_resolver,
     flow_compiled_provider_instance_t **out,
     turbo_flow_config_error_t *error);
@@ -38,9 +40,9 @@ int flow_compiled_provider_instance_view(
 /**
  * Materialize exactly once through the already-retained provider binding.
  *
- * The runtime owner is stored inside the compiled instance so provider/resource
- * leases and provider-owned config metadata remain alive for every owner
- * callback. A successful materialization must be followed by explicit owner
+ * The runtime owner is stored inside the compiled instance so the enclosing
+ * Component scope, resource binding, and provider-owned config metadata remain
+ * alive for every owner callback. A successful materialization must be followed by explicit owner
  * destruction before the compiled instance can be released.
  */
 int flow_compiled_provider_instance_materialize(
@@ -63,7 +65,8 @@ int flow_compiled_provider_instance_owner_destroy(
     flow_compiled_provider_instance_t *compiled);
 
 /**
- * Destroy typed config, release resource/provider leases, and free the object.
+ * Destroy typed config, release resource binding/local provider projection,
+ * and free the object. The generation releases its Component scope separately.
  * Returns SALTS_EBUSY while a materialized runtime owner is still live.
  * On lease release failure, *compiled_io remains live for explicit retry.
  */

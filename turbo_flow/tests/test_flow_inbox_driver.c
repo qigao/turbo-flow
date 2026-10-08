@@ -84,7 +84,7 @@ static void wait_for_submission(async_probe_t *probe) {
   for (size_t attempt = 0u;
        attempt < 5000u && atomic_load_explicit(&probe->submissions, memory_order_acquire) == 0u;
        ++attempt)
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
 }
 
 static int bind_memory(turbo_flow_t *flow, const char *resource, turbo_flow_inbox_t *inbox,

@@ -1,6 +1,6 @@
 #include "flow_protocol_envelope_internal.h"
 
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "turbo_flow_protocol_inbox_envelope.h"
 
 #include <stdint.h>

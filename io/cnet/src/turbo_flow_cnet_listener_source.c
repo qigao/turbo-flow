@@ -1,7 +1,7 @@
 #include "turbo_flow_cnet.h"
 
 #include <cflow/scheduler.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -155,7 +155,7 @@ static void listener_source_fail(turbo_flow_cnet_listener_source_t *source, int 
   listener_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
   (void)snprintf(source->publisher_error, sizeof(source->publisher_error),
                  "CNet listener source failed at %s: %s (%d, native=%d)", source->error_stage,
-                 salts_strerror(source->status), source->status, source->native_status);
+                 cmeta_strerror(source->status), source->status, source->native_status);
   if (source->listener_initialized && !source->listener_closed) {
     (void)cnet_listener_close(&source->listener);
     source->listener_closed = true;

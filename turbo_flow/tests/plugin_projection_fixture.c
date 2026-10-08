@@ -8,20 +8,20 @@ static const turbo_flow_data_schema_t projection_schema = {
     TURBO_FLOW_DATA_ENCODING_OPAQUE, "fixture.projection", "Integer", "fixture.int", 1u, 1u, NULL};
 
 static void projection_record(projection_observer_t *observer, int event) {
-  salts_mutex_lock(&observer->mutex);
+  cmeta_mutex_lock(&observer->mutex);
   if (observer->count < PROJECTION_TEST_EVENTS) observer->events[observer->count++] = event;
-  salts_mutex_unlock(&observer->mutex);
+  cmeta_mutex_unlock(&observer->mutex);
 }
 static int projection_barrier(projection_observer_t *observer, int destroying) {
   int error;
-  salts_mutex_lock(&observer->mutex);
+  cmeta_mutex_lock(&observer->mutex);
   if (destroying ? observer->block_destroy : observer->block_clone) {
     ++observer->entered;
-    salts_cond_broadcast(&observer->cond);
-    while (!observer->proceed) salts_cond_wait(&observer->cond, &observer->mutex);
+    cmeta_cond_broadcast(&observer->cond);
+    while (!observer->proceed) cmeta_cond_wait(&observer->cond, &observer->mutex);
   }
   error = observer->clone_error;
-  salts_mutex_unlock(&observer->mutex);
+  cmeta_mutex_unlock(&observer->mutex);
   return error;
 }
 static int projection_clone(const void *value, void *ctx, void **out) {
@@ -43,10 +43,10 @@ static int projection_release(void *ctx) {
   projection_context_t *context = (projection_context_t *)ctx;
   projection_observer_t *observer = context->observer;
   int busy;
-  salts_mutex_lock(&observer->mutex);
+  cmeta_mutex_lock(&observer->mutex);
   ++observer->release_attempts;
   busy = observer->release_busy;
-  salts_mutex_unlock(&observer->mutex);
+  cmeta_mutex_unlock(&observer->mutex);
   if (busy) return SALTS_EBUSY;
   projection_record(observer, PROJECTION_CONTEXT_RELEASE);
   free(context);

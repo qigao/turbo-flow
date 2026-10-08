@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../../turbo_flow/tests/adapter_component_fixture.h"
 #include "cnet_provider_config_native.h"
 #include "tinytest.h"
 #include "turbo_flow_cnet_resource.h"
@@ -28,21 +29,22 @@ enum {
 };
 
 typedef struct resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref provider;
-  salts_plugin_ref resource;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref provider;
+  cmeta_plugin_ref resource;
 } resolver_fixture_t;
 
 typedef struct acceptance_s {
   turbo_flow_t *flow;
-  salts_plugin_registry registry;
+  cmeta_plugin_registry registry;
   int registry_initialized;
-  salts_plugin_ref provider_ref;
-  salts_plugin_ref resource_ref;
+  cmeta_plugin_ref provider_ref;
+  cmeta_plugin_ref resource_ref;
   int provider_loaded;
   int resource_loaded;
   int provider_started;
   int resource_started;
+  adapter_component_fixture_t component;
   turbo_flow_provider_binding_t *provider_binding;
   turbo_flow_resource_binding_t *resource_binding;
   turbo_flow_runtime_owner owner;
@@ -317,7 +319,7 @@ static int output(turbo_flow_msg_t *message, void *ctx) {
 
 static int resolve_provider(
     void *ctx, const char *identity,
-    turbo_flow_provider_candidate_v1_t *out,
+    turbo_flow_provider_candidate_v2_t *out,
     turbo_flow_config_error_t *error) {
   resolver_fixture_t *fixture = (resolver_fixture_t *)ctx;
   int known = 0;
@@ -329,8 +331,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "turbo-flow.cnet";
-  out->registry = fixture->registry;
-  out->plugin = fixture->provider;
+  out->component_identity = "AdapterProviderFixture";
   return SALTS_OK;
 }
 
@@ -362,28 +363,28 @@ static int resolve_resource(
 }
 
 static int setup_registry(void) {
-  salts_plugin_registry_config config = {2u};
+  cmeta_plugin_registry_config config = {2u};
   int rc;
-  rc = salts_plugin_registry_init(&acceptance.registry, &config);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  rc = cmeta_plugin_registry_init(&acceptance.registry, &config);
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.registry_initialized = 1;
-  rc = salts_plugin_registry_load(
+  rc = cmeta_plugin_registry_load(
       &acceptance.registry, FLOW_CNET_PROVIDER_FIXTURE,
       &acceptance.provider_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.provider_loaded = 1;
-  rc = salts_plugin_registry_load(
+  rc = cmeta_plugin_registry_load(
       &acceptance.registry, FLOW_CNET_RESOURCE_FIXTURE,
       &acceptance.resource_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.resource_loaded = 1;
-  rc = salts_plugin_registry_start(
+  rc = cmeta_plugin_registry_start(
       &acceptance.registry, acceptance.provider_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.provider_started = 1;
-  rc = salts_plugin_registry_start(
+  rc = cmeta_plugin_registry_start(
       &acceptance.registry, acceptance.resource_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.resource_started = 1;
   acceptance.resolver.registry = &acceptance.registry;
   acceptance.resolver.provider = acceptance.provider_ref;
@@ -413,42 +414,43 @@ static void cleanup(void) {
   if (acceptance.provider_binding)
     (void)turbo_flow_provider_binding_release(&acceptance.provider_binding);
   clear_typed();
+  check_equal(adapter_component_close(&acceptance.component), SALTS_OK);
 
   if (acceptance.registry_initialized) {
     bool quiescent = false;
     if (acceptance.provider_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.provider_ref);
       acceptance.provider_started = 0;
     }
     if (acceptance.resource_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.resource_ref);
       acceptance.resource_started = 0;
     }
     if (acceptance.provider_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.provider_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry, acceptance.provider_ref) ==
-          SALTS_PLUGIN_OK)
+          CMETA_PLUGIN_OK)
         acceptance.provider_loaded = 0;
     }
     quiescent = false;
     if (acceptance.resource_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.resource_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry, acceptance.resource_ref) ==
-          SALTS_PLUGIN_OK)
+          CMETA_PLUGIN_OK)
         acceptance.resource_loaded = 0;
     }
     if (!acceptance.provider_loaded && !acceptance.resource_loaded) {
-      (void)salts_plugin_registry_destroy(&acceptance.registry);
+      (void)cmeta_plugin_registry_destroy(&acceptance.registry);
       acceptance.registry_initialized = 0;
     }
   }
@@ -477,8 +479,8 @@ static int prepare_bindings(
     unsigned kind, turbo_flow_provider_contract_v1_t *contract,
     turbo_flow_provider_resource_view_v1_t *resource_view,
     turbo_flow_config_error_t *error) {
-  turbo_flow_provider_resolver_v1_t provider_resolver =
-      TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+  turbo_flow_provider_resolver_v2_t provider_resolver =
+      TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   turbo_flow_resource_resolver_v1_t resource_resolver =
       TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
   int rc;
@@ -487,8 +489,11 @@ static int prepare_bindings(
   resource_resolver.ctx = &acceptance.resolver;
   resource_resolver.resolve = resolve_resource;
 
+  rc = adapter_component_open(&acceptance.component,
+      &acceptance.registry, acceptance.provider_ref, provider_identity(kind));
+  if (rc != SALTS_OK) return rc;
   rc = turbo_flow_provider_binding_acquire(
-      &provider_resolver, provider_identity(kind),
+      &acceptance.component.component.scope, &provider_resolver, provider_identity(kind),
       &acceptance.provider_binding, error);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_provider_binding_contract(
@@ -609,32 +614,32 @@ spec("CNet canonical Salts providers") {
   after_each() { cleanup(); }
 
   it("materializes stream source") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_STREAM_SOURCE), SALTS_OK);
   }
 
   it("materializes listener source with exact-stage reply capability") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_LISTENER_SOURCE), SALTS_OK);
   }
 
   it("materializes packet source with exact-stage reply capability") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_PACKET_SOURCE), SALTS_OK);
   }
 
   it("materializes stream sink") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_STREAM_SINK), SALTS_OK);
   }
 
   it("materializes datagram sink") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_DATAGRAM_SINK), SALTS_OK);
   }
 
   it("materializes packet sink") {
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     check_equal(run_case(CASE_PACKET_SINK), SALTS_OK);
   }
 }

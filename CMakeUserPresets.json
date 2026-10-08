@@ -5,6 +5,43 @@
   ],
   "configurePresets": [
     {
+      "name": "ci-component-release-user",
+      "inherits": "release-linux-ninja",
+      "binaryDir": "${sourceDir}/build/component-runtime",
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/linux-x64",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_HOST_TRIPLET": "x64-linux",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+        "BUILD_TESTING": "ON",
+        "BUILD_TESTS": "ON",
+        "BUILD_EXAMPLES": "OFF",
+        "BUILD_BENCHMARKS": "OFF",
+        "ENABLE_SANITIZER_ADDRESS": "OFF",
+        "ENABLE_SANITIZER_UNDEFINED": "OFF",
+        "TURBO_FLOW_BUILD_TURBODB_ADAPTER": "OFF"
+      },
+      "environment": {
+        "PKG_ROOT": "${sourceDir}/stage/component-packages",
+        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
+        "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "RE2C_ROOT": "$penv{RE2C_ROOT}",
+        "HTTP_SERVICES_ROOT": "$penv{HTTP_SERVICES_ROOT}",
+        "TURBO_FLOW_ROOT": "${sourceDir}/stage/sdk/linux-x64",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/component-runtime/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/component-runtime/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$penv{LD_LIBRARY_PATH}"
+      }
+    },
+    {
       "name": "win-toolchain",
       "hidden": true,
       "environment": {
@@ -280,6 +317,17 @@
   ],
   "buildPresets": [
     {
+      "name": "ci-component-release-user",
+      "configurePreset": "ci-component-release-user"
+    },
+    {
+      "name": "install-ci-component-release-user",
+      "configurePreset": "ci-component-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
       "name": "win-dev-user",
       "configurePreset": "win-dev-user"
     },
@@ -413,6 +461,11 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "ci-component-release-user",
+      "inherits": "base-test",
+      "configurePreset": "ci-component-release-user"
+    },
     {
       "name": "win-dev-user",
       "inherits": "base-test",

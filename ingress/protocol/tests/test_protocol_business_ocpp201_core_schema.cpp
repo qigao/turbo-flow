@@ -117,9 +117,10 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     TransactionEvseFacts_init(&evse);
     TransactionEvseFacts_init(&evse_without_connector);
     TransactionIdToken_init(&id_token);
-    check_equal(TransactionEventFacts_from_json(codec, &event, event_json,
-                                                 sizeof(event_json) - 1u, &error),
-                 DATA_BIND_OK);
+    const DataBindStatus event_status = TransactionEventFacts_from_json(
+        codec, &event, event_json, sizeof(event_json) - 1u, &error);
+    info("event bind status=%d path=%s reason=%s", event_status, error.path, error.message);
+    check_equal(event_status, DATA_BIND_OK);
     check_equal(TransactionEventFacts_from_json(
                      codec, &event_without_offline, event_without_offline_json,
                      sizeof(event_without_offline_json) - 1u, &error),
@@ -172,7 +173,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(encoded_json) - 1u);
     check_equal(encoded, encoded_json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     ResetRequest_clear(&request);
     data_bind_free(codec);
   }
@@ -196,7 +197,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(json) - 1u);
     check_equal(encoded, json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     UnlockConnectorRequest_clear(&request);
     data_bind_free(codec);
   }

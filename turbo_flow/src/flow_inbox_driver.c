@@ -5,7 +5,7 @@
 #include "turbo_flow_durable_buffer.h"
 
 #include <cflow/publishers.h>
-#include <salts_error.h>
+#include <salts/error_codes.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -253,11 +253,11 @@ static int flow_inbox_driver_request_internal(
   if (!source) return SALTS_EINVAL;
   if (source->phase != FLOW_INBOX_SOURCE_IDLE) return SALTS_EBUSY;
   if (turbo_flow_state(source->config.flow) != TURBO_FLOW_STATE_STARTED) return SALTS_ESHUTDOWN;
-  salts_mutex_lock(&source->config.flow->runtime_mutex);
+  cmeta_mutex_lock(&source->config.flow->runtime_mutex);
   status = source->config.flow->admission_state == FLOW_ADMISSION_OPEN ||
            (buffer_drain && source->config.flow->admission_state == FLOW_ADMISSION_PAUSED)
                ? SALTS_OK : SALTS_ESHUTDOWN;
-  salts_mutex_unlock(&source->config.flow->runtime_mutex);
+  cmeta_mutex_unlock(&source->config.flow->runtime_mutex);
   if (status != SALTS_OK) return status;
   {
     const int observed = source->config.claim_begin

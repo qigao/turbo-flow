@@ -2,7 +2,7 @@
 
 #include "flow_config_internal.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 
 #include <cyaml/cyaml_json_adapter.h>
 

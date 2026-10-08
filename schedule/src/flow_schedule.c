@@ -2,9 +2,10 @@
 
 #include "platform.h"
 #include "cron/salts_cron.h"
-#include "salts_error.h"
+#include <cmeta_error.h>
+#include <salts/clock.h>
 #include "tstr.h"
-#include "salts_thread.h"
+#include <cmeta_thread.h>
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -40,9 +41,9 @@ struct turbo_flow_schedule_s {
   uint32_t catch_up_limit;
   int manual_clock;
   time_t cron_cursor_minute;
-  salts_mutex_t mutex;
-  salts_timer_t *timer;
-  salts_thread_t bootstrap_thread;
+  cmeta_mutex_t mutex;
+  cmeta_timer_t *timer;
+  cmeta_thread_t bootstrap_thread;
   int bootstrap_thread_started;
   atomic_int started;
   atomic_int completed;
@@ -87,7 +88,7 @@ static void flow_schedule_publish_complete(void *ctx, const turbo_flow_publish_r
         atomic_store_explicit(&schedule->completed, 1, memory_order_release);
       } else {
         atomic_store_explicit(&schedule->next_due_ms,
-                              flow_schedule_add_delay(salts_monotonic_ms(), schedule->delay_ms),
+                              flow_schedule_add_delay(cmeta_monotonic_ms(), schedule->delay_ms),
                               memory_order_release);
       }
     }
@@ -134,7 +135,7 @@ static int flow_schedule_publish_sync(turbo_flow_schedule_t *schedule, time_t sc
   if (scheduled_at > 0 && (uint64_t)scheduled_at <= UINT64_MAX / UINT64_C(1000000000)) {
     msg.ts_ns = (uint64_t)scheduled_at * UINT64_C(1000000000);
   } else {
-    msg.ts_ns = salts_hrtime();
+    msg.ts_ns = cmeta_hrtime();
   }
   rc = turbo_flow_publish(schedule->flow, schedule->source_name, &msg);
   turbo_flow_msg_cleanup(&msg);
@@ -168,7 +169,7 @@ static int flow_schedule_publish_async(turbo_flow_schedule_t *schedule, time_t s
   if (scheduled_at > 0 && (uint64_t)scheduled_at <= UINT64_MAX / UINT64_C(1000000000)) {
     msg.ts_ns = (uint64_t)scheduled_at * UINT64_C(1000000000);
   } else {
-    msg.ts_ns = salts_hrtime();
+    msg.ts_ns = cmeta_hrtime();
   }
   if (!slot_reserved) {
     atomic_fetch_add_explicit(&schedule->async_inflight, 1u, memory_order_acq_rel);
@@ -193,14 +194,14 @@ static int flow_schedule_advance_cron(turbo_flow_schedule_t *schedule, time_t no
   int rc;
   if (!schedule || schedule->mode != TURBO_FLOW_SCHEDULE_CRON) return SALTS_EINVAL;
   current_minute = flow_schedule_floor_minute(now);
-  salts_mutex_lock(&schedule->mutex);
+  cmeta_mutex_lock(&schedule->mutex);
   if (schedule->cron_cursor_minute != 0 && current_minute <= schedule->cron_cursor_minute) {
-    salts_mutex_unlock(&schedule->mutex);
+    cmeta_mutex_unlock(&schedule->mutex);
     return 0;
   }
   check = schedule->cron_cursor_minute == 0 ? current_minute - 60 : schedule->cron_cursor_minute;
   schedule->cron_cursor_minute = current_minute;
-  salts_mutex_unlock(&schedule->mutex);
+  cmeta_mutex_unlock(&schedule->mutex);
 
   max_emit = schedule->catch_up_limit + 1u;
   for (;;) {
@@ -226,8 +227,8 @@ static int flow_schedule_advance_cron(turbo_flow_schedule_t *schedule, time_t no
   return (int)emitted;
 }
 
-static void flow_schedule_timer_callback(salts_timer_t *timer) {
-  turbo_flow_schedule_t *schedule = (turbo_flow_schedule_t *)salts_timer_get_data(timer);
+static void flow_schedule_timer_callback(cmeta_timer_t *timer) {
+  turbo_flow_schedule_t *schedule = (turbo_flow_schedule_t *)cmeta_timer_get_data(timer);
   int stop_timer = 0;
   int rc = SALTS_OK;
   if (!schedule ||
@@ -243,7 +244,7 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
   if (schedule->mode == TURBO_FLOW_SCHEDULE_CRON) {
     rc = flow_schedule_advance_cron(schedule, time(NULL));
   } else {
-    uint64_t now_ms = salts_monotonic_ms();
+    uint64_t now_ms = cmeta_monotonic_ms();
     uint64_t next_due_ms;
     if (!flow_schedule_try_reserve_publish(schedule)) {
       stop_timer = atomic_load_explicit(&schedule->completed, memory_order_acquire);
@@ -254,7 +255,7 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
       atomic_store_explicit(&schedule->async_inflight, 0u, memory_order_release);
       if (schedule->mode == TURBO_FLOW_SCHEDULE_ONE_SHOT &&
           schedule->delay_ms <= FLOW_SCHEDULE_NATIVE_TIMER_MAX_MS &&
-          salts_timer_start(timer, flow_schedule_timer_callback, next_due_ms - now_ms, 0u) != 0) {
+          cmeta_timer_start(timer, flow_schedule_timer_callback, next_due_ms - now_ms, 0u) != 0) {
         atomic_store_explicit(&schedule->last_status, SALTS_EIO, memory_order_release);
         atomic_store_explicit(&schedule->completed, 1, memory_order_release);
         stop_timer = 1;
@@ -269,7 +270,7 @@ static void flow_schedule_timer_callback(salts_timer_t *timer) {
     stop_timer = 1;
   }
 done:
-  if (stop_timer) (void)salts_timer_stop(timer);
+  if (stop_timer) (void)cmeta_timer_stop(timer);
   atomic_store_explicit(&schedule->timer_callback_active, 0, memory_order_release);
 }
 
@@ -296,10 +297,10 @@ static int flow_schedule_arm_timer(turbo_flow_schedule_t *schedule) {
                     ? 0
                     : timeout_ms;
     atomic_store_explicit(&schedule->next_due_ms,
-                          flow_schedule_add_delay(salts_monotonic_ms(), schedule->delay_ms),
+                          flow_schedule_add_delay(cmeta_monotonic_ms(), schedule->delay_ms),
                           memory_order_release);
   }
-  return salts_timer_start(schedule->timer, flow_schedule_timer_callback, timeout_ms, repeat_ms) ==
+  return cmeta_timer_start(schedule->timer, flow_schedule_timer_callback, timeout_ms, repeat_ms) ==
                  0
              ? SALTS_OK
              : SALTS_EIO;
@@ -310,7 +311,7 @@ static void flow_schedule_bootstrap_thread(void *ctx) {
   int rc;
   while (atomic_load_explicit(&schedule->started, memory_order_acquire) && schedule->flow &&
          turbo_flow_state(schedule->flow) != TURBO_FLOW_STATE_STARTED) {
-    salts_sleep_ms(FLOW_SCHEDULE_START_POLL_MS);
+    cmeta_sleep_ms(FLOW_SCHEDULE_START_POLL_MS);
   }
   if (!atomic_load_explicit(&schedule->started, memory_order_acquire)) return;
   rc = flow_schedule_arm_timer(schedule);
@@ -338,16 +339,16 @@ static int flow_schedule_start(void *ctx, turbo_flow_t *flow,
   atomic_store_explicit(&schedule->next_due_ms, 0, memory_order_release);
   atomic_store_explicit(&schedule->started, 1, memory_order_release);
   if (schedule->manual_clock) return SALTS_OK;
-  schedule->timer = salts_timer_create(NULL);
+  schedule->timer = cmeta_timer_create(NULL);
   if (!schedule->timer) {
     atomic_store_explicit(&schedule->started, 0, memory_order_release);
     return SALTS_ENOMEM;
   }
-  salts_timer_set_data(schedule->timer, schedule);
-  if (salts_thread_create(&schedule->bootstrap_thread, flow_schedule_bootstrap_thread, schedule) !=
+  cmeta_timer_set_data(schedule->timer, schedule);
+  if (cmeta_thread_create(&schedule->bootstrap_thread, flow_schedule_bootstrap_thread, schedule) !=
       SALTS_OK) {
     atomic_store_explicit(&schedule->started, 0, memory_order_release);
-    salts_timer_destroy(schedule->timer);
+    cmeta_timer_destroy(schedule->timer);
     schedule->timer = NULL;
     return SALTS_EIO;
   }
@@ -363,14 +364,14 @@ static void flow_schedule_stop(void *ctx, turbo_flow_t *flow,
   if (!schedule) return;
   atomic_store_explicit(&schedule->started, 0, memory_order_release);
   if (schedule->bootstrap_thread_started) {
-    (void)salts_thread_join(&schedule->bootstrap_thread);
+    (void)cmeta_thread_join(&schedule->bootstrap_thread);
     schedule->bootstrap_thread_started = 0;
   }
-  salts_mutex_lock(&schedule->mutex);
-  salts_timer_t *timer = schedule->timer;
+  cmeta_mutex_lock(&schedule->mutex);
+  cmeta_timer_t *timer = schedule->timer;
   schedule->timer = NULL;
-  salts_mutex_unlock(&schedule->mutex);
-  salts_timer_destroy(timer);
+  cmeta_mutex_unlock(&schedule->mutex);
+  cmeta_timer_destroy(timer);
   atomic_store_explicit(&schedule->completed, 1, memory_order_release);
   atomic_store_explicit(&schedule->timer_callback_active, 0, memory_order_release);
 }
@@ -379,7 +380,7 @@ static void flow_schedule_shutdown(void *ctx) {
   turbo_flow_schedule_t *schedule = (turbo_flow_schedule_t *)ctx;
   if (!schedule) return;
   flow_schedule_stop(schedule, NULL, NULL);
-  salts_mutex_destroy(&schedule->mutex);
+  cmeta_mutex_destroy(&schedule->mutex);
   tstr_freep(&schedule->source_name);
   tstr_freep(&schedule->payload);
   free(schedule);
@@ -441,7 +442,7 @@ int turbo_flow_schedule_register_adapter(turbo_flow_t *flow, const char *name,
     free(schedule);
     return SALTS_ENOMEM;
   }
-  salts_mutex_init(&schedule->mutex);
+  cmeta_mutex_init(&schedule->mutex);
   atomic_init(&schedule->started, 0);
   atomic_init(&schedule->completed, 0);
   atomic_init(&schedule->timer_callback_active, 0);

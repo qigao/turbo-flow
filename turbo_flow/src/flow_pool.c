@@ -183,9 +183,9 @@ int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
     const flow_threadpool_adapter_t *adapter =
         flow_threadpool_adapter_for_stage(flow, record->stage_index);
     if (adapter && adapter->pool) {
-      salts_threadpool_stats_t stats;
+      cmeta_threadpool_stats_t stats;
       memset(&stats, 0, sizeof(stats));
-      salts_threadpool_get_stats(adapter->pool, &stats);
+      cmeta_threadpool_get_stats(adapter->pool, &stats);
       out->queue_capacity = stats.queue_capacity;
       out->queued = stats.queued_tasks > 0 ? (uint64_t)stats.queued_tasks : 0u;
       out->active = stats.active_tasks > 0 ? (uint64_t)stats.active_tasks : 0u;

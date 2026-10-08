@@ -1400,14 +1400,14 @@ int turbo_flow_compile(turbo_flow_t *flow) {
   if (rc != SALTS_OK) return rc;
   rc = flow_build_runtime_plan(flow);
   if (rc != SALTS_OK) return rc;
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->runtime_generation == UINT64_MAX) {
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     flow_clear_runtime_plan(flow);
     return flow_set_error(flow, SALTS_ERANGE, 0, 0, "runtime generation is exhausted");
   }
   ++flow->runtime_generation;
   flow->state = TURBO_FLOW_STATE_COMPILED;
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
   return SALTS_OK;
 }
