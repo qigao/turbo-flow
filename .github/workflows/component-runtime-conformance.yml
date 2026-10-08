@@ -1,4 +1,5 @@
 name: Component runtime conformance
+# Final conformance gate after Component generation scope convergence
 
 on:
   push:
