@@ -43,6 +43,9 @@ set(_TurboFlow_salts_utils_components
     TurboDbAdapter
     ProtocolIngressInboxSchema)
 
+# RulesForge is only a dependency of SDKs that include its optional plugin.
+set(_TurboFlow_rules_forge_components)
+if(@TURBO_FLOW_BUILD_RULESFORGE_PLUGIN@)
 set(_TurboFlow_rules_forge_components
     Graph
     CNetAdapter
@@ -55,6 +58,7 @@ set(_TurboFlow_rules_forge_components
     Observe
     Schedule
     TurboDbAdapter)
+endif()
 
 set(_TurboFlow_requested_components ${TurboFlow_FIND_COMPONENTS})
 if(NOT _TurboFlow_requested_components)
