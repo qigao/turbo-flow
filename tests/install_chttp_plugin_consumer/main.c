@@ -8,29 +8,29 @@
 #include <string.h>
 
 static int check_provider(
-    const salts_plugin_manifest *manifest,
+    const cmeta_plugin_manifest *manifest,
     const char *export_id,
     const char *expected_type,
     const char *expected_resource_contract,
     uint64_t expected_resource_capabilities) {
-  const salts_plugin_export *entry = NULL;
+  const cmeta_plugin_export *entry = NULL;
   turbo_flow_provider_factory *factory;
   turbo_flow_provider_contract_v1_t contract =
       TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
-  salts_plugin_status status;
+  cmeta_plugin_status status;
   int rc;
 
-  status = salts_plugin_manifest_find_export(
+  status = cmeta_plugin_manifest_find_export(
       manifest, export_id, &entry);
-  if (status != SALTS_PLUGIN_OK || !entry) return 10;
+  if (status != CMETA_PLUGIN_OK || !entry) return 10;
 
-  status = salts_plugin_export_require_interface(
+  status = cmeta_plugin_export_require_interface(
       entry,
       TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
       TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
       0u,
       turbo_flow_provider_factory_interface());
-  if (status != SALTS_PLUGIN_OK) return 11;
+  if (status != CMETA_PLUGIN_OK) return 11;
 
   factory =
       (turbo_flow_provider_factory *)entry->value.interface.value;
@@ -64,11 +64,11 @@ static int check_provider(
 }
 
 int main(int argc, char **argv) {
-  salts_plugin_registry registry = {0};
-  salts_plugin_registry_config config = {1u};
-  salts_plugin_ref plugin = {0};
-  salts_plugin_lease lease = {0};
-  const salts_plugin_manifest *manifest = NULL;
+  cmeta_plugin_registry registry = {0};
+  cmeta_plugin_registry_config config = {1u};
+  cmeta_plugin_ref plugin = {0};
+  cmeta_plugin_lease lease = {0};
+  const cmeta_plugin_manifest *manifest = NULL;
   bool quiescent = true;
   int registry_live = 0;
   int plugin_loaded = 0;
@@ -78,38 +78,38 @@ int main(int argc, char **argv) {
 
   if (argc != 2 || !argv[1] || !argv[1][0]) return 1;
 
-  if (salts_plugin_registry_init(&registry, &config) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_init(&registry, &config) !=
+      CMETA_PLUGIN_OK) {
     fprintf(stderr, "CHTTP consumer failed at registry init\n");
     return 2;
   }
   registry_live = 1;
 
-  if (salts_plugin_registry_load(&registry, argv[1], &plugin) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_load(&registry, argv[1], &plugin) !=
+      CMETA_PLUGIN_OK) {
     fprintf(stderr, "CHTTP consumer failed at plugin DLL load: %s\n", argv[1]);
     rc = 3;
     goto cleanup;
   }
   plugin_loaded = 1;
 
-  if (salts_plugin_registry_start(&registry, plugin) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_start(&registry, plugin) !=
+      CMETA_PLUGIN_OK) {
     rc = 4;
     goto cleanup;
   }
   plugin_started = 1;
 
-  if (salts_plugin_registry_acquire(
+  if (cmeta_plugin_registry_acquire(
           &registry, plugin, &lease, &manifest) !=
-      SALTS_PLUGIN_OK) {
+      CMETA_PLUGIN_OK) {
     rc = 5;
     goto cleanup;
   }
   lease_live = 1;
 
-  if (!manifest || manifest->struct_size != SALTS_PLUGIN_MANIFEST_SIZE ||
-      manifest->abi_version != SALTS_PLUGIN_ABI_VERSION ||
+  if (!manifest || manifest->struct_size != CMETA_PLUGIN_MANIFEST_SIZE ||
+      manifest->abi_version != CMETA_PLUGIN_ABI_VERSION ||
       !manifest->plugin_id ||
       strcmp(manifest->plugin_id, "turbo-flow.chttp") != 0 ||
       manifest->export_count != 3u) {
@@ -137,36 +137,36 @@ int main(int argc, char **argv) {
           TURBO_FLOW_CHTTP_RESOURCE_EXCLUSIVE_BIND);
   if (rc != 0) goto cleanup;
 
-  if (salts_plugin_registry_request_stop(&registry, plugin) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_request_stop(&registry, plugin) !=
+      CMETA_PLUGIN_OK) {
     rc = 7;
     goto cleanup;
   }
   plugin_started = 0;
 
-  if (salts_plugin_registry_poll_quiescent(
-          &registry, plugin, &quiescent) != SALTS_PLUGIN_OK ||
+  if (cmeta_plugin_registry_poll_quiescent(
+          &registry, plugin, &quiescent) != CMETA_PLUGIN_OK ||
       quiescent) {
     rc = 8;
     goto cleanup;
   }
 
-  if (salts_plugin_registry_release(&registry, &lease) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_release(&registry, &lease) !=
+      CMETA_PLUGIN_OK) {
     rc = 9;
     goto cleanup;
   }
   lease_live = 0;
 
-  if (salts_plugin_registry_poll_quiescent(
-          &registry, plugin, &quiescent) != SALTS_PLUGIN_OK ||
+  if (cmeta_plugin_registry_poll_quiescent(
+          &registry, plugin, &quiescent) != CMETA_PLUGIN_OK ||
       !quiescent) {
     rc = 16;
     goto cleanup;
   }
 
-  if (salts_plugin_registry_unload(&registry, plugin) !=
-      SALTS_PLUGIN_OK) {
+  if (cmeta_plugin_registry_unload(&registry, plugin) !=
+      CMETA_PLUGIN_OK) {
     rc = 17;
     goto cleanup;
   }
@@ -174,18 +174,18 @@ int main(int argc, char **argv) {
 
 cleanup:
   if (lease_live)
-    (void)salts_plugin_registry_release(&registry, &lease);
+    (void)cmeta_plugin_registry_release(&registry, &lease);
   if (plugin_started)
-    (void)salts_plugin_registry_request_stop(&registry, plugin);
+    (void)cmeta_plugin_registry_request_stop(&registry, plugin);
   if (plugin_loaded) {
     quiescent = false;
-    if (salts_plugin_registry_poll_quiescent(
-            &registry, plugin, &quiescent) == SALTS_PLUGIN_OK &&
+    if (cmeta_plugin_registry_poll_quiescent(
+            &registry, plugin, &quiescent) == CMETA_PLUGIN_OK &&
         quiescent)
-      (void)salts_plugin_registry_unload(&registry, plugin);
+      (void)cmeta_plugin_registry_unload(&registry, plugin);
   }
   if (registry_live)
-    (void)salts_plugin_registry_destroy(&registry);
+    (void)cmeta_plugin_registry_destroy(&registry);
 
   if (rc != 0)
     fprintf(stderr, "CHTTP installed provider contract failed: %d\n", rc);
