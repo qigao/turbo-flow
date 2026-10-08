@@ -26,8 +26,8 @@ extern "C" {
 typedef struct turbo_flow_provider_candidate_v1_s {
   size_t size;
   const char *module_identity;
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
 } turbo_flow_provider_candidate_v1_t;
 
 #define TURBO_FLOW_PROVIDER_CANDIDATE_V1_INIT \
