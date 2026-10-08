@@ -176,7 +176,7 @@ static void intake_edge_completion_init(intake_edge_completion_t *completion) {
 static void intake_edge_wait(intake_edge_completion_t *completion, size_t expected) {
   for (size_t i = 0u;
        i < 5000u && atomic_load_explicit(&completion->calls, memory_order_acquire) < expected; ++i)
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
 }
 
 static int intake_edge_publish(turbo_flow_t *flow, turbo_flow_msg_t *message,

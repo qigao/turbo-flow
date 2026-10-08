@@ -213,3 +213,39 @@ Linux uses the corresponding `linux-*` presets.
 ---
 
 **Salts provides the typed execution foundation. TurboFlow composes it into provider-neutral business graphs and durable workflows.**
+
+## Component runtime candidate qualification
+
+The integration-only `Component runtime conformance` workflow checks out the
+consumer event SHA and restores the exact Salts 3.0 prerelease
+`3.0.0-cmeta.06fa2b10b418f997c38f123ddefa00e448897617` for `linux-x64`.
+It verifies package SHA256
+`682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
+and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
+`9de20e8aa3d333543f4c691150300b0dbfd07b8c` is rebuilt against that SDK;
+CHTTP source `0c8919bb9d4732133ecdec8befd3eb5d5d543235` is rebuilt as well.
+the workflow does not use stable first-party binaries for this candidate.
+
+The Graph test creates two live generations backed by separate provider DSOs and observes their message-consumption counters and markers. Graph owners retain their generation scope through provider shutdown. Adjacent provider tests cover capacity rejection and cleanup rollback. Thread and Plugin calls use the canonical CMeta SDK names; obsolete Salts compatibility names are not restored.
+
+With the workflow's installed dependency roots and shared vcpkg/re2c environment,
+run the complete configured build and CTest suites, then verify the installed
+consumer independently:
+
+```sh
+cmake --preset ci-component-release-user
+cmake --build --preset ci-component-release-user -j2
+ctest --preset ci-component-release-user --no-tests=error --output-on-failure
+cmake --build --preset install-ci-component-release-user -j2
+cd tests/install_consumer/component
+cmake --preset ci-component-installed-user
+cmake --build --preset ci-component-installed-user -j2
+ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
+```
+
+CI selects Component and adjacent business suites from the full configured graph
+and uploads consumer/dependency identities, JUnit results, and CTest logs as
+`component-acceptance-linux-x64`. The root CTest command above runs the broader
+suite. A green Linux Release run establishes only this profile's acceptance;
+sanitizer qualification and Windows/macOS downstream runs remain separate release
+gates. This workflow neither merges nor publishes a stable release.
