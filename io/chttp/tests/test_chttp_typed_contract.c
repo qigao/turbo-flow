@@ -114,6 +114,20 @@ static void fill_client(CHttpClientConfig_t *config) {
   check_not_null(config->target);
 }
 
+/* The generated Vec facade intentionally exposes push, not resize.
+ * Preserve ownership of both strings through the CMeta element-copy contract. */
+static void add_client_header(CHttpClientConfig_t *config, const char *name,
+                              const char *value) {
+  CHttpHeader_t header = {0};
+  header.name = tstr_dup(name);
+  header.value = tstr_dup(value);
+  check_not_null(header.name);
+  check_not_null(header.value);
+  if (header.name && header.value)
+    check_equal(CHttpClientConfig_headers_vec_t_push(&config->headers, header), STL_OK);
+  check_equal(cmeta_data_value_restore_zero(&CHttpHeader_CMETA_DATA, &header), CMETA_OK);
+}
+
 static void fill_server(CHttpServerConfig_t *config) {
   CHttpServerConfig_init(config);
   FILL_SERVER_BASE(config);
@@ -274,24 +288,10 @@ spec("CHTTP canonical typed provider contracts") {
     chttp_typed_runtime_config_t runtime;
     turbo_flow_chttp_deployment_view_t deployment = client_deployment();
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    CHttpHeader_t *header;
-
     fill_client(&typed);
-    check_equal(
-        CHttpClientConfig_headers_vec_t_resize(&typed.headers, 2u),
-        STL_OK);
-    header = CHttpClientConfig_headers_vec_t_at(&typed.headers, 0u);
-    check_not_null(header);
-    if (header) {
-      header->name = tstr_dup("x-trace");
-      header->value = tstr_dup("a");
-    }
-    header = CHttpClientConfig_headers_vec_t_at(&typed.headers, 1u);
-    check_not_null(header);
-    if (header) {
-      header->name = tstr_dup("x-trace");
-      header->value = tstr_dup("b");
-    }
+    check_equal(CHttpClientConfig_headers_vec_t_init(&typed.headers, 64u), STL_OK);
+    add_client_header(&typed, "x-trace", "a");
+    add_client_header(&typed, "x-trace", "b");
 
     check_equal(
         chttp_typed_client_config(
@@ -413,8 +413,6 @@ spec("CHTTP canonical typed provider contracts") {
     chttp_typed_runtime_config_t runtime;
     turbo_flow_chttp_deployment_view_t deployment = client_deployment();
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    CHttpHeader_t *header;
-
     fill_client(&typed);
     typed.network_command_capacity = 7u;
     check_equal(
@@ -423,15 +421,8 @@ spec("CHTTP canonical typed provider contracts") {
         SALTS_ERANGE);
 
     typed.network_command_capacity = 8u;
-    check_equal(
-        CHttpClientConfig_headers_vec_t_resize(&typed.headers, 1u),
-        STL_OK);
-    header = CHttpClientConfig_headers_vec_t_at(&typed.headers, 0u);
-    check_not_null(header);
-    if (header) {
-      header->name = tstr_dup("Host");
-      header->value = tstr_dup("forbidden.example");
-    }
+    check_equal(CHttpClientConfig_headers_vec_t_init(&typed.headers, 64u), STL_OK);
+    add_client_header(&typed, "Host", "forbidden.example");
     check_equal(
         chttp_typed_client_config(
             &typed, &deployment, "client_bad", &runtime, &error),
