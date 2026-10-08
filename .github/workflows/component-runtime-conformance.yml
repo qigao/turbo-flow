@@ -206,8 +206,15 @@ jobs:
           printf 'consumer_commit=%s\nsalts_commit=%s\nsalts_package_sha256=%s\n' \
             "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > build/component-runtime/acceptance.txt
           if [ -n "${SALTS_UTILS_ROOT:-}" ]; then
+            printf 'dependency=SaltsUtils\n' >> build/component-runtime/acceptance.txt
             cat "$SALTS_UTILS_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
           fi
+          if [ -n "${HTTP_SERVICES_ROOT:-}" ]; then
+            printf 'dependency=CHTTP\n' >> build/component-runtime/acceptance.txt
+            cat "$HTTP_SERVICES_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
+          fi
+          printf 'runner_os=%s\nrunner_arch=%s\ncompiler=%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$(gcc -dumpfullversion)" >> build/component-runtime/acceptance.txt
 
       - name: Upload acceptance evidence
         if: always()
@@ -219,3 +226,4 @@ jobs:
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
             build/component-runtime/Testing/Temporary/LastTest.log
+            tests/install_consumer/component/build/component-installed/Testing/Temporary/LastTest.log
