@@ -89,9 +89,9 @@ if(WIN32)
     string(REGEX MATCH "[^ \t\r\n]+$" export_name "${export_row}")
   endif()
   if(NOT export_count EQUAL 1 OR
-     NOT export_name STREQUAL "salts_plugin_query")
+     NOT export_name STREQUAL "cmeta_plugin_query")
     message(FATAL_ERROR
-            "CHTTP plugin must export only salts_plugin_query\n${export_output}")
+            "CHTTP plugin must export only cmeta_plugin_query\n${export_output}")
   endif()
 
   execute_process(
