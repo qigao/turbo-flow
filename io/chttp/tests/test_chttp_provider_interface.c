@@ -18,19 +18,19 @@
 #endif
 
 typedef struct resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref provider;
-  salts_plugin_ref resource;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref provider;
+  cmeta_plugin_ref resource;
   unsigned provider_calls;
   unsigned resource_calls;
 } resolver_fixture_t;
 
 typedef struct provider_acceptance_s {
   turbo_flow_t *flow;
-  salts_plugin_registry registry;
+  cmeta_plugin_registry registry;
   int registry_initialized;
-  salts_plugin_ref provider_ref;
-  salts_plugin_ref resource_ref;
+  cmeta_plugin_ref provider_ref;
+  cmeta_plugin_ref resource_ref;
   int provider_loaded;
   int resource_loaded;
   int provider_started;
@@ -358,74 +358,74 @@ static void acceptance_cleanup(void) {
   if (acceptance.registry_initialized) {
     bool quiescent = false;
     if (acceptance.provider_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.provider_ref);
       acceptance.provider_started = 0;
     }
     if (acceptance.resource_started) {
-      (void)salts_plugin_registry_request_stop(
+      (void)cmeta_plugin_registry_request_stop(
           &acceptance.registry, acceptance.resource_ref);
       acceptance.resource_started = 0;
     }
 
     if (acceptance.provider_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.provider_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry,
-              acceptance.provider_ref) == SALTS_PLUGIN_OK)
+              acceptance.provider_ref) == CMETA_PLUGIN_OK)
         acceptance.provider_loaded = 0;
     }
 
     quiescent = false;
     if (acceptance.resource_loaded &&
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &acceptance.registry, acceptance.resource_ref,
-            &quiescent) == SALTS_PLUGIN_OK &&
+            &quiescent) == CMETA_PLUGIN_OK &&
         quiescent) {
-      if (salts_plugin_registry_unload(
+      if (cmeta_plugin_registry_unload(
               &acceptance.registry,
-              acceptance.resource_ref) == SALTS_PLUGIN_OK)
+              acceptance.resource_ref) == CMETA_PLUGIN_OK)
         acceptance.resource_loaded = 0;
     }
 
     if (!acceptance.provider_loaded && !acceptance.resource_loaded) {
-      (void)salts_plugin_registry_destroy(&acceptance.registry);
+      (void)cmeta_plugin_registry_destroy(&acceptance.registry);
       acceptance.registry_initialized = 0;
     }
   }
 }
 
 static int setup_registry(void) {
-  salts_plugin_registry_config config = {2u};
+  cmeta_plugin_registry_config config = {2u};
   int rc;
 
-  rc = salts_plugin_registry_init(&acceptance.registry, &config);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  rc = cmeta_plugin_registry_init(&acceptance.registry, &config);
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.registry_initialized = 1;
 
-  rc = salts_plugin_registry_load(
+  rc = cmeta_plugin_registry_load(
       &acceptance.registry, FLOW_CHTTP_PROVIDER_FIXTURE,
       &acceptance.provider_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.provider_loaded = 1;
 
-  rc = salts_plugin_registry_load(
+  rc = cmeta_plugin_registry_load(
       &acceptance.registry, FLOW_CHTTP_RESOURCE_FIXTURE,
       &acceptance.resource_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.resource_loaded = 1;
 
-  rc = salts_plugin_registry_start(
+  rc = cmeta_plugin_registry_start(
       &acceptance.registry, acceptance.provider_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.provider_started = 1;
 
-  rc = salts_plugin_registry_start(
+  rc = cmeta_plugin_registry_start(
       &acceptance.registry, acceptance.resource_ref);
-  if (rc != SALTS_PLUGIN_OK) return rc;
+  if (rc != CMETA_PLUGIN_OK) return rc;
   acceptance.resource_started = 1;
 
   acceptance.resolver.registry = &acceptance.registry;
@@ -493,7 +493,7 @@ spec("CHTTP canonical Salts provider") {
         flow_test_operation_init("test.output", output, NULL);
     int rc;
 
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     acceptance.flow = turbo_flow_create();
     check_not_null(acceptance.flow);
     check_equal(
@@ -576,7 +576,7 @@ spec("CHTTP canonical Salts provider") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     int rc;
 
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     acceptance.flow = turbo_flow_create();
     check_not_null(acceptance.flow);
     check_equal(
@@ -658,7 +658,7 @@ spec("CHTTP canonical Salts provider") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     int rc;
 
-    check_equal(setup_registry(), SALTS_PLUGIN_OK);
+    check_equal(setup_registry(), CMETA_PLUGIN_OK);
     acceptance.flow = turbo_flow_create();
     check_not_null(acceptance.flow);
     check_equal(
