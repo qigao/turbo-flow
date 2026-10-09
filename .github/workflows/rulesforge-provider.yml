@@ -15,6 +15,7 @@ on:
       - 'plugins/applicant_mapper/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/rulesforge-provider.yml'
+      - '.github/actions/setup-native-ci/**'
   workflow_dispatch:
 
 permissions:
