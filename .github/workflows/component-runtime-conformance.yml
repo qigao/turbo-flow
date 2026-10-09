@@ -78,7 +78,7 @@ jobs:
           nupkg="$(find "$tmp/artifact" -type f -name "Salts.Native.$SALTS_CANDIDATE_VERSION.nupkg" -print -quit)"
           test -n "$nupkg"
           expected="$(awk -v base="$(basename "$nupkg")" '$2==base || $2=="dist/"base {print $1}' "$sums")"
-          test "$expected" != "" && test "$(printf '%s' "$expected" | wc -l)" -eq 1
+          [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]]
           test "$(sha256sum "$nupkg" | awk '{print $1}')" = "$expected"
           python3 - "$nupkg" "$tmp/nuget" <<'PY'
           import sys, zipfile
