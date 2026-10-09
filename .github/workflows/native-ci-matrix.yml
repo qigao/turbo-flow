@@ -65,7 +65,7 @@ jobs:
             triplet: x64-linux
             android: false
           - id: windows-x64
-            runner: windows-2022
+            runner: windows-2025-vs2026
             rid: windows-x64
             triplet: x64-windows
             android: false
@@ -176,6 +176,12 @@ jobs:
           call "%VS_INSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%SAVED_VCPKG_ROOT%"
+          where cl
+          if errorlevel 1 exit /b 1
+          where ninja
+          if errorlevel 1 exit /b 1
+          where ccache
+          if errorlevel 1 exit /b 1
           cmake -S . -B build/native-ci -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF ^
