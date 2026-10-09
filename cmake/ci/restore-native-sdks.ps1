@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("linux-x64", "windows-x64")]
+  [ValidateSet("linux-x64", "windows-x64", "macos-arm64", "android-arm64-v8a")]
   [string]$Rid,
   [switch]$WithRulesForge,
   [switch]$WithTurboDB,
@@ -103,15 +103,23 @@ $saltsUtils = Get-NativeSdk "SaltsUtils.Native"
 $saltsRoot = $salts.Root
 $saltsUtilsRoot = $saltsUtils.Root
 
+# Cross-compiled Android artifacts contain target libraries, not a runnable idlc.
+# Resolve the host compiler from the *same floating SaltsUtils package version*.
+$saltsUtilsHostRoot = if ($Rid -eq "android-arm64-v8a") {
+  Join-Path $packages "saltsutils.native/$($saltsUtils.Version)/sdk/linux-x64"
+} else {
+  $saltsUtilsRoot
+}
+
 $required = @(
   (Join-Path $saltsRoot "lib/cmake/Salts/SaltsConfig.cmake"),
   (Join-Path $saltsUtilsRoot "lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"),
   (Join-Path $saltsUtilsRoot "include/data_bind.h")
 )
 $idlc = if ($Rid -eq "windows-x64") {
-  Join-Path $saltsUtilsRoot "bin/salts-idlc.exe"
+  Join-Path $saltsUtilsHostRoot "bin/salts-idlc.exe"
 } else {
-  Join-Path $saltsUtilsRoot "bin/salts-idlc"
+  Join-Path $saltsUtilsHostRoot "bin/salts-idlc"
 }
 $required += $idlc
 
@@ -145,19 +153,24 @@ foreach ($path in $required) {
     throw "published SDK is incomplete: $path"
   }
 }
+if ($Rid -ne "windows-x64") {
+  & chmod +x $idlc
+  if ($LASTEXITCODE -ne 0) { throw "restored host salts-idlc is not executable: $idlc" }
+}
 
 # Keep capability/ABI checks even though package versions float.
 $dataBindHeader = Get-Content -LiteralPath (Join-Path $saltsUtilsRoot "include/data_bind.h") -Raw
 if ($dataBindHeader -notmatch '#define\s+DATA_BIND_VERSION_MAJOR\s+3') {
   throw "latest SaltsUtils.Native does not expose DataBind 3"
 }
-if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+9') {
-  throw "latest SaltsUtils.Native does not expose DataBind ABI 9"
+if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
+  throw "latest SaltsUtils.Native does not expose DataBind ABI 10"
 }
 
 "SALTS_ROOT=$saltsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "SALTS_UTILS_ROOT=$saltsUtilsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
-"SALTS_UTILS_HOST_ROOT=$saltsUtilsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+"SALTS_UTILS_HOST_ROOT=$saltsUtilsHostRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+"TURBO_FLOW_IDLC_HOST_EXECUTABLE=$idlc" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "QIGAO_NUGET_PACKAGES=$packages" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 if ($WithRulesForge) {
   "RULES_FORGE_ROOT=$rulesForgeRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
@@ -170,7 +183,7 @@ if ($WithCHttp) {
 }
 
 (Join-Path $saltsRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
-(Join-Path $saltsUtilsRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
+(Join-Path $saltsUtilsHostRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
 if ($WithRulesForge) {
   (Join-Path $rulesForgeRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
 }
@@ -181,15 +194,18 @@ if ($WithCHttp) {
   (Join-Path $cHttpRoot "bin") | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
 }
 
-if ($Rid -eq "linux-x64") {
+if ($Rid -eq "linux-x64" -or $Rid -eq "macos-arm64") {
   $entries = @((Join-Path $saltsRoot "lib"), (Join-Path $saltsUtilsRoot "lib"))
   if ($WithRulesForge) { $entries += (Join-Path $rulesForgeRoot "lib") }
   if ($WithTurboDB) { $entries += (Join-Path $turboDbRoot "lib") }
   if ($WithCHttp) { $entries += (Join-Path $cHttpRoot "lib") }
-  if (-not [string]::IsNullOrWhiteSpace($env:LD_LIBRARY_PATH)) {
-    $entries += $env:LD_LIBRARY_PATH
+  if ($Rid -eq "linux-x64") {
+    if (-not [string]::IsNullOrWhiteSpace($env:LD_LIBRARY_PATH)) { $entries += $env:LD_LIBRARY_PATH }
+    "LD_LIBRARY_PATH=$($entries -join ':')" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+  } else {
+    if (-not [string]::IsNullOrWhiteSpace($env:DYLD_LIBRARY_PATH)) { $entries += $env:DYLD_LIBRARY_PATH }
+    "DYLD_LIBRARY_PATH=$($entries -join ':')" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
   }
-  "LD_LIBRARY_PATH=$($entries -join ':')" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 }
 
 Write-Host "Restored latest $($salts.Id) -> $($salts.Version) -> $saltsRoot"
