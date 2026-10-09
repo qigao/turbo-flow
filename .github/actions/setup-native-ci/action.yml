@@ -1,0 +1,90 @@
+name: Set up TurboFlow native CI cache
+description: Restore canonical binary-only vcpkg inputs and per-profile ccache compilation objects.
+
+inputs:
+  profile:
+    description: OS, architecture and build-mode cache namespace
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare isolated empty vcpkg L1
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $cache = Join-Path $env:RUNNER_TEMP "turbo-flow-vcpkg-${{ inputs.profile }}"
+        New-Item -ItemType Directory -Force -Path $cache | Out-Null
+        "VCPKG_BINARY_CACHE=$cache" >> $env:GITHUB_ENV
+
+    - name: Restore canonical vcpkg toolchain and shared L2 binary cache
+      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      with:
+        mode: read
+
+    - name: Restore shared host re2c
+      uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+    - name: Install Linux build tools and ccache
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends ccache ninja-build pkg-config
+
+    - name: Install macOS build tools and ccache
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        brew install ccache ninja pkg-config
+
+    - name: Install Windows build tools and ccache
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        choco install ccache ninja --yes --no-progress
+        if ($LASTEXITCODE -ne 0) { throw "failed to install ccache/Ninja" }
+        "$env:ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+
+    - name: Configure compiler cache (fail closed)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $dir = Join-Path $env:RUNNER_TEMP "turbo-flow-ccache-${{ inputs.profile }}"
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        "CCACHE_DIR=$dir" >> $env:GITHUB_ENV
+        "CCACHE_BASEDIR=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
+        "CCACHE_COMPILERCHECK=content" >> $env:GITHUB_ENV
+        "CCACHE_NODIRECT=1" >> $env:GITHUB_ENV
+        "CCACHE_MAXSIZE=512M" >> $env:GITHUB_ENV
+        "CMAKE_C_COMPILER_LAUNCHER=ccache" >> $env:GITHUB_ENV
+        "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $env:GITHUB_ENV
+
+    - name: Restore per-profile compiler objects
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/turbo-flow-ccache-${{ inputs.profile }}
+        key: tflow-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('vcpkg.json', 'CMakeOptions.cmake', 'cmake/Sanitizers.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          tflow-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('vcpkg.json', 'CMakeOptions.cmake', 'cmake/Sanitizers.cmake') }}-
+
+    - name: Verify canonical caches and compiler wrapper
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (-not (Test-Path -LiteralPath $env:QIGAO_VCPKG_TOOLCHAIN_FILE -PathType Leaf)) {
+          throw 'canonical vcpkg toolchain is unavailable'
+        }
+        if ($env:VCPKG_BINARY_SOURCES -notmatch 'nugetconfig') {
+          throw 'shared vcpkg NuGet binary cache is not configured'
+        }
+        if ($env:VCPKG_NUGET_REPOSITORY -ne 'https://github.com/qigao/vcpkg-cache') {
+          throw 'unexpected shared vcpkg cache repository'
+        }
+        ccache --version
+        if ($LASTEXITCODE -ne 0) { throw 'ccache is not runnable' }
+        ccache --zero-stats
+        if ($LASTEXITCODE -ne 0) { throw 'ccache statistics could not be reset' }
