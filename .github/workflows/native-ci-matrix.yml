@@ -205,12 +205,12 @@ jobs:
           @(
             "### TurboFlow ${{ matrix.id }} native qualification"
             ""
-            "- Source: `$env:EXPECTED_SHA`"
-            "- Published SDK RID: `${{ matrix.rid }}`"
-            "- Triplet: `${{ matrix.triplet }}`"
-            "- vcpkg contract revision: `$env:VCPKG_CACHE_REVISION`"
+            "- Source: $env:EXPECTED_SHA"
+            "- Published SDK RID: ${{ matrix.rid }}"
+            "- Triplet: ${{ matrix.triplet }}"
+            "- vcpkg contract revision: $env:VCPKG_CACHE_REVISION"
             "- Binary cache: shared read-only L2, isolated L1"
-            "- Compiler cache: ccache, `$env:CCACHE_DIR`"
+            "- Compiler cache: ccache, $env:CCACHE_DIR"
           ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
           if (Get-Command ccache -ErrorAction SilentlyContinue) {
             ccache --show-stats | Out-String | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
