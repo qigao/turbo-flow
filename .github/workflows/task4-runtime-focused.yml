@@ -13,6 +13,7 @@ on:
       - 'ingress/protocol/inbox/**'
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/workflows/task4-runtime-focused.yml'
+      - '.github/actions/setup-native-ci/**'
   # Staging-only trigger. Remove before promoting #251 to a PR.
   push:
     branches: [feat/251-chttp-typed-contracts]
