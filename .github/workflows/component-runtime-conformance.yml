@@ -57,36 +57,35 @@ jobs:
 
       # Fail closed: only the exact published prerelease and attested source SHA are valid.
       # Never check out, compile or fall back to a stable Salts tree here.
-      - name: Restore exact Salts.Native Component candidate
+      # Exact run-scoped unmerged 2.3 SDK; no GitHub Packages fallback.
+      - name: Restore and attest ACE 2.3 SDK from Salts Actions artifact
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SALTS_CANDIDATE_VERSION: '3.0.0-cmeta.06fa2b10b418f997c38f123ddefa00e448897617'
-          SALTS_CANDIDATE_SHA: '06fa2b10b418f997c38f123ddefa00e448897617'
-          SALTS_CANDIDATE_SHA256: '682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca'
+          GH_TOKEN: ${{ github.token }}
+          SALTS_CANDIDATE_VERSION: '2.3.0-ace.shad154d61cc329f4dc70c084b386c1247b5dddbc0c'
+          SALTS_CANDIDATE_SHA: 'd154d61cc329f4dc70c084b386c1247b5dddbc0c'
+          SALTS_RUN_ID: '37880183154'
         run: |
           set -euo pipefail
-          test -n "$GITHUB_TOKEN"
-          config="$RUNNER_TEMP/salts-component-candidate.nuget.config"
-          project="$RUNNER_TEMP/salts-component-candidate.csproj"
-          packages="$RUNNER_TEMP/salts-component-candidate-packages"
-          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
-          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
-            --name github --username qigao --password "$GITHUB_TOKEN" \
-            --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<EOF
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[$SALTS_CANDIDATE_VERSION]" />
-            </ItemGroup>
-          </Project>
-          EOF
-          dotnet restore "$project" --configfile "$config" --packages "$packages" \
-            --no-cache --force-evaluate
-          package="$packages/salts.native/$SALTS_CANDIDATE_VERSION/salts.native.$SALTS_CANDIDATE_VERSION.nupkg"
-          printf '%s  %s\n' "$SALTS_CANDIDATE_SHA256" "$package" | sha256sum --check --strict
-          root="$packages/salts.native/$SALTS_CANDIDATE_VERSION/sdk/linux-x64"
+          test -n "$GH_TOKEN"
+          tmp="$RUNNER_TEMP/salts-ace-candidate"
+          mkdir -p "$tmp/artifact" "$tmp/nuget"
+          test "$(gh api "repos/qigao/salts/actions/runs/$SALTS_RUN_ID" --jq .head_sha)" = "$SALTS_CANDIDATE_SHA"
+          test "$(gh api "repos/qigao/salts/actions/runs/$SALTS_RUN_ID" --jq .conclusion)" = success
+          gh run download "$SALTS_RUN_ID" -R qigao/salts -n salts-native-ace-candidate-linux-x64 -D "$tmp/artifact"
+          sums="$(find "$tmp/artifact" -type f -name SHA256SUMS -print -quit)"
+          test -n "$sums"
+          nupkg="$(find "$tmp/artifact" -type f -name "Salts.Native.$SALTS_CANDIDATE_VERSION.nupkg" -print -quit)"
+          test -n "$nupkg"
+          expected="$(awk -v base="$(basename "$nupkg")" '$2==base || $2=="dist/"base {print $1}' "$sums")"
+          test "$expected" != "" && test "$(printf '%s' "$expected" | wc -l)" -eq 1
+          test "$(sha256sum "$nupkg" | awk '{print $1}')" = "$expected"
+          python3 - "$nupkg" "$tmp/nuget" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              archive.extractall(sys.argv[2])
+          PY
+          root="$tmp/nuget/sdk/linux-x64"
           manifest="$root/salts-sdk-manifest.txt"
           test -f "$root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$root/include/salts/component_plugin.h"
@@ -95,23 +94,20 @@ jobs:
           grep -Fxq "version=$SALTS_CANDIDATE_VERSION" "$manifest"
           grep -Fxq "commit=$SALTS_CANDIDATE_SHA" "$manifest"
           grep -Fxq 'rid=linux-x64' "$manifest"
-          grep -Fxq 'profile=candidate' "$manifest"
+          grep -Fxq 'profile=ace-2.3-candidate' "$manifest"
           grep -Fq 'Salts::ComponentPlugin' "$root/lib/cmake/Salts/SaltsTargets.cmake"
-
-          # Existing dependency-graph restore may have installed a stable Salts.
-          # Remove that runtime path so it cannot serve as an implicit fallback.
           previous_salts_root="${SALTS_ROOT:-}"
           ld_path="$root/lib"
           IFS=':' read -r -a ld_entries <<< "${LD_LIBRARY_PATH:-}"
           for entry in "${ld_entries[@]}"; do
-            if [ -n "$entry" ] && [ "$entry" != "$previous_salts_root/lib" ] &&
-               [ "$entry" != "$previous_salts_root/bin" ]; then
+            if [ -n "$entry" ] && [ "$entry" != "$previous_salts_root/lib" ] && [ "$entry" != "$previous_salts_root/bin" ]; then
               ld_path="$ld_path:$entry"
             fi
           done
           echo "SALTS_ROOT=$root" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$ld_path" >> "$GITHUB_ENV"
-          echo "Selected exact Salts.Native $SALTS_CANDIDATE_VERSION ($SALTS_CANDIDATE_SHA)"
+          echo "SALTS_CANDIDATE_SHA256=$expected" >> "$GITHUB_ENV"
+          echo "Selected exact run $SALTS_RUN_ID Salts.Native $SALTS_CANDIDATE_VERSION ($expected)"
           
       - name: Checkout SaltsUtils dependency source
         uses: actions/checkout@v4
@@ -140,7 +136,7 @@ jobs:
           cmake --build --preset install-ci-component-release-user -j2
           root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
           printf 'source=%s\nsalts_commit=%s\nsalts_package_sha256=%s\nrid=linux-x64\nprofile=release\n' \
-            "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > "$root/component-dependency-manifest.txt"
+            "$(git rev-parse HEAD)" "d154d61cc329f4dc70c084b386c1247b5dddbc0c" "$SALTS_CANDIDATE_SHA256" > "$root/component-dependency-manifest.txt"
           echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
           echo "DATABIND_ROOT=$root" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
@@ -168,7 +164,7 @@ jobs:
           cmake --build --preset install-ci-sdk-release-user -j2
           root="$GITHUB_WORKSPACE/_deps/chttp/stage/sdk/linux-x64"
           printf 'source=%s\nsalts_commit=%s\nrid=linux-x64\nprofile=release\n' \
-            "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" > "$root/component-dependency-manifest.txt"
+            "$(git rev-parse HEAD)" "d154d61cc329f4dc70c084b386c1247b5dddbc0c" > "$root/component-dependency-manifest.txt"
           echo "HTTP_SERVICES_ROOT=$root" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
 
@@ -209,7 +205,7 @@ jobs:
         run: |
           mkdir -p build/component-runtime
           printf 'consumer_commit=%s\nsalts_commit=%s\nsalts_package_sha256=%s\n' \
-            "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > build/component-runtime/acceptance.txt
+            "$(git rev-parse HEAD)" "d154d61cc329f4dc70c084b386c1247b5dddbc0c" "$SALTS_CANDIDATE_SHA256" > build/component-runtime/acceptance.txt
           if [ -n "${SALTS_UTILS_ROOT:-}" ]; then
             printf 'dependency=SaltsUtils\n' >> build/component-runtime/acceptance.txt
             cat "$SALTS_UTILS_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
