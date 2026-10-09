@@ -34,6 +34,7 @@ on:
       - 'turbo_flow/tests/databind_channel.schema'
       - 'turbo_flow/tests/databind_channel_projection.json'
       - '.github/workflows/cflow-region-benchmark.yml'
+      - '.github/actions/setup-native-ci/**'
   workflow_dispatch:
 
 permissions:
