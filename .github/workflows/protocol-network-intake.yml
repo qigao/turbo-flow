@@ -16,6 +16,7 @@ on:
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
+      - '.github/actions/setup-native-ci/**'
   workflow_dispatch:
 
 permissions:
