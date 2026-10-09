@@ -183,6 +183,8 @@ jobs:
           if errorlevel 1 exit /b 1
           where ccache
           if errorlevel 1 exit /b 1
+          if not defined QIGAO_VCPKG_WINDOWS_TRIPLET exit /b 1
+          if not defined QIGAO_VCPKG_WINDOWS_HOST_TRIPLET exit /b 1
           cmake -S . -B build/native-ci -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF ^
@@ -192,7 +194,8 @@ jobs:
             -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF ^
             -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="%TURBO_FLOW_IDLC_HOST_EXECUTABLE%" ^
             -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" ^
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} ^
+            -DVCPKG_TARGET_TRIPLET="%QIGAO_VCPKG_WINDOWS_TRIPLET%" ^
+            -DVCPKG_HOST_TRIPLET="%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET%" ^
             -DVCPKG_MANIFEST_DIR="%GITHUB_WORKSPACE%" ^
             -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" ^
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching ^
