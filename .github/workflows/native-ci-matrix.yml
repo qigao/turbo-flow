@@ -156,14 +156,23 @@ jobs:
           cmake --install build/native-ci
           test -f "$prefix/lib/cmake/TurboFlow/TurboFlowConfig.cmake"
 
+      - name: Locate Visual Studio x64 toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'vswhere is unavailable' }
+          $install = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($install)) { throw 'Visual Studio x64 C++ toolchain is missing' }
+          "VS_INSTALL=$install" >> $env:GITHUB_ENV
+
       - name: Configure, build and install with MSVC/Ninja
         if: runner.os == 'Windows'
         shell: cmd
         run: |
           @echo on
           set "SAVED_VCPKG_ROOT=%VCPKG_ROOT%"
-          for /f "usebackq delims=" %%I in (`"${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_INSTALL=%%I"
-          if not defined VS_INSTALL exit /b 1
           call "%VS_INSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%SAVED_VCPKG_ROOT%"
