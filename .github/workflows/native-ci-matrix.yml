@@ -165,6 +165,46 @@ jobs:
           cmake --install build/native-ci
           test -f "$prefix/lib/cmake/TurboFlow/TurboFlowConfig.cmake"
 
+      - name: Qualify installed CNet provider on Unix
+        if: runner.os != 'Windows' && matrix.android == false
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/turbo-flow-native-install"
+          case "$RUNNER_OS" in
+            Linux)
+              plugin="$prefix/lib/libtf_cnet_plugin.so"
+              export LD_LIBRARY_PATH="$prefix/lib:${LD_LIBRARY_PATH:-}"
+              ;;
+            macOS)
+              plugin="$prefix/lib/libtf_cnet_plugin.dylib"
+              export DYLD_LIBRARY_PATH="$prefix/lib:${DYLD_LIBRARY_PATH:-}"
+              ;;
+            *) echo "unsupported Unix CNet provider host" >&2; exit 1 ;;
+          esac
+          test -f "$plugin"
+          export TURBO_FLOW_ROOT="$prefix"
+          cmake -S tests/install_cnet_plugin_consumer \
+            -B build/native-ci-cnet-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$prefix;$SALTS_ROOT;$SALTS_UTILS_ROOT;$HTTP_SERVICES_ROOT" \
+            "-DCMAKE_TOOLCHAIN_FILE=$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" \
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            "-DTURBO_FLOW_CNET_PLUGIN_PATH=$plugin"
+          cmake --build build/native-ci-cnet-consumer --parallel 2
+          ctest --test-dir build/native-ci-cnet-consumer --no-tests=error --output-on-failure
+
+          consumer="$GITHUB_WORKSPACE/build/native-ci-cnet-consumer/turbo_flow_cnet_plugin_consumer"
+          test -x "$consumer"
+          set +e
+          output="$("$consumer" "$prefix/lib/missing-cnet-plugin" 2>&1)"
+          result=$?
+          set -e
+          test "$result" -ne 0
+          printf '%s\n' "$output" | grep -F 'failed at plugin DLL load'
+
       - name: Locate Visual Studio x64 toolchain
         if: runner.os == 'Windows'
         shell: pwsh
