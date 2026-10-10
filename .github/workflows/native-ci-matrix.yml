@@ -1,0 +1,229 @@
+name: TurboFlow native SDK build matrix
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/actions/setup-native-ci/**'
+      - '.github/workflows/native-ci-matrix.yml'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - 'CMakePresets.json'
+      - 'CMakeUserPresets.json'
+      - 'cmake/**'
+      - 'presets/**'
+      - 'vcpkg.json'
+      - 'tools/**'
+      - 'vendor/**'
+      - 'turbo_flow/**'
+      - 'io/**'
+      - 'ingress/**'
+      - 'plugins/**'
+      - 'security/**'
+      - 'codec/**'
+      - 'observe/**'
+      - 'schedule/**'
+  push:
+    branches: [master, ci/native-matrix-sdk-probe-20261010]
+    paths:
+      - '.github/actions/setup-native-ci/**'
+      - '.github/workflows/native-ci-matrix.yml'
+      - 'CMakeLists.txt'
+      - 'CMakeOptions.cmake'
+      - 'cmake/**'
+      - 'presets/**'
+      - 'vcpkg.json'
+      - 'turbo_flow/**'
+      - 'io/**'
+      - 'ingress/**'
+      - 'plugins/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turbo-flow-native-matrix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  native:
+    name: ${{ matrix.id }} / Release / installed SDK
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            runner: ubuntu-24.04
+            rid: linux-x64
+            triplet: x64-linux
+            android: false
+          - id: windows-x64
+            runner: windows-2025-vs2026
+            rid: windows-x64
+            triplet: x64-windows
+            android: false
+          - id: macos-arm64
+            runner: macos-15
+            rid: macos-arm64
+            triplet: arm64-osx
+            android: false
+          - id: android-arm64-v8a
+            runner: ubuntu-24.04
+            rid: android-arm64-v8a
+            triplet: arm64-android
+            android: true
+
+    steps:
+      - name: Checkout exact committed TurboFlow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_SHA) {
+            throw "source identity mismatch: $actual != $env:EXPECTED_SHA"
+          }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'source contains whitespace errors' }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'checkout is dirty' }
+
+      - name: Configure canonical binary and compilation caches
+        uses: ./.github/actions/setup-native-ci
+        with:
+          profile: ${{ matrix.id }}-release
+
+      - name: Restore latest published target and host SDKs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid "${{ matrix.rid }}" -WithCHttp
+
+      - name: Configure, build and install on Linux/macOS/Android
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -x "$TURBO_FLOW_IDLC_HOST_EXECUTABLE"
+
+          prefix="$RUNNER_TEMP/turbo-flow-native-install"
+          args=(-DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
+          if [ "${{ matrix.android }}" = "true" ]; then
+            ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
+            test -n "$ndk"
+            test -f "$ndk/build/cmake/android.toolchain.cmake"
+            args+=(
+              "-DCMAKE_SYSTEM_NAME=Android"
+              "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"
+              "-DSaltsUtils_IDLC_EXECUTABLE=$TURBO_FLOW_IDLC_HOST_EXECUTABLE"
+              "-DSaltsUtils_IDLC_HOST_SALTS_ROOT=$SALTS_HOST_ROOT"
+              "-DANDROID_ABI=arm64-v8a"
+              "-DANDROID_PLATFORM=android-26"
+              "-DANDROID_STL=c++_shared"
+              "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake"
+            )
+          fi
+
+          cmake -S . -B build/native-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF \
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF \
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF \
+            "-DTURBO_FLOW_IDLC_HOST_EXECUTABLE=$TURBO_FLOW_IDLC_HOST_EXECUTABLE" \
+            "-DCMAKE_TOOLCHAIN_FILE=$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}" \
+            "-DVCPKG_MANIFEST_DIR=$GITHUB_WORKSPACE" \
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            "-DCMAKE_INSTALL_PREFIX=$prefix" \
+            "${args[@]}"
+
+          cmake --build build/native-ci --parallel 2
+          cmake --install build/native-ci
+          test -f "$prefix/lib/cmake/TurboFlow/TurboFlowConfig.cmake"
+
+      - name: Locate Visual Studio x64 toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'vswhere is unavailable' }
+          $install = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($install)) { throw 'Visual Studio x64 C++ toolchain is missing' }
+          "VS_INSTALL=$install" >> $env:GITHUB_ENV
+
+      - name: Configure, build and install with MSVC/Ninja
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          @echo on
+          set "SAVED_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VS_INSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%SAVED_VCPKG_ROOT%"
+          where cl
+          if errorlevel 1 exit /b 1
+          where ninja
+          if errorlevel 1 exit /b 1
+          where ccache
+          if errorlevel 1 exit /b 1
+          if not defined QIGAO_VCPKG_WINDOWS_TRIPLET exit /b 1
+          if not defined QIGAO_VCPKG_WINDOWS_HOST_TRIPLET exit /b 1
+          cmake -S . -B build/native-ci -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF ^
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF ^
+            -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF ^
+            -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF ^
+            -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF ^
+            -DTURBO_FLOW_IDLC_HOST_EXECUTABLE="%TURBO_FLOW_IDLC_HOST_EXECUTABLE%" ^
+            -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" ^
+            -DVCPKG_TARGET_TRIPLET="%QIGAO_VCPKG_WINDOWS_TRIPLET%" ^
+            -DVCPKG_HOST_TRIPLET="%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET%" ^
+            -DVCPKG_MANIFEST_DIR="%GITHUB_WORKSPACE%" ^
+            -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" ^
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching ^
+            -DCMAKE_INSTALL_PREFIX="%RUNNER_TEMP%\turbo-flow-native-install"
+          if errorlevel 1 exit /b 1
+          cmake --build build/native-ci --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --install build/native-ci
+          if errorlevel 1 exit /b 1
+          if not exist "%RUNNER_TEMP%\turbo-flow-native-install\lib\cmake\TurboFlow\TurboFlowConfig.cmake" exit /b 1
+
+      - name: Record cache and installed SDK evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @(
+            "### TurboFlow ${{ matrix.id }} native qualification"
+            ""
+            "- Source: $env:EXPECTED_SHA"
+            "- Published SDK RID: ${{ matrix.rid }}"
+            "- Triplet: ${{ matrix.triplet }}"
+            "- vcpkg contract revision: $env:VCPKG_CACHE_REVISION"
+            "- Binary cache: shared read-only L2, isolated L1"
+            "- Compiler cache: ccache, $env:CCACHE_DIR"
+          ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          if (Get-Command ccache -ErrorAction SilentlyContinue) {
+            ccache --show-stats | Out-String | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          }
