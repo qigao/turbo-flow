@@ -24,8 +24,11 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/turbo_flow/include>
          $<INSTALL_INTERFACE:include>)
+# Public protocol headers use CFlow typed descriptors. Windows DLLs must
+# explicitly link the defining CFlow import library; Linux's permissive
+# unresolved-shared-library behavior must not hide missing link closure.
 target_link_libraries(${TARGET_NAME}
-                      PUBLIC Salts::Core)
+                      PUBLIC Salts::Core Salts::CFlow)
 
 install(
   FILES include/turbo_flow_protocol.h

@@ -25,8 +25,8 @@ extern "C" {
 typedef struct turbo_flow_resource_candidate_v1_s {
   size_t size;
   const char *identity;
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   const char *export_id;
 } turbo_flow_resource_candidate_v1_t;
 

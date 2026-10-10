@@ -1,9 +1,10 @@
 #include "turbo_flow_observe.h"
 
 #include "turbo_flow_stl_error_internal.h"
-#include "salts_error.h"
+#include <cmeta_error.h>
+#include <salts/clock.h>
 #include "tstr.h"
-#include "salts_thread.h"
+#include <cmeta_thread.h>
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -43,8 +44,8 @@ typedef struct flow_observe_log_sink_s {
 struct turbo_flow_observe_s {
   turbo_flow_t *flow;
   vec_t stages;
-  salts_mutex_t stage_mutex;
-  salts_mutex_t export_mutex;
+  cmeta_mutex_t stage_mutex;
+  cmeta_mutex_t export_mutex;
   deque_t events;
   size_t max_stages;
   size_t max_events;
@@ -133,7 +134,7 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
   atomic_fetch_add_explicit(&observe->stage_latency_ns_total, duration_ns, memory_order_relaxed);
   flow_observe_atomic_max(&observe->stage_latency_ns_max, duration_ns);
 
-  salts_mutex_lock(&observe->stage_mutex);
+  cmeta_mutex_lock(&observe->stage_mutex);
   entry = flow_observe_find_stage(observe, stage_name);
   if (!entry && vec_size(&observe->stages) < observe->max_stages) {
     flow_observe_stage_entry_t added;
@@ -154,7 +155,7 @@ static void flow_observe_stage_complete(void *ctx, const char *stage_name, const
   } else {
     atomic_fetch_add_explicit(&observe->dropped_stage_series, 1, memory_order_relaxed);
   }
-  salts_mutex_unlock(&observe->stage_mutex);
+  cmeta_mutex_unlock(&observe->stage_mutex);
 }
 
 static void flow_observe_adapter_event(void *ctx, const char *stage_name, const char *adapter_name,
@@ -200,8 +201,8 @@ turbo_flow_observe_t *turbo_flow_observe_create(const turbo_flow_observe_config_
     free(observe);
     return NULL;
   }
-  salts_mutex_init(&observe->stage_mutex);
-  salts_mutex_init(&observe->export_mutex);
+  cmeta_mutex_init(&observe->stage_mutex);
+  cmeta_mutex_init(&observe->export_mutex);
   observe->max_stages = max_stages;
   observe->max_events = max_events;
   observe->command_result =
@@ -243,9 +244,9 @@ int turbo_flow_observe_destroy(turbo_flow_observe_t *observe) {
     if (entry) tstr_freep(&entry->name);
   }
   vec_destroy(&observe->stages);
-  salts_mutex_destroy(&observe->stage_mutex);
+  cmeta_mutex_destroy(&observe->stage_mutex);
   deque_destroy(&observe->events);
-  salts_mutex_destroy(&observe->export_mutex);
+  cmeta_mutex_destroy(&observe->export_mutex);
   free(observe);
   return SALTS_OK;
 }
@@ -322,9 +323,9 @@ int turbo_flow_observe_snapshot(const turbo_flow_observe_t *observe,
 
 int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
                                       turbo_flow_observe_graph_snapshot_t *out) {
-  salts_platform_cpu_info_t cpu;
-  salts_platform_memory_info_t memory;
-  salts_platform_load_average_t load;
+  cmeta_platform_cpu_info_t cpu;
+  cmeta_platform_memory_info_t memory;
+  cmeta_platform_load_average_t load;
   size_t pool_count;
   size_t resource_count;
   int rc;
@@ -403,15 +404,15 @@ int turbo_flow_observe_graph_snapshot(const turbo_flow_observe_t *observe,
       break;
     }
   }
-  if (salts_platform_cpu_info(&cpu) == SALTS_OK) {
+  if (cmeta_platform_cpu_info(&cpu) == SALTS_OK) {
     out->system.cpu_cores = cpu.core_count;
     out->system.cpu_speed_mhz = cpu.speed_mhz;
   }
-  if (salts_platform_memory_info(&memory) == SALTS_OK) {
+  if (cmeta_platform_memory_info(&memory) == SALTS_OK) {
     out->system.total_memory_bytes = memory.total_memory;
     out->system.available_memory_bytes = memory.available_memory;
   }
-  if (salts_platform_load_average(&load) == SALTS_OK) {
+  if (cmeta_platform_load_average(&load) == SALTS_OK) {
     out->system.load_1m = load.one_minute;
     out->system.load_5m = load.five_minutes;
     out->system.load_15m = load.fifteen_minutes;
@@ -864,9 +865,9 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
   {
     turbo_flow_observe_event_record_t record;
     memset(&record, 0, sizeof(record));
-    record.timestamp_ns = salts_hrtime();
+    record.timestamp_ns = cmeta_hrtime();
     record.event = *event;
-    salts_mutex_lock(&observe->export_mutex);
+    cmeta_mutex_lock(&observe->export_mutex);
     record.sequence = ++observe->next_event_sequence;
     if (deque_size(&observe->events) == observe->max_events) {
       turbo_flow_observe_event_record_t discarded;
@@ -875,10 +876,10 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
       }
     }
     if (turbo_flow_stl_error(deque_push_back(&observe->events, &record)) != SALTS_OK) {
-      salts_mutex_unlock(&observe->export_mutex);
+      cmeta_mutex_unlock(&observe->export_mutex);
       return SALTS_ENOMEM;
     }
-    salts_mutex_unlock(&observe->export_mutex);
+    cmeta_mutex_unlock(&observe->export_mutex);
   }
   return SALTS_OK;
 }
@@ -886,18 +887,18 @@ int turbo_flow_observe_record_control_event(turbo_flow_observe_t *observe,
 size_t turbo_flow_observe_event_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0u;
-  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->export_mutex);
   count = deque_size(&observe->events);
-  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
   return count;
 }
 
 uint64_t turbo_flow_observe_dropped_event_count(const turbo_flow_observe_t *observe) {
   uint64_t count;
   if (!observe) return 0u;
-  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->export_mutex);
   count = observe->dropped_events;
-  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
   return count;
 }
 
@@ -905,14 +906,14 @@ int turbo_flow_observe_event_at(const turbo_flow_observe_t *observe, size_t inde
                                 turbo_flow_observe_event_record_t *out) {
   const turbo_flow_observe_event_record_t *event;
   if (!observe || !out) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->export_mutex);
   event = (const turbo_flow_observe_event_record_t *)deque_at_const(&observe->events, index);
   if (!event) {
-    salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+    cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
     return SALTS_ENOENT;
   }
   *out = *event;
-  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
   return SALTS_OK;
 }
 
@@ -923,12 +924,12 @@ int turbo_flow_observe_record_command_result(turbo_flow_observe_t *observe, cons
     return SALTS_EINVAL;
   length = strlen(target_uid);
   if (length > TURBO_FLOW_RESOURCE_UID_MAX) return SALTS_ENAMETOOLONG;
-  salts_mutex_lock(&observe->export_mutex);
+  cmeta_mutex_lock(&observe->export_mutex);
   memcpy(observe->command_target_uid, target_uid, length + 1u);
   observe->command_result = *result;
   observe->command_result.size = sizeof(observe->command_result);
   observe->has_command_result = 1;
-  salts_mutex_unlock(&observe->export_mutex);
+  cmeta_mutex_unlock(&observe->export_mutex);
   return SALTS_OK;
 }
 
@@ -936,14 +937,14 @@ int turbo_flow_observe_last_command_result(const turbo_flow_observe_t *observe,
                                            char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u],
                                            turbo_flow_resource_command_result_t *out) {
   if (!observe || !target_uid || !out || out->size < sizeof(*out)) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->export_mutex);
   if (!observe->has_command_result) {
-    salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+    cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
     return SALTS_ENOENT;
   }
   memcpy(target_uid, observe->command_target_uid, sizeof(observe->command_target_uid));
   *out = observe->command_result;
-  salts_mutex_unlock((salts_mutex_t *)&observe->export_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->export_mutex);
   return SALTS_OK;
 }
 
@@ -993,9 +994,9 @@ int turbo_flow_observe_resource_at(const turbo_flow_observe_t *observe, size_t i
 size_t turbo_flow_observe_stage_count(const turbo_flow_observe_t *observe) {
   size_t count;
   if (!observe) return 0;
-  salts_mutex_lock((salts_mutex_t *)&observe->stage_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->stage_mutex);
   count = vec_size(&observe->stages);
-  salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->stage_mutex);
   return count;
 }
 
@@ -1004,10 +1005,10 @@ int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe, si
   const flow_observe_stage_entry_t *entry;
   size_t name_len;
   if (!observe || !out) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&observe->stage_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&observe->stage_mutex);
   entry = (const flow_observe_stage_entry_t *)vec_at_const(&observe->stages, index);
   if (!entry) {
-    salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
+    cmeta_mutex_unlock((cmeta_mutex_t *)&observe->stage_mutex);
     return SALTS_ENOENT;
   }
   memset(out, 0, sizeof(*out));
@@ -1020,7 +1021,7 @@ int turbo_flow_observe_stage_snapshot_at(const turbo_flow_observe_t *observe, si
   out->errors = entry->errors;
   out->latency_ns_total = entry->latency_ns_total;
   out->latency_ns_max = entry->latency_ns_max;
-  salts_mutex_unlock((salts_mutex_t *)&observe->stage_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&observe->stage_mutex);
   return SALTS_OK;
 }
 

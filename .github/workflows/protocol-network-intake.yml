@@ -183,7 +183,8 @@ jobs:
           test -f "$plugin"
           exports="$(nm -D --defined-only "$plugin" | awk '$2 ~ /^[TW]$/ {print $3}' | sort -u)"
           printf '%s\n' "$exports" | tee "$RUNNER_TEMP/protocol-intake-evidence/cnet-installed-exports.txt"
-          test "$exports" = "salts_plugin_query"
+          test "$exports" = "cmeta_plugin_query"
+          ! printf '%s\n' "$exports" | grep -Fx 'salts_plugin_query'
           ! nm -D --defined-only "$plugin" | grep -F 'turbo_flow_plugin_get_api'
 
           cmake -E env "TURBO_FLOW_ROOT=$prefix" \

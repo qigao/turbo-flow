@@ -28,8 +28,12 @@ if(DEFINED Chttp_DIR AND NOT "${Chttp_DIR}" STREQUAL "")
   endif()
 endif()
 
+# file(REAL_PATH) can still return Windows backslashes; convert them to
+# CMake forward slashes before find_package() and vcpkg's wrapper parse
+# its arguments (CMake 4.4 / CMP0219). Keep the canonical root for provenance.
+file(TO_CMAKE_PATH "${_turbo_flow_chttp_root}" _turbo_flow_chttp_package_root)
 find_package(Chttp CONFIG REQUIRED
-             PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${_turbo_flow_chttp_package_root}" NO_DEFAULT_PATH)
 file(REAL_PATH "${Chttp_DIR}" _turbo_flow_chttp_dir)
 cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_dir}"
            NORMALIZE _turbo_flow_chttp_dir_in_root)

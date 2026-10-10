@@ -15,16 +15,20 @@ endif()
 set(ENV{TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER}
     "${TURBO_FLOW_HAS_TURBODB_ADAPTER}")
 
-foreach(required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT DATABIND_ROOT RULES_FORGE_ROOT)
+foreach(required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT RULES_FORGE_ROOT)
   if(NOT DEFINED ENV{${required_root}} OR
      "$ENV{${required_root}}" STREQUAL "" OR
      NOT IS_DIRECTORY "$ENV{${required_root}}")
     message(FATAL_ERROR "${required_root} must name an installed SDK prefix")
   endif()
 endforeach()
+if(DEFINED ENV{DATABIND_ROOT} AND
+   NOT "$ENV{DATABIND_ROOT}" STREQUAL "")
+  message(FATAL_ERROR
+          "DataBind is supplied by SaltsUtils; DATABIND_ROOT must not be used")
+endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" salts_root)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" salts_utils_root)
-file(TO_CMAKE_PATH "$ENV{DATABIND_ROOT}" databind_root)
 file(TO_CMAKE_PATH "$ENV{RULES_FORGE_ROOT}" rules_forge_root)
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
   if(NOT DEFINED ENV{TURBODB_ROOT} OR
@@ -235,9 +239,9 @@ if(WIN32)
     string(REGEX MATCH "[^ \t\r\n]+$" export_name "${export_row}")
   endif()
   if(NOT export_count EQUAL 1 OR
-     NOT export_name STREQUAL "salts_plugin_query")
+     NOT export_name STREQUAL "cmeta_plugin_query")
     message(FATAL_ERROR
-            "CNet plugin must export only salts_plugin_query\n${export_output}")
+            "CNet plugin must export only cmeta_plugin_query\n${export_output}")
   endif()
 
   execute_process(

@@ -1,7 +1,7 @@
 #include "turbo_flow_applicant_mapper_plugin.h"
 
 #include "json_parser.h"
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_protocol_mapper.h"
 

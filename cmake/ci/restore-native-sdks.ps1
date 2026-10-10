@@ -151,8 +151,8 @@ $dataBindHeader = Get-Content -LiteralPath (Join-Path $saltsUtilsRoot "include/d
 if ($dataBindHeader -notmatch '#define\s+DATA_BIND_VERSION_MAJOR\s+3') {
   throw "latest SaltsUtils.Native does not expose DataBind 3"
 }
-if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+9') {
-  throw "latest SaltsUtils.Native does not expose DataBind ABI 9"
+if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
+  throw "latest SaltsUtils.Native does not expose DataBind ABI 10"
 }
 
 "SALTS_ROOT=$saltsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
@@ -202,4 +202,47 @@ if ($WithTurboDB) {
 }
 if ($WithCHttp) {
   Write-Host "Restored latest $($cHttp.Id) -> $($cHttp.Version) -> $cHttpRoot"
+}
+
+# Latest-stable NuGet resolution remains floating by policy (#226), but each
+# CI job records its exact source/head and resolved SDKs for reproducibility.
+$sourceSha = (& git rev-parse HEAD | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-f]{40}$') {
+  throw "could not attest exact TurboFlow source HEAD"
+}
+if (-not [string]::IsNullOrWhiteSpace($env:EXPECTED_SHA) -and $sourceSha -ne $env:EXPECTED_SHA) {
+  throw "TurboFlow source HEAD $sourceSha does not match EXPECTED_SHA $env:EXPECTED_SHA"
+}
+$resolutionPath = Join-Path $env:RUNNER_TEMP "turboflow-native-sdk-resolution.json"
+$resolution = [ordered]@{
+  rid = $Rid
+  source_sha = $sourceSha
+  salts = [ordered]@{ package = $salts.Id; version = $salts.Version; root = $saltsRoot }
+  salts_utils = [ordered]@{ package = $saltsUtils.Id; version = $saltsUtils.Version; root = $saltsUtilsRoot; data_bind_abi = 10 }
+}
+if ($WithRulesForge) {
+  $resolution['rules_forge'] = [ordered]@{ package = $rulesForge.Id; version = $rulesForge.Version; root = $rulesForgeRoot }
+}
+if ($WithTurboDB) {
+  $resolution['turbo_db'] = [ordered]@{ package = $turboDb.Id; version = $turboDb.Version; root = $turboDbRoot }
+}
+if ($WithCHttp) {
+  $resolution['chttp'] = [ordered]@{ package = $cHttp.Id; version = $cHttp.Version; root = $cHttpRoot }
+}
+$resolution | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $resolutionPath -Encoding utf8NoBOM
+"TURBO_FLOW_NATIVE_SDK_RESOLUTION=$resolutionPath" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+Write-Host "Exact native SDK resolution recorded: $resolutionPath"
+Get-Content -LiteralPath $resolutionPath | Write-Host
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+  @(
+    "### TurboFlow native SDK resolution",
+    "",
+    "- Source: $sourceSha",
+    "- RID: $Rid",
+    "- Salts.Native: $($salts.Version)",
+    "- SaltsUtils.Native: $($saltsUtils.Version) (DataBind ABI 10)"
+  ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+  if ($WithCHttp) {
+    "- CHttp.Native: $($cHttp.Version)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+  }
 }

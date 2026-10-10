@@ -1,7 +1,7 @@
 #include "turbo_flow_security.h"
 
 #include "tinytest.h"
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "tstr.h"
 
 #include <stdlib.h>

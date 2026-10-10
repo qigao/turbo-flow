@@ -7,9 +7,6 @@
       "version>=": "0.8.3"
     },
     {
-      "name": "boringssl"
-    },
-    {
       "name": "pkgconf"
     },
     {

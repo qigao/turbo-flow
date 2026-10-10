@@ -1,0 +1,263 @@
+name: Windows latest native SDK qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-latest-native-sdk.yml"
+      - ".github/workflows/task4-runtime-focused.yml"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "cmake/**"
+      - "turbo_flow/**"
+      - "io/chttp/**"
+      - "io/cnet/**"
+      - "ingress/protocol/**"
+      - "tests/install_windows_native_consumer/**"
+      - "vcpkg.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turboflow-windows-native-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  windows-native-sdk:
+    name: Published SDK build + installed C++ consumer
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboFlow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) { throw "source drift: $actual vs $env:EXPECTED_SHA" }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw "git diff --check failed" }
+
+      - name: Use an empty vcpkg L1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cache = Join-Path $env:RUNNER_TEMP "turboflow-windows-empty-l1"
+          if (Test-Path -LiteralPath $cache) { Remove-Item $cache -Recurse -Force }
+          New-Item -Path $cache -ItemType Directory -Force | Out-Null
+          "VCPKG_BINARY_CACHE=$cache" >> $env:GITHUB_ENV
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore canonical re2c host tool
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Locate MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products "*" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs)) { throw "x64 MSVC not found" }
+          "VSINSTALL=$vs" >> $env:GITHUB_ENV
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
+      - name: Restore latest published native SDKs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -WithCHttp -WithRulesForge
+
+      - name: Verify exact package boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @("SALTS_ROOT", "SALTS_UTILS_ROOT", "HTTP_SERVICES_ROOT", "RULES_FORGE_ROOT")) {
+            $root = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) {
+              throw "native SDK root is unavailable: $name"
+            }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:DATABIND_ROOT)) {
+            throw "DATABIND_ROOT must not supply a standalone or fallback DataBind"
+          }
+          $data = Get-Content (Join-Path $env:SALTS_UTILS_ROOT "include/data_bind.h") -Raw
+          if ($data -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
+            throw "expected published SaltsUtils DataBind ABI 10"
+          }
+          if (-not (Test-Path (Join-Path $env:SALTS_UTILS_ROOT "bin/salts-idlc.exe") -PathType Leaf)) {
+            throw "installed salts-idlc is missing"
+          }
+          if (-not (Test-Path -LiteralPath $env:QIGAO_VCPKG_TOOLCHAIN_FILE -PathType Leaf)) {
+            throw "canonical vcpkg toolchain is missing"
+          }
+
+      - name: Configure build and install TurboFlow from published SDKs
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          cmake -S . -B build\windows-native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DENABLE_TESTS=OFF -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DTURBO_FLOW_BUILD_TURBODB_ADAPTER=OFF -DTURBO_FLOW_BUILD_RULESFORGE_PLUGIN=OFF -DTURBO_FLOW_BUILD_APPLICANT_MAPPER_PLUGIN=OFF -DENABLE_ASAN=OFF -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64"
+          if errorlevel 1 exit /b 1
+          cmake --build build\windows-native-sdk --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --install build\windows-native-sdk
+          if errorlevel 1 exit /b 1
+
+      - name: Verify installed TurboFlow targets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage/sdk/windows-x64"
+          foreach ($required in @(
+            "include/turbo_flow.h",
+            "include/turbo_flow_chttp.h",
+            "lib/cmake/TurboFlow/TurboFlowConfig.cmake",
+            "lib/cmake/TurboFlow/TurboFlowTargets.cmake"
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $prefix $required) -PathType Leaf)) {
+              throw "installed TurboFlow SDK missing $required"
+            }
+          }
+          "TURBO_FLOW_ROOT=$prefix" >> $env:GITHUB_ENV
+
+      - name: Compile and run installed C++ consumer
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%PATH%"
+          cmake -S tests\install_windows_native_consumer -B build\windows-native-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+          if errorlevel 1 exit /b 1
+          cmake --build build\windows-native-consumer --parallel 2
+          if errorlevel 1 exit /b 1
+          build\windows-native-consumer\turboflow_native_consumer.exe
+          if errorlevel 1 exit /b 1
+
+      - name: Inspect installed CNet provider exports and dependencies
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          if not exist "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" exit /b 1
+          dumpbin /nologo /exports "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\tf_cnet_plugin_exports.txt"
+          if errorlevel 1 exit /b 1
+          dumpbin /nologo /dependents "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\tf_cnet_plugin_deps.txt"
+          if errorlevel 1 exit /b 1
+
+      - name: Require CNet provider ABI and no standalone OpenSSL dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exports = @(Get-Content (Join-Path $env:RUNNER_TEMP 'tf_cnet_plugin_exports.txt') |
+            ForEach-Object {
+              if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)\s*$') { $Matches[1] }
+            })
+          if ($exports.Count -ne 1 -or $exports[0] -ne 'cmeta_plugin_query') {
+            throw "CNet plugin must export exactly cmeta_plugin_query: $($exports -join ', ')"
+          }
+          $deps = Get-Content (Join-Path $env:RUNNER_TEMP 'tf_cnet_plugin_deps.txt') -Raw
+          if ($deps -notmatch '(?im)^\s*tf_cnet_adapter\.dll\s*$') {
+            throw 'CNet provider must import tf_cnet_adapter.dll'
+          }
+          if ($deps -match '(?im)^\s*(ssl|ssld|crypto|cryptod)\.dll\s*$') {
+            throw 'CNet provider must not import standalone OpenSSL/BoringSSL DLLs'
+          }
+          foreach ($obsolete in @('ssl.dll','ssld.dll','crypto.dll','cryptod.dll')) {
+            if (Test-Path (Join-Path $env:TURBO_FLOW_ROOT "bin/$obsolete") -PathType Leaf) {
+              throw "TurboFlow package copied forbidden legacy crypto DLL: $obsolete"
+            }
+          }
+
+      - name: Build and execute installed CNet provider consumer
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          cmake -S tests\install_cnet_plugin_consumer -B build\windows-installed-cnet -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DTURBO_FLOW_CNET_PLUGIN_PATH="%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll"
+          if errorlevel 1 exit /b 1
+          cmake --build build\windows-installed-cnet --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\windows-installed-cnet --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+
+      - name: Reject missing installed CNet provider DLL
+        shell: cmd
+        run: |
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          build\windows-installed-cnet\turbo_flow_cnet_plugin_consumer.exe "%TURBO_FLOW_ROOT%\bin\missing-cnet-plugin.dll" > "%RUNNER_TEMP%\cnet-missing-provider.txt" 2>&1
+          if not errorlevel 1 exit /b 1
+          findstr /C:"failed at plugin DLL load" "%RUNNER_TEMP%\cnet-missing-provider.txt"
+          if errorlevel 1 exit /b 1
+
+      - name: Stage CNet missing-transitive DLL fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isolate = Join-Path $env:RUNNER_TEMP 'cnet-missing-adapter'
+          if (Test-Path -LiteralPath $isolate) { Remove-Item -LiteralPath $isolate -Recurse -Force }
+          New-Item -Path $isolate -ItemType Directory -Force | Out-Null
+          $source = Join-Path $env:TURBO_FLOW_ROOT 'bin'
+          $dlls = @(Get-ChildItem -LiteralPath $source -File -Filter '*.dll')
+          if ($dlls.Count -eq 0) { throw 'installed TurboFlow has no runtime DLLs' }
+          foreach ($dll in $dlls) {
+            if ($dll.Name -ne 'tf_cnet_adapter.dll') {
+              Copy-Item -LiteralPath $dll.FullName -Destination $isolate
+            }
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $isolate 'tf_cnet_plugin.dll') -PathType Leaf)) {
+            throw 'isolated fixture must contain the CNet provider DLL'
+          }
+          if (Test-Path -LiteralPath (Join-Path $isolate 'tf_cnet_adapter.dll')) {
+            throw 'isolated fixture must not contain the CNet adapter DLL'
+          }
+          "CNET_ISOLATED_PREFIX=$isolate" >> $env:GITHUB_ENV
+
+      - name: Reject installed CNet provider with missing transitive adapter
+        shell: cmd
+        run: |
+          set "PATH=%CNET_ISOLATED_PREFIX%;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          where tf_cnet_adapter.dll >nul 2>&1
+          if not errorlevel 1 exit /b 1
+          build\windows-installed-cnet\turbo_flow_cnet_plugin_consumer.exe "%CNET_ISOLATED_PREFIX%\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\cnet-missing-adapter.txt" 2>&1
+          if not errorlevel 1 exit /b 1
+          findstr /C:"failed at plugin DLL load" "%RUNNER_TEMP%\cnet-missing-adapter.txt"
+          if errorlevel 1 exit /b 1
+
+      - name: Verify committed source remained clean
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ((git rev-parse HEAD).Trim() -ne $env:EXPECTED_SHA) { throw "source SHA changed" }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw "checked-out source was modified" }

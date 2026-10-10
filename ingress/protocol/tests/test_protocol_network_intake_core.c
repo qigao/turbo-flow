@@ -518,7 +518,7 @@ static void intake_wait_calls(intake_completion_probe_t *probe, size_t expected)
   for (size_t attempt = 0u;
        attempt < 5000u && atomic_load_explicit(&probe->calls, memory_order_acquire) < expected;
        ++attempt)
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
 }
 
 static void intake_wait_backpressure(flow_protocol_network_intake_sink_t *sink, int expected) {
@@ -527,7 +527,7 @@ static void intake_wait_backpressure(flow_protocol_network_intake_sink_t *sink, 
     memset(&metrics, 0, sizeof(metrics));
     flow_protocol_network_intake_sink_metrics(sink, &metrics);
     if ((metrics.backpressured != 0) == (expected != 0)) return;
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
 }
 

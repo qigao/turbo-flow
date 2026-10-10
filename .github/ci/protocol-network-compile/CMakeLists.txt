@@ -139,4 +139,4 @@ target_compile_options(protocol_semantic_mapper_contract PRIVATE
 target_link_options(protocol_semantic_mapper_contract PRIVATE
     -fsanitize=address -fsanitize=undefined)
 target_link_libraries(protocol_semantic_mapper_contract PRIVATE
-    Salts::Core Salts::TinyTest)
+    Salts::Core Salts::CFlow Salts::TinyTest)

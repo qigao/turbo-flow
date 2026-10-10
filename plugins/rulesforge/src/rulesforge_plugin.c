@@ -8,7 +8,7 @@
 #include <data_bind_json_provider.h>
 #include <data_bind_native.h>
 #include <rules_forge.h>
-#include <salts_error.h>
+#include <salts/error_codes.h>
 
 #include <limits.h>
 #include <stdatomic.h>

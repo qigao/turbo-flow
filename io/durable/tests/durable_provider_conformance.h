@@ -42,7 +42,7 @@ static void turbo_flow_durable_provider_conformance_capacity_and_replay(
 
   for (size_t i = 0u; i < 1000u && p->delivered(p->ctx) < 2u; ++i) {
     check_equal(p->progress(p->ctx), SALTS_OK);
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
   check_equal(p->delivered(p->ctx), (size_t)2u);
 

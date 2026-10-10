@@ -3,9 +3,9 @@
 #include "turbo_flow_stl_error_internal.h"
 
 #include <csv_parser.h>
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "tstr.h"
-#include "salts_thread.h"
+#include "salts/thread.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -106,7 +106,7 @@ typedef struct flow_codec_adapter_s {
   tstr xml_xpath;
   turbo_flow_data_schema_t data_schema;
   DataBind *databind;
-  salts_mutex_t databind_lock;
+  cmeta_mutex_t databind_lock;
   int databind_lock_initialized;
   atomic_int started;
 } flow_codec_adapter_t;
@@ -399,10 +399,10 @@ static int flow_codec_transform_databind(flow_codec_adapter_t *adapter, turbo_fl
     return SALTS_EFBIG;
   }
 
-  salts_mutex_lock(&adapter->databind_lock);
+  cmeta_mutex_lock(&adapter->databind_lock);
   rc = adapter->validate_only ? flow_codec_databind_validate(adapter, msg)
                               : flow_codec_databind_parse(adapter, msg);
-  salts_mutex_unlock(&adapter->databind_lock);
+  cmeta_mutex_unlock(&adapter->databind_lock);
   return rc;
 }
 
@@ -602,7 +602,7 @@ static void flow_codec_shutdown(void *ctx) {
   if (!adapter) return;
   atomic_store_explicit(&adapter->started, 0, memory_order_release);
   data_bind_free(adapter->databind);
-  if (adapter->databind_lock_initialized) salts_mutex_destroy(&adapter->databind_lock);
+  if (adapter->databind_lock_initialized) cmeta_mutex_destroy(&adapter->databind_lock);
   tstr_freep(&adapter->schema_path);
   tstr_freep(&adapter->schema_text);
   tstr_freep(&adapter->schema_name);
@@ -682,7 +682,7 @@ int turbo_flow_codec_register_databind_adapter(turbo_flow_t *flow, const char *n
   atomic_init(&adapter->started, 0);
   adapter->kind = FLOW_CODEC_DATABIND;
   adapter->input_format = TURBO_FLOW_CODEC_DATABIND_BIN;
-  salts_mutex_init(&adapter->databind_lock);
+  cmeta_mutex_init(&adapter->databind_lock);
   adapter->databind_lock_initialized = 1;
 
   if (config) {

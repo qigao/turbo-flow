@@ -1,7 +1,7 @@
 // re2c $INPUT -o $OUTPUT
 #include "flow_parser_internal.h"
 #include "turbo_flow_grammar_gen.h"
-#include "salts_simd_scan.h"
+#include <cmeta_simd_scan.h>
 
 #include <string.h>
 
@@ -105,20 +105,20 @@ int flow_lexer_next(flow_lexer_t *lexer, flow_token_t *token) {
 
 lex_start:
   for (;;) {
-    const char *next = salts_scan_skip_sp_tab(YYCURSOR, YYLIMIT);
+    const char *next = cmeta_scan_skip_sp_tab(YYCURSOR, YYLIMIT);
     if (next != YYCURSOR) {
       lexer->column += (uint32_t)(next - YYCURSOR);
       YYCURSOR = next;
       continue;
     }
     if (YYCURSOR < YYLIMIT && *YYCURSOR == '#') {
-      next = salts_scan_to_any2(YYCURSOR, YYLIMIT, '\r', '\n');
+      next = cmeta_scan_to_any2(YYCURSOR, YYLIMIT, '\r', '\n');
       lexer->column += (uint32_t)(next - YYCURSOR);
       YYCURSOR = next;
       continue;
     }
     if ((size_t)(YYLIMIT - YYCURSOR) >= 2u && YYCURSOR[0] == '%' && YYCURSOR[1] == '%') {
-      next = salts_scan_to_any2(YYCURSOR, YYLIMIT, '\r', '\n');
+      next = cmeta_scan_to_any2(YYCURSOR, YYLIMIT, '\r', '\n');
       lexer->column += (uint32_t)(next - YYCURSOR);
       YYCURSOR = next;
       continue;
@@ -133,7 +133,7 @@ lex_start:
   token->column = lexer->column;
 
   if (YYCURSOR < YYLIMIT && *YYCURSOR == '"') {
-    const char *string_end = salts_scan_to_any3(YYCURSOR + 1, YYLIMIT, '"', '\r', '\n');
+    const char *string_end = cmeta_scan_to_any3(YYCURSOR + 1, YYLIMIT, '"', '\r', '\n');
     if (string_end < YYLIMIT && *string_end == '"') {
       YYCURSOR = string_end + 1;
       token->value = start + 1;

@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.27)
+project(TurboFlowPublishedNativeConsumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT DEFINED ENV{TURBO_FLOW_ROOT} OR "$ENV{TURBO_FLOW_ROOT}" STREQUAL "")
+  message(FATAL_ERROR "TURBO_FLOW_ROOT must be the installed TurboFlow SDK")
+endif()
+file(TO_CMAKE_PATH "$ENV{TURBO_FLOW_ROOT}" _turbo_flow_prefix)
+find_package(TurboFlow CONFIG REQUIRED COMPONENTS Graph CHTTPAdapter
+             PATHS "${_turbo_flow_prefix}" NO_DEFAULT_PATH)
+if(NOT TARGET TurboFlow::Graph OR NOT TARGET TurboFlow::CHTTPAdapter)
+  message(FATAL_ERROR "required installed TurboFlow targets are unavailable")
+endif()
+add_executable(turboflow_native_consumer main.cpp)
+target_link_libraries(turboflow_native_consumer PRIVATE
+  TurboFlow::Graph TurboFlow::CHTTPAdapter)

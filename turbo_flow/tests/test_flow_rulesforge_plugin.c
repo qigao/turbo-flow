@@ -3,7 +3,7 @@
 #include "turbo_flow_plugin_materializer.h"
 #include "turbo_flow_rulesforge_plugin.h"
 
-#include <salts_error.h>
+#include <salts/error_codes.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,7 +93,11 @@ spec("RulesForge ABI3 provider") {
     if (!plugin_path || !plugin_path[0]) plugin_path = FLOW_RULESFORGE_PLUGIN;
 
     check_equal(turbo_flow_plugin_host_create(&host_config, &host, &plugin_error), SALTS_OK);
-    check_equal(turbo_flow_plugin_host_load(host, plugin_path, &plugin_error), SALTS_OK);
+    int load_status = turbo_flow_plugin_host_load(host, plugin_path, &plugin_error);
+    if (load_status != SALTS_OK)
+      fprintf(stderr, "RulesForge plugin load failed status=%d stage=%d: %s\n",
+              load_status, (int)plugin_error.stage, plugin_error.message);
+    check_equal(load_status, SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error), SALTS_OK);
     turbo_flow_plugin_operation_catalog_v3_init(&catalog);
     check_equal(turbo_flow_plugin_catalog_snapshot_operation_catalog(snapshot, &catalog), SALTS_OK);
@@ -137,8 +141,11 @@ spec("RulesForge ABI3 provider") {
                 SALTS_EPROTO);
     check_equal(decoded.age, 0);
 
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &config_error),
-                SALTS_OK);
+    int config_status = turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &config_error);
+    if (config_status != SALTS_OK)
+      fprintf(stderr, "RulesForge config failed status=%d: %s\n",
+              config_status, config_error.message);
+    check_equal(config_status, SALTS_OK);
     turbo_flow_plugin_operation_request_v3_init(&request);
     request.resolved = resolved;
     request.operation_name = TURBO_FLOW_RULESFORGE_OPERATION;

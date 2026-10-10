@@ -220,22 +220,22 @@ CMETA_IMPLEMENTS(turbo_flow_provider_factory, fixture_provider_factory, 0u,
                  .materialize = fixture_materialize);
 
 static turbo_flow_provider_factory fixture_factory;
-static salts_plugin_export fixture_export;
-static salts_plugin_manifest fixture_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static cmeta_plugin_export fixture_export;
+static cmeta_plugin_manifest fixture_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.turboflow.provider",
     .version = {1u, 0u, 0u},
     .self = &fixture_state,
 };
-static salts_once_t fixture_once = SALTS_ONCE_INIT;
+static cmeta_once_t fixture_once = SALTS_ONCE_INIT;
 
 static void fixture_init(void) {
   fixture_factory =
       fixture_provider_factory_as_turbo_flow_provider_factory(&fixture_state);
-  fixture_export = (salts_plugin_export){
-      .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-      .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+  fixture_export = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+      .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
       .contract_version = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
       .capabilities = 0u,
       .export_id = "fixture.provider",
@@ -249,9 +249,9 @@ static void fixture_init(void) {
   fixture_manifest.export_count = 1u;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_start(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = false;
   state->started = true;
   state->owner_quiesce_calls = 0u;
@@ -259,35 +259,35 @@ static salts_plugin_status SALTS_PLUGIN_CALL fixture_start(void *self) {
   state->owner_shutdown_calls = 0u;
   state->owner_poll_calls = 0u;
   state->owner_destroy_calls = 0u;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status SALTS_PLUGIN_CALL fixture_request_stop(void *self) {
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_request_stop(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
-  if (!state) return SALTS_PLUGIN_INVALID_ARGUMENT;
+  if (!state) return CMETA_PLUGIN_INVALID_ARGUMENT;
   state->stopping = true;
   state->started = false;
-  return SALTS_PLUGIN_OK;
+  return CMETA_PLUGIN_OK;
 }
 
-static bool SALTS_PLUGIN_CALL fixture_is_quiescent(const void *self) {
+static bool CMETA_PLUGIN_CALL fixture_is_quiescent(const void *self) {
   const fixture_provider_state_t *state =
       (const fixture_provider_state_t *)self;
   return state && state->stopping;
 }
 
-static void SALTS_PLUGIN_CALL fixture_destroy(void *self) {
+static void CMETA_PLUGIN_CALL fixture_destroy(void *self) {
   fixture_provider_state_t *state = (fixture_provider_state_t *)self;
   if (!state) return;
   state->started = false;
   state->stopping = true;
 }
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-  if (host_abi != SALTS_PLUGIN_ABI_VERSION) return NULL;
-  salts_once(&fixture_once, fixture_init);
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
+  cmeta_once(&fixture_once, fixture_init);
   fixture_manifest.start = fixture_start;
   fixture_manifest.request_stop = fixture_request_stop;
   fixture_manifest.is_quiescent = fixture_is_quiescent;

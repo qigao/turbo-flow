@@ -2,7 +2,7 @@
 
 #include "flow_expr_internal.h"
 #include "flow_internal.h"
-#include "salts_error.h"
+#include <salts/error_codes.h>
 #include <json_parser.h>
 #include "tstr.h"
 #include "turbo_flow_stl_error_internal.h"
@@ -904,7 +904,7 @@ int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *proces
   context.message = facts->message;
   local.instructions = processor->instructions;
   local.memory_bytes = processor->memory_bytes;
-  started_at = salts_hrtime();
+  started_at = cmeta_hrtime();
   for (size_t i = 0; i < vec_size(&processor->rules); ++i) {
     const flow_compiled_rule_t *rule =
         (const flow_compiled_rule_t *)vec_at_const(&processor->rules, i);
@@ -912,7 +912,7 @@ int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *proces
     memset(&value, 0, sizeof(value));
     rc = turbo_flow_expr_evaluate(rule->predicate, &context, &value);
     local.evaluated += 1u;
-    local.elapsed_ns = salts_hrtime() - started_at;
+    local.elapsed_ns = cmeta_hrtime() - started_at;
     if (rc != SALTS_OK) goto done;
     if (local.elapsed_ns > processor->limits.max_time_ns) {
       rc = SALTS_ETIMEDOUT;
@@ -937,7 +937,7 @@ int turbo_flow_rule_processor_evaluate(const turbo_flow_rule_processor_t *proces
   rc = SALTS_OK;
 
 done:
-  local.elapsed_ns = salts_hrtime() - started_at;
+  local.elapsed_ns = cmeta_hrtime() - started_at;
   atomic_fetch_add_explicit((atomic_uint_fast64_t *)&processor->evaluations, 1u,
                             memory_order_relaxed);
   atomic_fetch_add_explicit((atomic_uint_fast64_t *)&processor->matches, local.matched,

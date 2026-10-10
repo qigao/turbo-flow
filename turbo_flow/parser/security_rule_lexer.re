@@ -1,7 +1,7 @@
 // re2c $INPUT -o $OUTPUT
 #include "turbo_flow_security.h"
 
-#include "salts_error.h"
+#include <salts/error_codes.h>
 
 #include <stdint.h>
 #include <string.h>

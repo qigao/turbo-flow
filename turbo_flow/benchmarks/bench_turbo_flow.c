@@ -5,7 +5,7 @@
 #include "turbo_flow.h"
 #include "turbo_flow_expr.h"
 #include "turbo_flow_security.h"
-#include "salts_thread.h"
+#include "cmeta_thread.h"
 
 #include <cflow/publishers.h>
 #include <cflow/function_projection.h>
@@ -263,13 +263,13 @@ static void bench_live_job(void *arg) {
   flow_bench_live_jobs_t *jobs = (flow_bench_live_jobs_t *)arg;
   atomic_fetch_add_explicit(&jobs->started, 1u, memory_order_release);
   while (!atomic_load_explicit(&jobs->release, memory_order_acquire))
-    salts_sleep_ms(1);
+    cmeta_sleep_ms(1);
   atomic_fetch_add_explicit(&jobs->completed, 1u, memory_order_release);
 }
 
 static void bench_release_live_jobs(void *arg) {
   flow_bench_live_jobs_t *jobs = (flow_bench_live_jobs_t *)arg;
-  salts_sleep_ms(1);
+  cmeta_sleep_ms(1);
   atomic_store_explicit(&jobs->release, 1, memory_order_release);
 }
 
@@ -661,14 +661,14 @@ static void bench_report_cflow_region_publish(
       &g_flow_bench_region_projection_clones, 0u, memory_order_relaxed);
 
   cpu_start = bench_process_cpu_ns();
-  wall_start = salts_hrtime();
+  wall_start = cmeta_hrtime();
   for (size_t i = 0u; i < iterations && status == SALTS_OK; ++i) {
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     status = turbo_flow_publish(flow, "input", &message);
-    latencies[i] = salts_hrtime() - started;
+    latencies[i] = cmeta_hrtime() - started;
     if (status == SALTS_OK) ++completed;
   }
-  wall_elapsed = salts_hrtime() - wall_start;
+  wall_elapsed = cmeta_hrtime() - wall_start;
   cpu_elapsed = bench_process_cpu_ns() - cpu_start;
 
   check_equal(status, SALTS_OK);
@@ -785,22 +785,22 @@ static void bench_report_cflow_region_batch(
   atomic_store_explicit(
       &g_flow_bench_region_projection_clones, 0u, memory_order_relaxed);
   cpu_start = bench_process_cpu_ns();
-  wall_start = salts_hrtime();
+  wall_start = cmeta_hrtime();
   for (size_t batch = 0u; batch < batch_count && status == SALTS_OK; ++batch) {
     const size_t remaining = iterations - completed;
     const size_t current = remaining < batch_size ? remaining : batch_size;
     size_t published = 0u;
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     config.message_count = current;
     status = turbo_flow_publish_batch(flow, "input", &config, &published);
-    latencies[batch] = salts_hrtime() - started;
+    latencies[batch] = cmeta_hrtime() - started;
     if (status != SALTS_OK || published != current) {
       if (status == SALTS_OK) status = SALTS_EPROTO;
       break;
     }
     completed += published;
   }
-  wall_elapsed = salts_hrtime() - wall_start;
+  wall_elapsed = cmeta_hrtime() - wall_start;
   cpu_elapsed = bench_process_cpu_ns() - cpu_start;
 
   check_equal(status, SALTS_OK);
@@ -930,17 +930,17 @@ static void bench_report_cflow_region_batch_failure(
   projection.clones = 0u;
   projection.destroys = 0u;
   cpu_start = bench_process_cpu_ns();
-  wall_start = salts_hrtime();
+  wall_start = cmeta_hrtime();
   for (size_t i = 0u; i < iterations; ++i) {
     size_t published = 0u;
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     status = turbo_flow_publish_batch(flow, "input", &config, &published);
-    latencies[i] = salts_hrtime() - started;
+    latencies[i] = cmeta_hrtime() - started;
     check_equal(status, SALTS_EIO);
     check_equal(published, fail_index);
     total_published += published;
   }
-  wall_elapsed = salts_hrtime() - wall_start;
+  wall_elapsed = cmeta_hrtime() - wall_start;
   cpu_elapsed = bench_process_cpu_ns() - cpu_start;
 
   check_equal(total_published, fail_index * iterations);
@@ -1005,12 +1005,12 @@ static void bench_publish_worker(void *arg) {
   worker->status = SALTS_OK;
   atomic_fetch_add_explicit(worker->ready, 1u, memory_order_release);
   while (!atomic_load_explicit(worker->start, memory_order_acquire))
-    salts_thread_yield();
+    cmeta_thread_yield();
 
   for (size_t i = 0; i < worker->iterations; ++i) {
-    uint64_t begin = salts_hrtime();
+    uint64_t begin = cmeta_hrtime();
     int rc = turbo_flow_publish(worker->flow, "input", &msg);
-    worker->latencies[i] = salts_hrtime() - begin;
+    worker->latencies[i] = cmeta_hrtime() - begin;
     if (rc != SALTS_OK) {
       worker->status = rc;
       break;
@@ -1025,7 +1025,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
                                             uint32_t producers, size_t payload_size,
                                             size_t iterations) {
   flow_bench_publish_worker_t *contexts;
-  salts_thread_t *threads;
+  cmeta_thread_t *threads;
   uint64_t *latencies;
   atomic_uint ready;
   atomic_int start;
@@ -1035,7 +1035,7 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
   double throughput;
 
   contexts = (flow_bench_publish_worker_t *)calloc(producers, sizeof(*contexts));
-  threads = (salts_thread_t *)calloc(producers, sizeof(*threads));
+  threads = (cmeta_thread_t *)calloc(producers, sizeof(*threads));
   latencies = (uint64_t *)calloc(iterations, sizeof(*latencies));
   check_not_null(contexts);
   check_not_null(threads);
@@ -1054,18 +1054,18 @@ static void bench_report_concurrent_publish(turbo_flow_t *flow, const char *stag
     contexts[i].ready = &ready;
     contexts[i].start = &start;
     contexts[i].status = SALTS_EBUSY;
-    check_equal(salts_thread_create(&threads[i], bench_publish_worker, &contexts[i]), SALTS_OK);
+    check_equal(cmeta_thread_create(&threads[i], bench_publish_worker, &contexts[i]), SALTS_OK);
   }
   while (atomic_load_explicit(&ready, memory_order_acquire) != producers)
-    salts_thread_yield();
-  total_start = salts_hrtime();
+    cmeta_thread_yield();
+  total_start = cmeta_hrtime();
   atomic_store_explicit(&start, 1, memory_order_release);
   for (uint32_t i = 0; i < producers; ++i) {
-    check_equal(salts_thread_join(&threads[i]), SALTS_OK);
+    check_equal(cmeta_thread_join(&threads[i]), SALTS_OK);
     check_equal(contexts[i].status, SALTS_OK);
     completed += contexts[i].completed;
   }
-  total_elapsed = salts_hrtime() - total_start;
+  total_elapsed = cmeta_hrtime() - total_start;
   check_equal(completed, iterations);
   if (completed == 0u) goto cleanup;
 
@@ -1113,14 +1113,14 @@ static void bench_report_publish(turbo_flow_t *flow, const char *stage_plan, con
   }
   check_equal(rc, SALTS_OK);
 
-  total_start = salts_hrtime();
+  total_start = cmeta_hrtime();
   for (size_t i = 0; i < iterations && rc == SALTS_OK; ++i) {
-    uint64_t start = salts_hrtime();
+    uint64_t start = cmeta_hrtime();
     rc = turbo_flow_publish(flow, "input", &msg);
-    latencies[i] = salts_hrtime() - start;
+    latencies[i] = cmeta_hrtime() - start;
     if (rc == SALTS_OK) completed += 1u;
   }
-  total_elapsed = salts_hrtime() - total_start;
+  total_elapsed = cmeta_hrtime() - total_start;
   check_equal(rc, SALTS_OK);
   if (rc != SALTS_OK || completed == 0) {
     turbo_flow_msg_cleanup(&msg);
@@ -1163,14 +1163,14 @@ static uint64_t bench_process_cpu_ns(void) {
 
 static void bench_report_idle_cpu(turbo_flow_t *flow, const char *stage_plan, const char *executor,
                                   uint32_t workers) {
-  uint64_t wall_start = salts_hrtime();
+  uint64_t wall_start = cmeta_hrtime();
   uint64_t cpu_start = bench_process_cpu_ns();
   double wall_ms;
   double cpu_ms;
   double cpu_wall_ratio;
 
-  salts_sleep_ms(FLOW_BENCH_IDLE_WAIT_MS);
-  wall_ms = (double)(salts_hrtime() - wall_start) / 1000000.0;
+  cmeta_sleep_ms(FLOW_BENCH_IDLE_WAIT_MS);
+  wall_ms = (double)(cmeta_hrtime() - wall_start) / 1000000.0;
   cpu_ms = (double)(bench_process_cpu_ns() - cpu_start) / 1000000.0;
   cpu_wall_ratio = wall_ms > 0.0 ? cpu_ms / wall_ms : 0.0;
   printf("BENCH_IDLE stage_plan=%s executor=%s workers=%" PRIu32
@@ -1934,7 +1934,7 @@ spec("Turbo Flow Bench") {
     check_equal(submit_status, SALTS_OK);
     while (atomic_load_explicit(&completion.completed, memory_order_acquire) <
            FLOW_BENCH_ASYNC_INGRESS_ITERS) {
-      salts_thread_yield();
+      cmeta_thread_yield();
     }
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.completed, memory_order_acquire),
@@ -2034,18 +2034,18 @@ spec("Turbo Flow Bench") {
       uint32_t stage_index = (uint32_t)turbo_flow_find_stage(flow, "work");
       const flow_threadpool_adapter_t *adapter = bench_threadpool_adapter(flow, stage_index);
       flow_bench_live_jobs_t jobs;
-      salts_thread_t releaser;
+      cmeta_thread_t releaser;
       atomic_init(&jobs.release, 0);
       atomic_init(&jobs.started, 0u);
       atomic_init(&jobs.completed, 0u);
       check_not_null(adapter);
       for (uint32_t i = 0; i < 4; ++i)
-        check_equal(salts_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
+        check_equal(cmeta_threadpool_submit(adapter->pool, bench_live_job, &jobs), SALTS_OK);
       while (atomic_load_explicit(&jobs.started, memory_order_acquire) == 0u)
-        salts_sleep_ms(1);
-      check_equal(salts_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);
+        cmeta_sleep_ms(1);
+      check_equal(cmeta_thread_create(&releaser, bench_release_live_jobs, &jobs), SALTS_OK);
       bench_destroy_started_flow(flow);
-      check_equal(salts_thread_join(&releaser), SALTS_OK);
+      check_equal(cmeta_thread_join(&releaser), SALTS_OK);
       check_equal(atomic_load_explicit(&jobs.completed, memory_order_acquire), 4);
     }
   }

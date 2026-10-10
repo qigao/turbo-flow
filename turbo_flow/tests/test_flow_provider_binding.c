@@ -16,15 +16,15 @@
 #endif
 
 typedef struct provider_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
   int accept_any_identity;
 } provider_resolver_fixture_t;
 
 typedef struct resource_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref plugin;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref plugin;
   unsigned calls;
 } resource_resolver_fixture_t;
 
@@ -79,10 +79,10 @@ static int resolve_provider(
 
 spec("TurboFlow Salts provider binding") {
   it("retains the exact provider factory Interface under one module lease") {
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {2u};
-    salts_plugin_ref provider_ref = {0};
-    salts_plugin_ref resource_ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {2u};
+    cmeta_plugin_ref provider_ref = {0};
+    cmeta_plugin_ref resource_ref = {0};
     provider_resolver_fixture_t fixture = {0};
     resource_resolver_fixture_t resource_fixture = {0};
     turbo_flow_provider_resolver_v1_t resolver =
@@ -104,18 +104,18 @@ spec("TurboFlow Salts provider binding") {
     const DataBindMessageNativeArtifact *artifact;
     bool quiescent = true;
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_PROVIDER_FIXTURE, &provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_RESOURCE_FIXTURE, &resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
 
     fixture.registry = &registry;
     fixture.plugin = provider_ref;
@@ -169,49 +169,49 @@ spec("TurboFlow Salts provider binding") {
                     binding, &instance, &error),
                 SALTS_OK);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_request_stop(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, provider_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_false(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, provider_ref),
-                SALTS_PLUGIN_BUSY);
+    check_equal(cmeta_plugin_registry_unload(&registry, provider_ref),
+                CMETA_PLUGIN_BUSY);
 
     check_equal(turbo_flow_provider_binding_release(&binding), SALTS_OK);
     check_null(binding);
 
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, provider_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, provider_ref),
-                SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_unload(&registry, provider_ref),
+                CMETA_PLUGIN_OK);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_request_stop(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_false(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
-                SALTS_PLUGIN_BUSY);
+    check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
+                CMETA_PLUGIN_BUSY);
     check_equal(turbo_flow_resource_binding_release(&resource_binding), SALTS_OK);
     check_null(resource_binding);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, resource_ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, resource_ref),
-                SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_unload(&registry, resource_ref),
+                CMETA_PLUGIN_OK);
     BatchConfig_clear(&config);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("uses the .flow provider identity as the exact Salts export id") {
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {1u};
-    salts_plugin_ref ref = {0};
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {1u};
+    cmeta_plugin_ref ref = {0};
     provider_resolver_fixture_t fixture = {0};
     turbo_flow_provider_resolver_v1_t resolver =
         TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
@@ -219,13 +219,13 @@ spec("TurboFlow Salts provider binding") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     bool quiescent = false;
 
-    check_equal(salts_plugin_registry_init(&registry, &registry_config),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_load(
+    check_equal(cmeta_plugin_registry_init(&registry, &registry_config),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_load(
                     &registry, FLOW_SALTS_PROVIDER_FIXTURE, &ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_start(&registry, ref),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, ref),
+                CMETA_PLUGIN_OK);
 
     fixture.registry = &registry;
     fixture.plugin = ref;
@@ -239,15 +239,15 @@ spec("TurboFlow Salts provider binding") {
                 SALTS_ENOENT);
     check_null(binding);
 
-    check_equal(salts_plugin_registry_request_stop(&registry, ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_poll_quiescent(
+    check_equal(cmeta_plugin_registry_request_stop(&registry, ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(
                     &registry, ref, &quiescent),
-                SALTS_PLUGIN_OK);
+                CMETA_PLUGIN_OK);
     check_true(quiescent);
-    check_equal(salts_plugin_registry_unload(&registry, ref),
-                SALTS_PLUGIN_OK);
-    check_equal(salts_plugin_registry_destroy(&registry), SALTS_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_unload(&registry, ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
   }
 
   it("propagates explicit missing-provider failure without registry discovery") {

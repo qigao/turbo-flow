@@ -18,9 +18,9 @@
 #endif
 
 typedef struct generation_resolver_fixture_s {
-  salts_plugin_registry *registry;
-  salts_plugin_ref provider;
-  salts_plugin_ref resource;
+  cmeta_plugin_registry *registry;
+  cmeta_plugin_ref provider;
+  cmeta_plugin_ref resource;
   unsigned provider_calls;
   unsigned resource_calls;
 } generation_resolver_fixture_t;
@@ -30,9 +30,9 @@ typedef struct generation_test_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
-  salts_plugin_registry registry;
-  salts_plugin_ref provider_ref;
-  salts_plugin_ref resource_ref;
+  cmeta_plugin_registry registry;
+  cmeta_plugin_ref provider_ref;
+  cmeta_plugin_ref resource_ref;
   generation_resolver_fixture_t resolver;
   turbo_flow_provider_resolver_v1_t provider_resolver;
   turbo_flow_resource_resolver_v1_t resource_resolver;
@@ -99,7 +99,7 @@ static int test_open(
       "adapters: {}\n";
   turbo_flow_plugin_host_config_t host_config =
       TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
-  salts_plugin_registry_config registry_config = {2u};
+  cmeta_plugin_registry_config registry_config = {2u};
   int rc;
 
   memset(test, 0, sizeof(*test));
@@ -120,22 +120,22 @@ static int test_open(
   rc = turbo_flow_parse_string(test->flow, graph, strlen(graph));
   if (rc != SALTS_OK) return rc;
 
-  if (salts_plugin_registry_init(
-          &test->registry, &registry_config) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_init(
+          &test->registry, &registry_config) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
-  if (salts_plugin_registry_load(
+  if (cmeta_plugin_registry_load(
           &test->registry, FLOW_SALTS_PROVIDER_FIXTURE,
-          &test->provider_ref) != SALTS_PLUGIN_OK)
+          &test->provider_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
-  if (salts_plugin_registry_load(
+  if (cmeta_plugin_registry_load(
           &test->registry, FLOW_SALTS_RESOURCE_FIXTURE,
-          &test->resource_ref) != SALTS_PLUGIN_OK)
+          &test->resource_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
-  if (salts_plugin_registry_start(
-          &test->registry, test->provider_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_start(
+          &test->registry, test->provider_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
-  if (salts_plugin_registry_start(
-          &test->registry, test->resource_ref) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_start(
+          &test->registry, test->resource_ref) != CMETA_PLUGIN_OK)
     return SALTS_EIO;
 
   test->resolver.registry = &test->registry;
@@ -155,19 +155,19 @@ static int test_open(
 }
 
 static void stop_unload(
-    salts_plugin_registry *registry, salts_plugin_ref ref) {
+    cmeta_plugin_registry *registry, cmeta_plugin_ref ref) {
   bool quiescent = false;
   check_equal(
-      salts_plugin_registry_request_stop(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_request_stop(registry, ref),
+      CMETA_PLUGIN_OK);
   check_equal(
-      salts_plugin_registry_poll_quiescent(
+      cmeta_plugin_registry_poll_quiescent(
           registry, ref, &quiescent),
-      SALTS_PLUGIN_OK);
+      CMETA_PLUGIN_OK);
   check_true(quiescent);
   check_equal(
-      salts_plugin_registry_unload(registry, ref),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_unload(registry, ref),
+      CMETA_PLUGIN_OK);
 }
 
 static void test_close(
@@ -183,13 +183,13 @@ static void test_close(
         turbo_flow_plugin_host_destroy(
             test->host, 10u, plugin_error),
         SALTS_OK);
-  if (salts_plugin_ref_valid(test->provider_ref))
+  if (cmeta_plugin_ref_valid(test->provider_ref))
     stop_unload(&test->registry, test->provider_ref);
-  if (salts_plugin_ref_valid(test->resource_ref))
+  if (cmeta_plugin_ref_valid(test->resource_ref))
     stop_unload(&test->registry, test->resource_ref);
   check_equal(
-      salts_plugin_registry_destroy(&test->registry),
-      SALTS_PLUGIN_OK);
+      cmeta_plugin_registry_destroy(&test->registry),
+      CMETA_PLUGIN_OK);
   memset(test, 0, sizeof(*test));
 }
 
@@ -257,22 +257,22 @@ spec("canonical provider-backed Graph generation") {
     turbo_flow_msg_cleanup(&message);
 
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &test.registry, test.provider_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_request_stop(
+        cmeta_plugin_registry_request_stop(
             &test.registry, test.resource_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &test.registry, test.provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &test.registry, test.resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
 
     check_equal(
@@ -282,25 +282,25 @@ spec("canonical provider-backed Graph generation") {
     generation = NULL;
 
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &test.registry, test.provider_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &test.registry, test.resource_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(
+        cmeta_plugin_registry_unload(
             &test.registry, test.provider_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_unload(
+        cmeta_plugin_registry_unload(
             &test.registry, test.resource_ref),
-        SALTS_PLUGIN_OK);
-    test.provider_ref = (salts_plugin_ref){0};
-    test.resource_ref = (salts_plugin_ref){0};
+        CMETA_PLUGIN_OK);
+    test.provider_ref = (cmeta_plugin_ref){0};
+    test.resource_ref = (cmeta_plugin_ref){0};
 
     test_close(&test, &plugin_error);
   }

@@ -32,8 +32,8 @@ enum { PROTOCOL_NETWORK_COAP_TIMEOUT_MS = 5000 };
 static void protocol_network_coap_wait_admitted(
     protocol_network_e2e_fixture_t *fixture,
     turbo_flow_protocol_network_intake_snapshot_t *intake) {
-  uint64_t deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
-  while (intake->frames_admitted == 0u && salts_monotonic_ms() < deadline)
+  uint64_t deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+  while (intake->frames_admitted == 0u && cmeta_monotonic_ms() < deadline)
     check_equal(protocol_network_e2e_poll(fixture, 1u, intake), SALTS_OK);
   check_equal(intake->frames_admitted, (uint64_t)1u);
 }
@@ -105,9 +105,9 @@ spec("real CoAP UDP protocol intake") {
                     &fixture, intake.source_endpoint, coap_get, sizeof(coap_get)),
                 SALTS_OK);
 
-    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
     while ((intake.frames_admitted == 0u || fixture.udp.received == 0u) &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
 
     check_equal(intake.frames_admitted, (uint64_t)1u);
@@ -193,9 +193,9 @@ spec("real CoAP UDP protocol intake") {
       check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame,
                                                       sizeof(frame)),
                   SALTS_OK);
-      deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+      deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
       while (intake.frames_admitted < (uint64_t)(i + 1u) &&
-             salts_monotonic_ms() < deadline)
+             cmeta_monotonic_ms() < deadline)
         check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
       check_equal(intake.frames_admitted, (uint64_t)(i + 1u));
       check_true(fixture.udp.sent > sent_before);
@@ -208,9 +208,9 @@ spec("real CoAP UDP protocol intake") {
     check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame,
                                                     sizeof(frame)),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
     while (intake.state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_BACKPRESSURED &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
 
     check_true(fixture.udp.sent > sent_before);
