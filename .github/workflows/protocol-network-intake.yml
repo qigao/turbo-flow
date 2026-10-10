@@ -16,6 +16,7 @@ on:
       - '.github/ci/task4_runtime_assembly.py'
       - '.github/ci/protocol-network-compile/**'
       - '.github/workflows/protocol-network-intake.yml'
+      - '.github/actions/setup-native-ci/**'
   workflow_dispatch:
 
 permissions:
@@ -54,33 +55,10 @@ jobs:
           git diff --exit-code
           git rev-parse HEAD | tee "$RUNNER_TEMP/protocol-intake-evidence/head.txt"
 
-      - name: Use empty vcpkg L1 cache
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cache="$RUNNER_TEMP/protocol-intake-empty-l1"
-          rm -rf "$cache"
-          mkdir -p "$cache"
-          echo "VCPKG_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Restore shared binary and compiler caches
+        uses: ./.github/actions/setup-native-ci
         with:
-          mode: read
-
-      - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Install build tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+          profile: protocol-intake-linux-asan
 
       - name: Restore latest published native SDKs
         shell: pwsh
@@ -240,3 +218,10 @@ jobs:
             ${{ runner.temp }}/protocol-intake-evidence/
             build/protocol-network-compile/CMakeCache.txt
             build/protocol-network-runtime/CMakeCache.txt
+      - name: Report compiler cache statistics
+        if: always()
+        shell: bash
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats >> "$GITHUB_STEP_SUMMARY"
+          fi

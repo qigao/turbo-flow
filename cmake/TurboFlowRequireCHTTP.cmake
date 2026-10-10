@@ -28,8 +28,11 @@ if(DEFINED Chttp_DIR AND NOT "${Chttp_DIR}" STREQUAL "")
   endif()
 endif()
 
+# CMake 4.4+ and vcpkg's find_package wrapper reject raw Windows
+# backslash escapes. Normalize the already-validated real SDK root.
+file(TO_CMAKE_PATH "${_turbo_flow_chttp_root}" _turbo_flow_chttp_package_root)
 find_package(Chttp CONFIG REQUIRED
-             PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${_turbo_flow_chttp_package_root}" NO_DEFAULT_PATH)
 file(REAL_PATH "${Chttp_DIR}" _turbo_flow_chttp_dir)
 cmake_path(IS_PREFIX _turbo_flow_chttp_root "${_turbo_flow_chttp_dir}"
            NORMALIZE _turbo_flow_chttp_dir_in_root)

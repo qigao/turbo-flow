@@ -15,8 +15,7 @@ add_custom_command(
          "${_protocol_inbox_generated_rfl}"
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_protocol_inbox_generated_dir}"
-  COMMAND
-    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
+  COMMAND ${_turbo_flow_idlc_host_command}
     "${_protocol_inbox_schema}"
     --lang c
     --output "${_protocol_inbox_generated_header}"
@@ -32,8 +31,7 @@ add_custom_command(
   OUTPUT "${_protocol_inbox_generated_ts}"
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_protocol_inbox_generated_dir}"
-  COMMAND
-    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
+  COMMAND ${_turbo_flow_idlc_host_command}
     "${_protocol_inbox_schema}"
     --lang ts
     --output "${_protocol_inbox_generated_ts}"
