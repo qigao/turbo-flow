@@ -102,6 +102,11 @@ $salts = Get-NativeSdk "Salts.Native"
 $saltsUtils = Get-NativeSdk "SaltsUtils.Native"
 $saltsRoot = $salts.Root
 $saltsUtilsRoot = $saltsUtils.Root
+$saltsHostRoot = if ($Rid -eq "android-arm64-v8a") {
+  Join-Path $packages "salts.native/$($salts.Version)/sdk/linux-x64"
+} else {
+  $saltsRoot
+}
 
 # Cross-compiled Android artifacts contain target libraries, not a runnable idlc.
 # Resolve the host compiler from the *same floating SaltsUtils package version*.
@@ -122,6 +127,11 @@ $idlc = if ($Rid -eq "windows-x64") {
   Join-Path $saltsUtilsHostRoot "bin/salts-idlc"
 }
 $required += $idlc
+if ($Rid -eq "android-arm64-v8a") {
+  # Host salts-idlc must load Salts runtime from the same package version
+  # as the target ABI. Never substitute the Android library for host codegen.
+  $required += (Join-Path $saltsHostRoot "lib/cmake/Salts/SaltsConfig.cmake")
+}
 
 $rulesForge = $null
 $rulesForgeRoot = $null
@@ -170,6 +180,7 @@ if ($dataBindHeader -notmatch '#define\s+DATA_BIND_ABI_VERSION\s+10') {
 "SALTS_ROOT=$saltsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "SALTS_UTILS_ROOT=$saltsUtilsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "SALTS_UTILS_HOST_ROOT=$saltsUtilsHostRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+"SALTS_HOST_ROOT=$saltsHostRoot" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "TURBO_FLOW_IDLC_HOST_EXECUTABLE=$idlc" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 "QIGAO_NUGET_PACKAGES=$packages" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 if ($WithRulesForge) {
