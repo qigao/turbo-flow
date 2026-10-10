@@ -639,7 +639,7 @@ flow_ocpp201_core_prepare_unlock(flow_ocpp201_core_owner_t *owner,
 
 done:
   if (rc != SALTS_OK) output->payload_size = 0u;
-  tbe_typed_serialized_free(json);
+  data_bind_serialized_free(json);
   UnlockConnectorRequest_clear(&unlock);
 done_without_unlock:
   json_free(document);
