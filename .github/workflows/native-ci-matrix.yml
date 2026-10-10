@@ -127,7 +127,13 @@ jobs:
             ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
             test -n "$ndk"
             test -f "$ndk/build/cmake/android.toolchain.cmake"
+            # The project parser generator is a build-host executable. Building
+            # lemon as an Android target and executing it yields Exec format error.
+            lemon_host="$RUNNER_TEMP/turbo-flow-lemon-host"
+            cc -std=c11 -O2 tools/lemon/lemon.c -o "$lemon_host"
+            test -x "$lemon_host"
             args+=(
+              "-DTURBO_FLOW_LEMON_HOST_EXECUTABLE=$lemon_host"
               "-DCMAKE_SYSTEM_NAME=Android"
               "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"
               "-DSaltsUtils_IDLC_EXECUTABLE=$TURBO_FLOW_IDLC_HOST_EXECUTABLE"
