@@ -3,7 +3,6 @@
 #include "platform.h"
 #include "cron/salts_cron.h"
 #include <cmeta_error.h>
-#include <salts/clock.h>
 #include "tstr.h"
 #include <cmeta_thread.h>
 
@@ -88,7 +87,7 @@ static void flow_schedule_publish_complete(void *ctx, const turbo_flow_publish_r
         atomic_store_explicit(&schedule->completed, 1, memory_order_release);
       } else {
         atomic_store_explicit(&schedule->next_due_ms,
-                              flow_schedule_add_delay(salts_monotonic_ms(), schedule->delay_ms),
+                              flow_schedule_add_delay((cmeta_hrtime() / UINT64_C(1000000)), schedule->delay_ms),
                               memory_order_release);
       }
     }
@@ -244,7 +243,7 @@ static void flow_schedule_timer_callback(cmeta_timer_t *timer) {
   if (schedule->mode == TURBO_FLOW_SCHEDULE_CRON) {
     rc = flow_schedule_advance_cron(schedule, time(NULL));
   } else {
-    uint64_t now_ms = salts_monotonic_ms();
+    uint64_t now_ms = (cmeta_hrtime() / UINT64_C(1000000));
     uint64_t next_due_ms;
     if (!flow_schedule_try_reserve_publish(schedule)) {
       stop_timer = atomic_load_explicit(&schedule->completed, memory_order_acquire);
@@ -297,7 +296,7 @@ static int flow_schedule_arm_timer(turbo_flow_schedule_t *schedule) {
                     ? 0
                     : timeout_ms;
     atomic_store_explicit(&schedule->next_due_ms,
-                          flow_schedule_add_delay(salts_monotonic_ms(), schedule->delay_ms),
+                          flow_schedule_add_delay((cmeta_hrtime() / UINT64_C(1000000)), schedule->delay_ms),
                           memory_order_release);
   }
   return cmeta_timer_start(schedule->timer, flow_schedule_timer_callback, timeout_ms, repeat_ms) ==
