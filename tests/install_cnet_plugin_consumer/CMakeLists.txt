@@ -18,8 +18,12 @@ if(DEFINED TurboFlow_DIR AND NOT "${TurboFlow_DIR}" STREQUAL "")
   endif()
 endif()
 
+# vcpkg's find_package wrapper reparses PATHS on Windows. The raw
+# environment prefix contains backslashes (e.g. D:\\a\\...), which CMake
+# 4.4 rejects as invalid escapes. Use the already-verified real package root.
+file(TO_CMAKE_PATH "${turbo_flow_root}" turbo_flow_package_root)
 find_package(TurboFlow 2.0 CONFIG REQUIRED COMPONENTS Product
-             PATHS "$ENV{TURBO_FLOW_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${turbo_flow_package_root}" NO_DEFAULT_PATH)
 
 add_executable(turbo_flow_cnet_plugin_consumer main.c)
 target_link_libraries(turbo_flow_cnet_plugin_consumer PRIVATE
