@@ -30,6 +30,40 @@ if(NOT _turbo_flow_idlc_is_within_salts_utils_root)
           "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
 endif()
 
+# Direct codegen commands must run the *host* idlc with its matching
+# host-native Salts dependency closure, never against Android target .so files.
+set(_turbo_flow_idlc_host_command "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
+if(CMAKE_CROSSCOMPILING)
+  if(NOT DEFINED ENV{SALTS_HOST_ROOT} OR
+     NOT IS_DIRECTORY "$ENV{SALTS_HOST_ROOT}")
+    message(FATAL_ERROR "Cross codegen requires SALTS_HOST_ROOT for host idlc")
+  endif()
+  file(TO_CMAKE_PATH "$ENV{SALTS_HOST_ROOT}" _turbo_flow_salts_host_root)
+  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    set(_turbo_flow_idlc_host_command
+        "${CMAKE_COMMAND}" -E env
+        "LD_LIBRARY_PATH=${_turbo_flow_salts_utils_host_root}/lib:${_turbo_flow_salts_host_root}/lib:$ENV{LD_LIBRARY_PATH}"
+        "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
+  elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    set(_turbo_flow_idlc_host_command
+        "${CMAKE_COMMAND}" -E env
+        "DYLD_LIBRARY_PATH=${_turbo_flow_salts_utils_host_root}/lib:${_turbo_flow_salts_host_root}/lib:$ENV{DYLD_LIBRARY_PATH}"
+        "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
+  elseif(CMAKE_HOST_WIN32)
+    set(_turbo_flow_idlc_host_path
+        "${_turbo_flow_salts_utils_host_root}/bin;${_turbo_flow_salts_host_root}/bin;$ENV{PATH}")
+    string(REPLACE ";" "\\;" _turbo_flow_idlc_host_path
+           "${_turbo_flow_idlc_host_path}")
+    set(_turbo_flow_idlc_host_command
+        "${CMAKE_COMMAND}" -E env
+        "PATH=${_turbo_flow_idlc_host_path}"
+        "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}")
+  else()
+    message(FATAL_ERROR
+            "Unsupported host OS for cross-compiling protocol IDL")
+  endif()
+endif()
+
 add_subdirectory(common)
 add_subdirectory(inbox)
 add_subdirectory(network)
@@ -86,3 +120,6 @@ unset(_turbo_flow_idlc_is_within_salts_utils_root)
 unset(_turbo_flow_idlc_real_path)
 unset(_turbo_flow_salts_utils_host_real_root)
 unset(_turbo_flow_salts_utils_host_root)
+unset(_turbo_flow_idlc_host_command)
+unset(_turbo_flow_idlc_host_path)
+unset(_turbo_flow_salts_host_root)

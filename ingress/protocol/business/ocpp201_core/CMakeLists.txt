@@ -10,8 +10,7 @@ add_custom_command(
          "${_ocpp201_core_generated_source}"
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_ocpp201_core_generated_dir}"
-  COMMAND
-    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
+  COMMAND ${_turbo_flow_idlc_host_command}
     "${_ocpp201_core_schema}"
     --lang c
     --output "${_ocpp201_core_generated_header}"
