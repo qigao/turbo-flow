@@ -220,6 +220,40 @@ jobs:
           findstr /C:"failed at plugin DLL load" "%RUNNER_TEMP%\cnet-missing-provider.txt"
           if errorlevel 1 exit /b 1
 
+      - name: Stage CNet missing-transitive DLL fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isolate = Join-Path $env:RUNNER_TEMP 'cnet-missing-adapter'
+          if (Test-Path -LiteralPath $isolate) { Remove-Item -LiteralPath $isolate -Recurse -Force }
+          New-Item -Path $isolate -ItemType Directory -Force | Out-Null
+          $source = Join-Path $env:TURBO_FLOW_ROOT 'bin'
+          $dlls = @(Get-ChildItem -LiteralPath $source -File -Filter '*.dll')
+          if ($dlls.Count -eq 0) { throw 'installed TurboFlow has no runtime DLLs' }
+          foreach ($dll in $dlls) {
+            if ($dll.Name -ne 'tf_cnet_adapter.dll') {
+              Copy-Item -LiteralPath $dll.FullName -Destination $isolate
+            }
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $isolate 'tf_cnet_plugin.dll') -PathType Leaf)) {
+            throw 'isolated fixture must contain the CNet provider DLL'
+          }
+          if (Test-Path -LiteralPath (Join-Path $isolate 'tf_cnet_adapter.dll')) {
+            throw 'isolated fixture must not contain the CNet adapter DLL'
+          }
+          "CNET_ISOLATED_PREFIX=$isolate" >> $env:GITHUB_ENV
+
+      - name: Reject installed CNet provider with missing transitive adapter
+        shell: cmd
+        run: |
+          set "PATH=%CNET_ISOLATED_PREFIX%;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          where tf_cnet_adapter.dll >nul 2>&1
+          if not errorlevel 1 exit /b 1
+          build\windows-installed-cnet\turbo_flow_cnet_plugin_consumer.exe "%CNET_ISOLATED_PREFIX%\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\cnet-missing-adapter.txt" 2>&1
+          if not errorlevel 1 exit /b 1
+          findstr /C:"failed at plugin DLL load" "%RUNNER_TEMP%\cnet-missing-adapter.txt"
+          if errorlevel 1 exit /b 1
+
       - name: Verify committed source remained clean
         shell: pwsh
         run: |
