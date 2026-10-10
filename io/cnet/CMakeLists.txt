@@ -71,36 +71,17 @@ target_link_libraries(tf_cnet_plugin PRIVATE
 add_dependencies(tf_cnet_plugin
   turbo_flow_cnet_provider_config_idl_codegen)
 if(WIN32)
-  find_package(OpenSSL REQUIRED)
+  # TLS is supplied by the linked Salts::CNet runtime, not by a second
+  # OpenSSL/BoringSSL ABI loaded directly by this protocol provider.
   target_link_libraries(tf_cnet_plugin PRIVATE ws2_32)
 endif()
 set_target_properties(tf_cnet_plugin PROPERTIES C_VISIBILITY_PRESET hidden
                                                VISIBILITY_INLINES_HIDDEN YES)
 install(TARGETS tf_cnet_plugin RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
 if(WIN32)
-  if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
-    message(FATAL_ERROR "CNet plugin packaging requires an explicit Debug or Release build")
-  endif()
-  if(NOT DEFINED VCPKG_INSTALLED_DIR OR NOT DEFINED VCPKG_TARGET_TRIPLET)
-    message(FATAL_ERROR "CNet plugin packaging requires explicit vcpkg runtime roots")
-  endif()
-  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(cnet_tls_runtime_dir
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin")
-    set(cnet_tls_runtime_names ssld.dll cryptod.dll)
-  else()
-    set(cnet_tls_runtime_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
-    set(cnet_tls_runtime_names ssl.dll crypto.dll)
-  endif()
-  set(cnet_tls_runtime_files)
-  foreach(cnet_tls_runtime_name IN LISTS cnet_tls_runtime_names)
-    set(cnet_tls_runtime_file "${cnet_tls_runtime_dir}/${cnet_tls_runtime_name}")
-    if(NOT EXISTS "${cnet_tls_runtime_file}")
-      message(FATAL_ERROR "Required CNet TLS runtime is missing: ${cnet_tls_runtime_file}")
-    endif()
-    list(APPEND cnet_tls_runtime_files "${cnet_tls_runtime_file}")
-  endforeach()
-  install(FILES $<TARGET_RUNTIME_DLLS:tf_cnet_plugin> ${cnet_tls_runtime_files} DESTINATION bin)
+  # Bundle the runtime DLLs that CMake resolves from canonical imported SDK
+  # targets. Never copy standalone ssl.dll/crypto.dll or reconstruct an old ABI.
+  install(FILES $<TARGET_RUNTIME_DLLS:tf_cnet_plugin> DESTINATION bin)
 endif()
 
 if(BUILD_TESTING)

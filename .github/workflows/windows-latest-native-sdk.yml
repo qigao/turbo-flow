@@ -159,6 +159,67 @@ jobs:
           build\windows-native-consumer\turboflow_native_consumer.exe
           if errorlevel 1 exit /b 1
 
+      - name: Inspect installed CNet provider exports and dependencies
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          if not exist "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" exit /b 1
+          dumpbin /nologo /exports "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\tf_cnet_plugin_exports.txt"
+          if errorlevel 1 exit /b 1
+          dumpbin /nologo /dependents "%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll" > "%RUNNER_TEMP%\tf_cnet_plugin_deps.txt"
+          if errorlevel 1 exit /b 1
+
+      - name: Require CNet provider ABI and no standalone OpenSSL dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exports = @(Get-Content (Join-Path $env:RUNNER_TEMP 'tf_cnet_plugin_exports.txt') |
+            ForEach-Object {
+              if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)\s*$') { $Matches[1] }
+            })
+          if ($exports.Count -ne 1 -or $exports[0] -ne 'cmeta_plugin_query') {
+            throw "CNet plugin must export exactly cmeta_plugin_query: $($exports -join ', ')"
+          }
+          $deps = Get-Content (Join-Path $env:RUNNER_TEMP 'tf_cnet_plugin_deps.txt') -Raw
+          if ($deps -notmatch '(?im)^\s*tf_cnet_adapter\.dll\s*$') {
+            throw 'CNet provider must import tf_cnet_adapter.dll'
+          }
+          if ($deps -match '(?im)^\s*(ssl|ssld|crypto|cryptod)\.dll\s*$') {
+            throw 'CNet provider must not import standalone OpenSSL/BoringSSL DLLs'
+          }
+          foreach ($obsolete in @('ssl.dll','ssld.dll','crypto.dll','cryptod.dll')) {
+            if (Test-Path (Join-Path $env:TURBO_FLOW_ROOT "bin/$obsolete") -PathType Leaf) {
+              throw "TurboFlow package copied forbidden legacy crypto DLL: $obsolete"
+            }
+          }
+
+      - name: Build and execute installed CNet provider consumer
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          cmake -S tests\install_cnet_plugin_consumer -B build\windows-installed-cnet -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DTURBO_FLOW_CNET_PLUGIN_PATH="%TURBO_FLOW_ROOT%\bin\tf_cnet_plugin.dll"
+          if errorlevel 1 exit /b 1
+          cmake --build build\windows-installed-cnet --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\windows-installed-cnet --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+
+      - name: Reject missing installed CNet provider DLL
+        shell: cmd
+        run: |
+          set "PATH=%TURBO_FLOW_ROOT%\bin;%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%HTTP_SERVICES_ROOT%\bin;%RULES_FORGE_ROOT%\bin;%PATH%"
+          build\windows-installed-cnet\turbo_flow_cnet_plugin_consumer.exe "%TURBO_FLOW_ROOT%\bin\missing-cnet-plugin.dll" > "%RUNNER_TEMP%\cnet-missing-provider.txt" 2>&1
+          if not errorlevel 1 exit /b 1
+          findstr /C:"failed at plugin DLL load" "%RUNNER_TEMP%\cnet-missing-provider.txt"
+          if errorlevel 1 exit /b 1
+
       - name: Verify committed source remained clean
         shell: pwsh
         run: |
