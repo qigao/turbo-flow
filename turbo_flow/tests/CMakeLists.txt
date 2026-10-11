@@ -443,7 +443,7 @@ cmake_add_test(
   SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_reflected_operation.c
     ${CMAKE_CURRENT_SOURCE_DIR}/reflected_operation_header_cpp.cpp
-  LIBS TurboFlow::Graph Salts::CFlow Salts::TinyTest
+  LIBS turbo_flow_graph_test_internal Salts::CFlow Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../src
   FOLDER "turbo_flow/tests")
 set_target_properties(test_flow_reflected_operation PROPERTIES
@@ -496,7 +496,7 @@ set_tests_properties(test_flow_durable_admission PROPERTIES LABELS "graph;core" 
 cmake_add_test(
   test_flow_durable_lifecycle
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_durable_lifecycle.c
-  LIBS TurboFlow::Graph Salts::TinyTest
+  LIBS turbo_flow_graph_test_internal Salts::TinyTest
   FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_durable_lifecycle PROPERTIES LABELS "graph;core" TIMEOUT 30)
 
@@ -575,7 +575,7 @@ set_tests_properties(test_flow_inbox_source PROPERTIES LABELS "graph;core;inbox"
 cmake_add_test(
   test_flow_inbox_driver
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_inbox_driver.c
-  LIBS TurboFlow::Graph Salts::TinyTest
+  LIBS turbo_flow_graph_test_internal Salts::TinyTest
   FOLDER "turbo_flow/tests")
 set_tests_properties(test_flow_inbox_driver PROPERTIES LABELS "graph;core;inbox" TIMEOUT 30)
 

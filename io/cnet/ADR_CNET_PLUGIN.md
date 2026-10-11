@@ -402,3 +402,62 @@ CFlow plugin、TurboDB 和 protocol fixture 构建点，继续发现 `test_flow_
 这些测试需要保持原行为覆盖并迁移执行边界，未新增私有符号导出或跳过 target。
 Config 消费者清点还包括 Product、security realm/auth/policy factory、rule processor、
 generation 旧参数与 callback；不能仅删除 generation 参数便宣告 #241 完成。
+
+
+### #241 完整 build graph 与内部测试链接恢复（2026-10-11）
+
+Graph 的生产源码和生成 parser 现在由一个 OBJECT target 编译。正式 Graph DLL 和不安装的
+内部测试 archive 使用同一批对象；内部 reflected-operation、Inbox driver、durable lifecycle
+及 workspace benchmark 链接该 archive，公开 API/插件/安装后消费者继续链接正式 DLL。
+这保留内部算法与清理路径覆盖，不为测试新增 DLL 导出，也没有另一套运行时实现或测试专用
+编译逻辑。Windows 保留 Graph 原有 producer 导出定义，内部静态测试的声明不再 dllimport。
+benchmark 已构建但本轮未运行；链接方式变化需在后续性能基线中注明，不能与历史 DLL 数据
+直接比较后宣称性能收益。
+
+完整 build graph 已通过并完成正式安装。随后修复两项安装消费者配置：
+
+- Protocol semantic mapper 的 C/C++ 头文件测试补齐其 Graph 类型声明所需的 Salts::CFlow 链接。
+- schema-only consumer 保留 SaltsUtils：其导出的 ProtocolIngressInboxSchema 实际 PUBLIC
+  链接 Salts::DataBind。仍禁止 RulesForge 查找，没有删除 schema-only 测试。
+- 已有独立 CNet consumer 补上 vcpkg manifest，其 GmSSL 依赖来自当前 SaltsUtils SDK；
+  沿用现有共享缓存/toolchain，不关闭 manifest mode。
+
+本机安装目录另有历史协议及 aggregate 产物，共 10 个文件；逐项确认不在当前 install manifest
+后，移动到本 worktree 的 `build/241-retired-sdk-artifacts/`，未删除且未修改安装负例检查。
+这是本机残留恢复，不是新增自动清理或部署流程。
+
+Windows Release 证据：
+
+- 最小内部测试 **3/3 套件通过**；`bench_turbo_flow` 构建成功。
+- 扩大 `core` 回归 **24/25 套件通过**。`test_flow_resource_document` 为 13/15 用例通过；
+  两个失败已增加 DataBind schema 诊断，未 skip/filter。动态 codec 创建返回
+  DATA_BIND_ERR_SCHEMA：governance 的 `capacity_bounded` 和 PoolStatus 的 `accepting`
+  位于可变长字段之后。当前 DataBind 动态 codec 创建无条件应用 Binary 布局校验，公开
+  create API 没有 JSON-only 选项；这些资源文档只声明 JSON encoding。本片段不调整公开
+  schema 顺序、不绕过校验，也不将失败归因于测试链接方式。
+- 另外 **6/6 DLL/集成套件通过**：Plugin CFlow、provider generation、Component generation、
+  RulesForge provider、Protocol semantic mapper 和真实 RulesForge TCP/UDP durable 组合。
+- 安装后 schema consumer 运行通过；完整 C++ consumer 构建通过；CNet 插件 consumer
+  加载、contract 与 lease 生命周期运行通过。
+- 完整 `test_turbo_flow_install_consumer` **仍失败**于 CNet missing-transitive 负例。
+  现有负例只复制 plugin 到空目录，继承 PATH 仍可解析安装目录的 adapter DLL，因此不能
+  证明传递依赖缺失。需要修复负例的进程/搜索路径隔离，不能把成功加载当作加载器回归，
+  也不能跳过此验收。之后的 CHTTP 与其他 component consumer 尚未执行。
+
+复现命令（先进入 VsDevCmd；需要 configure/restore 时从 `.env` 向父环境注入 token）：
+
+```powershell
+cmake --build --preset win-release-user --target turbo_flow_graph test_flow_reflected_operation test_flow_durable_lifecycle test_flow_inbox_driver bench_turbo_flow --parallel 8
+ctest --preset win-release-user -R "^(test_flow_reflected_operation|test_flow_durable_lifecycle|test_flow_inbox_driver)$" --output-on-failure
+ctest --preset win-release-user -L core --output-on-failure
+ctest --preset win-release-user -R "^(test_flow_plugin_cflow_plan|test_flow_rulesforge_plugin|test_flow_rulesforge_durable_network|test_flow_provider_generation|test_flow_component_generation|test_protocol_semantic_mapper)$" --output-on-failure
+cmake --build --preset win-release-user --target test_flow_resource_document --parallel 8
+ctest --preset win-release-user -R "^test_flow_resource_document$" --output-on-failure
+ctest --preset win-release-user -R "^test_turbo_flow_install_consumer$" --output-on-failure
+```
+
+日志：`build/Msvc-Release/241-internal-linkage-{build,tests,core-tests,integration-tests,install}.log`，
+资源 schema 诊断在 `241-resource-document-{build,tests}.log`。
+本轮仍使用 Salts 2.3.0-rc.11、TurboDB 2.3.4 和前节记录的 SDK provenance；通过 GitHub
+release API 再确认 Salts 最新发布是 rc.11。未运行其他平台或 sanitizer，原有三项 TidesDB
+失败也未在本片段解决。Config 删除、provider 完成交付和最终资格验证继续保持未完成。

@@ -6,7 +6,9 @@
 #ifndef FLOW_DLL_BOUNDARY_INTERNAL_H
 #define FLOW_DLL_BOUNDARY_INTERNAL_H
 #if defined(_WIN32)
-  #if defined(turbo_flow_graph_EXPORTS)
+  #if defined(TURBO_FLOW_GRAPH_STATIC)
+    #define TURBO_FLOW_GRAPH_INTERNAL_API
+  #elif defined(turbo_flow_graph_EXPORTS)
     #define TURBO_FLOW_GRAPH_INTERNAL_API __declspec(dllexport)
   #else
     #define TURBO_FLOW_GRAPH_INTERNAL_API __declspec(dllimport)

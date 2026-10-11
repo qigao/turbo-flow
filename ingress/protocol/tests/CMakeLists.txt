@@ -89,7 +89,7 @@ set_tests_properties(test_protocol_source
 cmake_add_test(
   test_protocol_semantic_mapper
   SOURCES test_protocol_semantic_mapper.c protocol_semantic_mapper_header_cpp.cpp
-  LIBS TurboFlow::ProtocolIngress Salts::TinyTest
+  LIBS TurboFlow::ProtocolIngress Salts::CFlow Salts::TinyTest
   FOLDER "ingress/protocol/tests")
 set_target_properties(test_protocol_semantic_mapper PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

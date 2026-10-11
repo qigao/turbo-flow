@@ -89,7 +89,7 @@ target_include_directories(
 target_link_libraries(turbo_flow_config PUBLIC Salts::Core
                                         PRIVATE Salts::CYamlJsonAdapter)
 
-add_library(${TARGET_NAME} SHARED
+add_library(turbo_flow_graph_objects OBJECT
   ${TURBO_FLOW_SOURCES}
   ${TURBO_FLOW_LEXER_GEN}
   ${TURBO_FLOW_GRAMMAR_GEN}
@@ -100,15 +100,20 @@ add_library(${TARGET_NAME} SHARED
   ${TURBO_FLOW_SECURITY_RULE_LEXER_GEN}
   ${TURBO_FLOW_HEADERS})
 
-add_dependencies(${TARGET_NAME}
+add_dependencies(turbo_flow_graph_objects
   ${TURBO_FLOW_LEXER_TARGET}
   ${TURBO_FLOW_GRAMMAR_TARGET}
   ${TURBO_FLOW_EXPR_LEXER_TARGET}
   ${TURBO_FLOW_EXPR_GRAMMAR_TARGET})
-add_dependencies(${TARGET_NAME}
+add_dependencies(turbo_flow_graph_objects
   ${TURBO_FLOW_CONTROL_LEXER_TARGET}
   ${TURBO_FLOW_CONTROL_GRAMMAR_TARGET})
-add_dependencies(${TARGET_NAME} ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
+add_dependencies(turbo_flow_graph_objects ${TURBO_FLOW_SECURITY_RULE_LEXER_TARGET})
+
+set_target_properties(turbo_flow_graph_objects PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+  FOLDER "turbo_flow")
+add_library(${TARGET_NAME} SHARED $<TARGET_OBJECTS:turbo_flow_graph_objects>)
 
 cmake_config_target(
   ${TARGET_NAME}
@@ -116,11 +121,12 @@ cmake_config_target(
   FOLDER "turbo_flow"
   EXPORT_NAME Graph)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_BUILD)
-target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
+target_compile_definitions(turbo_flow_graph_objects PRIVATE
+  TURBO_FLOW_BUILD turbo_flow_graph_EXPORTS)
+target_compile_definitions(turbo_flow_graph_objects PRIVATE TURBO_FLOW_EXPR_ENABLE_JIT=1)
 
 target_include_directories(
-  ${TARGET_NAME}
+  turbo_flow_graph_objects
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -128,11 +134,34 @@ target_include_directories(
           ${CMAKE_CURRENT_BINARY_DIR}
           ${PROJECT_SOURCE_DIR}/vendor/mir)
 
-target_link_libraries(${TARGET_NAME} PUBLIC
-  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta
-  PRIVATE Salts::DataBind Salts::JsonParser mir_static)
+set(TURBO_FLOW_GRAPH_PUBLIC_LIBS
+  TurboFlow::Config Salts::Core Salts::CSTL Salts::CFlow Salts::CMeta)
+set(TURBO_FLOW_GRAPH_PRIVATE_LIBS Salts::DataBind Salts::JsonParser mir_static)
+target_link_libraries(turbo_flow_graph_objects PRIVATE
+  ${TURBO_FLOW_GRAPH_PUBLIC_LIBS} ${TURBO_FLOW_GRAPH_PRIVATE_LIBS})
+target_include_directories(${TARGET_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(${TARGET_NAME}
+  PUBLIC ${TURBO_FLOW_GRAPH_PUBLIC_LIBS}
+  PRIVATE ${TURBO_FLOW_GRAPH_PRIVATE_LIBS})
 
 if(BUILD_TESTING)
+  # Internal unit tests need private symbols. Reuse the DLL's exact objects,
+  # without exporting those symbols or compiling a different runtime profile.
+  # This archive is never installed; public/DSO consumers still use Graph.
+  add_library(turbo_flow_graph_test_internal STATIC
+    $<TARGET_OBJECTS:turbo_flow_graph_objects>)
+  set_target_properties(turbo_flow_graph_test_internal PROPERTIES
+    FOLDER "turbo_flow/tests")
+  target_include_directories(turbo_flow_graph_test_internal PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(turbo_flow_graph_test_internal INTERFACE
+    TURBO_FLOW_GRAPH_STATIC)
+  target_link_libraries(turbo_flow_graph_test_internal
+    PUBLIC ${TURBO_FLOW_GRAPH_PUBLIC_LIBS}
+    PRIVATE ${TURBO_FLOW_GRAPH_PRIVATE_LIBS})
+
   cmake_add_test(
     test_flow_durable_identity
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flow_durable_identity.c

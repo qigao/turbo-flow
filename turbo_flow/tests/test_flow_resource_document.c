@@ -241,9 +241,10 @@ spec("Turbo Flow resource document") {
                      SALTS_OK);
         check(document.schema == schema);
         check_equal(turbo_flow_resource_document_validate(&document, schema), SALTS_OK);
-        check_equal(data_bind_create_from_text(schema->schema_text, strlen(schema->schema_text),
-                                                &codec, &error),
-                     DATA_BIND_OK);
+        const int schema_status = data_bind_create_from_text(
+            schema->schema_text, strlen(schema->schema_text), &codec, &error);
+        info("Resource schema %s: %s", schema->schema_name, error.message);
+        check_equal(schema_status, DATA_BIND_OK);
         check_equal(data_bind_parse_json(codec, schema->type_name,
                                           mem_buffer_const_data(document.payload),
                                           mem_buffer_used(document.payload), &value, &error),
@@ -413,9 +414,10 @@ spec("Turbo Flow resource document") {
     check_equal(document.schema->encoding, TURBO_FLOW_RESOURCE_DOCUMENT_JSON);
     check_not_null(document.payload);
 
-    check_equal(data_bind_create_from_text(document.schema->schema_text,
-                                            strlen(document.schema->schema_text), &codec, &error),
-                 DATA_BIND_OK);
+    const int schema_status = data_bind_create_from_text(
+        document.schema->schema_text, strlen(document.schema->schema_text), &codec, &error);
+    info("Resource schema %s: %s", document.schema->schema_name, error.message);
+    check_equal(schema_status, DATA_BIND_OK);
     check_not_null(codec);
     check_equal(data_bind_schema_name(codec), document.schema->schema_name);
     check_equal(data_bind_schema_attribute_get(codec, "id"), "1");
