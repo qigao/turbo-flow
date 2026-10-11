@@ -61,8 +61,9 @@ Graph registry、销毁 Graph、反向销毁具体 adapter owner、释放 snapsh
 owner 集合非空时拒绝 shutdown/unload。失败保留第一个明确状态，调用方可按既有协议重试；没有
 静默吞错或 fallback。
 
-Windows 安装把 provider、其 target runtime DLL 和明确配置对应的 BoringSSL runtime 放在同一
-`bin` 目录。PluginHost 在 UTF-8 转宽字符后把 `/` 规范化为 `\`，再调用安全的
+Windows 安装把 provider 和 canonical SDK imported targets 声明的 runtime DLL 放在同一
+`bin` 目录。TLS 由 `Salts::CNet` 提供，不再单独发现或打包旧 BoringSSL/OpenSSL DLL。
+PluginHost 在 UTF-8 转宽字符后把 `/` 规范化为 `\`，再调用安全的
 `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)`；这只统一
 路径表示，不扩大 DLL 搜索范围。
 

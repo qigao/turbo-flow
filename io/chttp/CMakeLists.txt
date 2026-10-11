@@ -22,7 +22,8 @@ salts_idl_target(
   TARGET turbo_flow_chttp_provider_config
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_flow_chttp_provider_config.schema"
   ARTIFACT_NAME "chttp_provider_config"
-  ARTIFACTS MESSAGE)
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
 
 add_library(tf_chttp_provider_support STATIC
   src/turbo_flow_chttp_typed_config.c

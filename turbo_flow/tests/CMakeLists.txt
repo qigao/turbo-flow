@@ -2,6 +2,7 @@ salts_idl_target(
   TARGET turbo_flow_databind_channel_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind_channel.schema"
   ARTIFACT_NAME "tf_channel"
+  BINARY_CODEC
   TRANSPORTS SOCKET FLOWMQ
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/databind_channel_projection.json")
@@ -36,7 +37,8 @@ salts_idl_target(
   TARGET turbo_flow_provider_config_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/provider_config.schema"
   ARTIFACT_NAME "provider_config"
-  ARTIFACTS MESSAGE)
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
 
 cmake_add_test(
   test_flow_provider_typed_config
@@ -64,6 +66,7 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/databind_service.schema"
   ARTIFACT_NAME "tf_service"
   ARTIFACTS NATIVE
+  BINARY_CODEC
   TRANSPORTS HTTP RPC)
 
 cmake_add_test(

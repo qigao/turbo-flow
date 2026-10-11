@@ -145,12 +145,18 @@ Reactive execution is demand-driven and bounded. Waiting resumes only through a 
 
 The build resolves exact published producer SDKs from explicit installed roots and fails if required roots are absent or resolve outside those roots.
 
-Current published dependency baseline is:
+The Windows Release SDK roots used for focused provider/runtime qualification
+on 2026-10-11 are:
 
-- **Salts.Native 1.8.3**
-- **SaltsUtils.Native 4.1.3** (including DataBind)
-- **RulesForge.Native 0.9.0** when the RulesForge plugin/provider is enabled
-- **TurboDB.Native 1.0.0** when the TurboDB adapter is enabled
+- **Salts.Native 2.3.0-rc.10**, source `6ba9868a965f3273cf87ab243dab1884072eb7a3`
+- **SaltsUtils.Native 4.3.0-rc.8** (including DataBind), source `3d39b8c23403bad5fc3e04241bb74a7889bd8a03`
+- **CHttp.Native 2.1.0-rc.3**, source `b8cedaeca1d858ca7866530934c6b9025cb70f53`
+- **TurboDB.Native 2.3.4** when the TurboDB adapter is enabled, source `a8f849e7cd7193b89a8ade596bf9ef072a0533fc`
+
+This records the installed SDK manifests, not completion of the full platform
+or adapter qualification gates. The optional RulesForge plugin requires its
+matching published SDK. Generated Message and transport targets explicitly
+select `BINARY_CODEC` to preserve their existing codec ABI with current IDLC.
 
 Required roots for the base build are:
 
@@ -180,6 +186,15 @@ TurboFlow does not search unrelated profiles as a hidden fallback.
 ## Build
 
 Typical Windows Release flow:
+
+Run from the Visual Studio developer environment. Windows user presets consume
+the shared [vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain at
+`%LOCALAPPDATA%/qigao/vcpkg-cache`, using `qigao-x64-windows-v145` for both target
+and host packages. Supply `GITHUB_TOKEN` with package-read access in the parent
+environment (for example, load it locally from `.env` before invoking CMake).
+Presets do not read `.env`. The versioned NuGet config references the token;
+the shared feed is read-only and the local binary cache is writable. CHTTP's
+SaltsUtils Crypto dependency is supplied by the manifest's GmSSL package.
 
 ```powershell
 cmake --preset win-release-user

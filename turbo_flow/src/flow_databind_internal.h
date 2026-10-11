@@ -66,7 +66,8 @@ typedef struct flow_databind_service_plan_s {
   } method;
 } flow_databind_service_plan_t;
 
-int flow_databind_service_bind(
+
+TURBO_FLOW_GRAPH_INTERNAL_API int flow_databind_service_bind(
     turbo_flow_t *flow, const char *stage_name,
     const flow_databind_service_binding_t *binding);
 

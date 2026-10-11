@@ -52,7 +52,7 @@ int flow_provider_config_literals_init(vec_t *literals);
 void flow_provider_config_literals_destroy(vec_t *literals);
 int flow_provider_config_literals_copy(vec_t *destination, const vec_t *source);
 
-int flow_provider_config_reader_init(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_config_reader_init(
     flow_provider_config_reader_t *config_reader,
     const flow_stage_plan_impl_t *stage);
 

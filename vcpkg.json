@@ -7,9 +7,6 @@
       "version>=": "0.8.3"
     },
     {
-      "name": "boringssl"
-    },
-    {
       "name": "pkgconf"
     },
     {
@@ -17,6 +14,9 @@
     },
     {
       "name": "sqlite3"
+    },
+    {
+      "name": "gmssl"
     }
   ],
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
