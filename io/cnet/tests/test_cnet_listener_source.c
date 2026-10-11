@@ -537,7 +537,7 @@ spec("CNet listener source owner") {
     client_config.tls_handshake_timeout_ms = 1000u;
     server_tls.cert_file = tls_fixture.cert_path;
     server_tls.key_file = tls_fixture.key_path;
-    client_tls.ca_file = tls_fixture.cert_path;
+    client_tls.ca_file = tls_fixture.ca_path;
     config.client = &server_client;
     config.tls = &server_tls;
     config.max_connections = 1u;
