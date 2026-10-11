@@ -220,6 +220,70 @@ static void packet_source_datagram_send(void *user, cnet_datagram *datagram,
   ++probe->sends;
 }
 
+spec("packet Source poll admission budget") {
+  static turbo_flow_t *left_flow;
+  static turbo_flow_t *right_flow;
+  static turbo_flow_cnet_packet_source_t *left;
+  static turbo_flow_cnet_packet_source_t *right;
+  static packet_source_graph_probe_t left_probe;
+  static packet_source_graph_probe_t right_probe;
+
+  before_each() {
+    left_flow = NULL;
+    right_flow = NULL;
+    left = NULL;
+    right = NULL;
+    memset(&left_probe, 0, sizeof(left_probe));
+    memset(&right_probe, 0, sizeof(right_probe));
+  }
+
+  after_each() {
+    if (right) packet_source_stop_destroy(right);
+    if (left) packet_source_stop_destroy(left);
+    turbo_flow_destroy(right_flow);
+    turbo_flow_destroy(left_flow);
+  }
+
+  it("delivers a queued UDP burst larger than two scheduler task counts") {
+    enum { QUEUED_MESSAGES = 4 };
+    cnet_packet_endpoint_config endpoint = packet_source_endpoint_config(CNET_PACKET_UDP);
+    turbo_flow_cnet_packet_source_config_t left_config;
+    turbo_flow_cnet_packet_source_config_t right_config;
+    turbo_flow_cnet_packet_source_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SOURCE_SNAPSHOT_INIT;
+    cnet_packet_session session = {0};
+    cnet_datagram_peer peer;
+    uint64_t deadline;
+    left_flow = packet_source_started_flow(&left_probe);
+    right_flow = packet_source_started_flow(&right_probe);
+    check_not_null(left_flow);
+    check_not_null(right_flow);
+    left_config = packet_source_config(left_flow, &endpoint);
+    right_config = packet_source_config(right_flow, &endpoint);
+    right_config.queue_capacity = QUEUED_MESSAGES;
+    right_config.scheduler_max_steps_per_poll = 1u;
+    check_equal(turbo_flow_cnet_packet_source_open(&left_config, &left), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_open(&right_config, &right), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_snapshot(right, &snapshot), SALTS_OK);
+    peer = packet_source_peer(snapshot.bound_port);
+    check_equal(turbo_flow_cnet_packet_source_session_open(left, &peer, 0u, &session), SALTS_OK);
+    for (unsigned i = 0u; i < QUEUED_MESSAGES; ++i)
+      check_equal(turbo_flow_cnet_packet_source_send(left, session, "queued", 6u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + PACKET_SOURCE_TEST_TIMEOUT_MS;
+    while (snapshot.queue_depth < QUEUED_MESSAGES && cmeta_monotonic_ms() < deadline) {
+      check_equal(turbo_flow_cnet_packet_source_poll(left, 1u, NULL), SALTS_OK);
+      check_equal(turbo_flow_cnet_packet_source_poll(right, 1u, &snapshot), SALTS_OK);
+    }
+    check_equal(snapshot.queue_depth, (size_t)QUEUED_MESSAGES);
+    check_equal(right_probe.count, (size_t)0u);
+    check_equal(turbo_flow_cnet_packet_source_request(right, QUEUED_MESSAGES), SALTS_OK);
+    check_equal(turbo_flow_cnet_packet_source_poll(right, 0u, &snapshot), SALTS_OK);
+    check_equal(right_probe.count, (size_t)QUEUED_MESSAGES);
+    check_greater(right_probe.count, right_config.scheduler_max_steps_per_poll * 2u);
+    check_less_equal(right_probe.count, right_config.queue_capacity * 2u);
+    check_equal(snapshot.queue_depth, (size_t)0u);
+  }
+}
+
 spec("CNet packet source owner") {
   it("exposes a size-versioned C and C++ opaque contract") {
     turbo_flow_cnet_packet_source_config_t config = TURBO_FLOW_CNET_PACKET_SOURCE_CONFIG_INIT;

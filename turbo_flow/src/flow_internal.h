@@ -3,6 +3,7 @@
 
 #include "flow_dll_boundary_internal.h"
 #include "turbo_flow.h"
+#include "turbo_flow_provider_adapter.h"
 #include "turbo_flow_durable_buffer.h"
 #include "turbo_flow_expr.h"
 #include "turbo_flow_projection.h"
@@ -143,6 +144,7 @@ typedef struct flow_adapter_registration_s {
   turbo_flow_adapter_consume_batch_fn consume_batch;
   turbo_flow_transport_reply_provider_ops_t transport_reply_ops;
   void *transport_reply_ctx;
+  turbo_flow_source_transport_contract_t source_transport;
   void *ctx;
   turbo_flow_settlement_owner_ops_t settlement_ops;
   void *settlement_ctx;

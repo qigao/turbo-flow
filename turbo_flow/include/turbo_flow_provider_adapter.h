@@ -73,6 +73,65 @@ TURBO_FLOW_C_API int turbo_flow_provider_adapter_transport_reply_register(
     turbo_flow_t *flow, const char *stage_name,
     const turbo_flow_transport_reply_provider_ops_t *ops, void *ctx);
 
+enum { TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION = 1u };
+
+typedef enum turbo_flow_source_transport_kind_e {
+  TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER = 1,
+  TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET,
+  TURBO_FLOW_SOURCE_TRANSPORT_KCP_PACKET
+} turbo_flow_source_transport_kind_t;
+
+/**
+ * Immutable admission limits supplied by a materialized network Source.
+ *
+ * Counts describe the transport owner, not a downstream protocol's frame count.
+ * max_messages_per_poll bounds deliveries across all stages sharing that owner
+ * during one external owner poll on its control thread. It must include buffered
+ * deliveries before and after native progress; scheduler task counts alone are
+ * not message counts. All three limits must be positive.
+ *
+ * This pointer-free value is copied into Graph storage. It neither retains a
+ * provider/resource nor authorizes polling; their owners keep those lifetimes.
+ */
+typedef struct turbo_flow_source_transport_contract_s {
+  size_t size;
+  uint32_t version;
+  turbo_flow_source_transport_kind_t transport;
+  size_t session_capacity;
+  size_t max_message_bytes;
+  size_t max_messages_per_poll;
+} turbo_flow_source_transport_contract_t;
+
+#define TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT \
+  {sizeof(turbo_flow_source_transport_contract_t), \
+   TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION, \
+   (turbo_flow_source_transport_kind_t)0, 0u, 0u, 0u}
+
+/**
+ * Copy one contract onto an already provider-bound Source stage before compile.
+ * Registration is exclusive with Graph use, just like adapter registration.
+ * Returns EINVAL for invalid limits/ABI or a non-Source, ENOENT for an unbound
+ * stage, EALREADY for a second contract on the same owner, EBUSY after compile.
+ * Rejection changes neither the binding nor its previous contract.
+ */
+TURBO_FLOW_C_API int turbo_flow_provider_adapter_source_transport_register(
+    turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_source_transport_contract_t *contract);
+
+/**
+ * Copy a Source's admission contract using its exact parsed stage name.
+ * Available after materialization, including before compile/start. Never falls
+ * back to the global adapter registry. Initialize out with CONTRACT_INIT.
+ * Returns ENOENT for a missing/unbound stage, ENOTSUP for a bound Source without
+ * this capability, EINVAL for an invalid output ABI or non-Source. On failure
+ * out is unchanged. A successful copy stays valid after Graph reset/destroy.
+ * Example: query(flow, "wire", &limits), then size pending claims to at least
+ * limits.max_messages_per_poll with checked byte-budget multiplication.
+ */
+TURBO_FLOW_C_API int turbo_flow_provider_adapter_source_transport_query(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_source_transport_contract_t *out);
+
 #ifdef __cplusplus
 }
 #endif

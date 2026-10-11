@@ -300,6 +300,119 @@ static void scoped_source_stop(
   ++source->stops;
 }
 
+spec("provider Source transport admission contract") {
+  static turbo_flow_t *flow;
+  static scoped_probe_t probe;
+  static turbo_flow_source_transport_contract_t limits;
+  static turbo_flow_source_transport_contract_t result;
+  static const char graph[] =
+      "source a adapter fixture.source\n"
+      "source b adapter fixture.source\n"
+      "source legacy adapter fixture.source\n"
+      "stage sink adapter fixture.sink\n"
+      "stage main {\n  a -> sink\n  b -> sink\n  legacy -> sink\n}\n";
+
+  before_each() {
+    const char *a[] = {"a"};
+    const char *b[] = {"b"};
+    const char *sink[] = {"sink"};
+    turbo_flow_adapter_ops_t source = source_ops();
+    turbo_flow_adapter_ops_t terminal = sink_ops();
+    turbo_flow_adapter_schema_t source_type = source_schema();
+    turbo_flow_adapter_schema_t sink_type = sink_schema();
+    memset(&probe, 0, sizeof(probe));
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.source", a, 1u, &source, &source_type, &probe),
+                SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.source", b, 1u, &source, &source_type, &probe),
+                SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.sink", sink, 1u, &terminal, &sink_type, &probe),
+                SALTS_OK);
+    check_equal(turbo_flow_register_adapter_ex(flow, "fixture.source", &source, &probe,
+                                               &source_type), SALTS_OK);
+    limits = (turbo_flow_source_transport_contract_t)TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+    limits.transport = TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET;
+    limits.session_capacity = 4u;
+    limits.max_message_bytes = 128u;
+    limits.max_messages_per_poll = 8u;
+    result = (turbo_flow_source_transport_contract_t)TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+  }
+
+  after_each() { turbo_flow_destroy(flow); flow = NULL; }
+
+  it("copies independent limits for exact stages sharing a provider identity") {
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "a", &limits), SALTS_OK);
+    limits.transport = TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+    limits.session_capacity = 9u;
+    limits.max_messages_per_poll = 2u;
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "b", &limits), SALTS_OK);
+    limits.max_message_bytes = 999u;
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_OK);
+    check_equal(result.transport, TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET);
+    check_equal(result.session_capacity, (size_t)4u);
+    check_equal(result.max_messages_per_poll, (size_t)8u);
+    check_equal(result.max_message_bytes, (size_t)128u);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "b", &result), SALTS_OK);
+    check_equal(result.transport, TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER);
+    check_equal(result.session_capacity, (size_t)9u);
+    check_equal(result.max_messages_per_poll, (size_t)2u);
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "b", &limits), SALTS_EALREADY);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "b", &result), SALTS_OK);
+    check_equal(result.max_message_bytes, (size_t)128u);
+  }
+
+  it("rejects invalid ABI and zero limits without publishing a contract") {
+    turbo_flow_source_transport_contract_t invalid;
+    for (unsigned field = 0u; field < 6u; ++field) {
+      invalid = limits;
+      switch (field) {
+        case 0: --invalid.size; break;
+        case 1: ++invalid.version; break;
+        case 2: invalid.transport = (turbo_flow_source_transport_kind_t)99; break;
+        case 3: invalid.session_capacity = 0u; break;
+        case 4: invalid.max_message_bytes = 0u; break;
+        default: invalid.max_messages_per_poll = 0u; break;
+      }
+      check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "a", &invalid), SALTS_EINVAL);
+      check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_ENOTSUP);
+    }
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "a", &limits), SALTS_OK);
+    result.version += 1u;
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_EINVAL);
+    check_equal(result.version, (uint32_t)(TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION + 1u));
+    result.version -= 1u;
+    result.size -= 1u;
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_EINVAL);
+  }
+
+  it("never uses legacy names or sink bindings as a Source capability") {
+    result.max_message_bytes = 77u;
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "fixture.source", &result), SALTS_ENOENT);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "legacy", &result), SALTS_ENOENT);
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "legacy", &limits), SALTS_ENOENT);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "sink", &result), SALTS_EINVAL);
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "sink", &limits), SALTS_EINVAL);
+    check_equal(result.max_message_bytes, (size_t)77u);
+  }
+
+  it("seals limits at compile and drops them on keep-registry reset") {
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "a", &limits), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_OK);
+    check_equal(turbo_flow_provider_adapter_source_transport_register(flow, "b", &limits), SALTS_EBUSY);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(flow, "a", &result), SALTS_ENOENT);
+    check_equal(result.max_message_bytes, (size_t)128u);
+    check_equal(result.max_messages_per_poll, (size_t)8u);
+  }
+}
+
 spec("provider-scoped managed Source startup") {
   static turbo_flow_t *flow;
   static scoped_source_t source;

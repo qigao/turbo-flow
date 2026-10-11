@@ -583,6 +583,8 @@ static int cnet_plugin_register_source(
       TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
   turbo_flow_transport_reply_provider_ops_t reply =
       TURBO_FLOW_TRANSPORT_REPLY_PROVIDER_OPS_INIT;
+  turbo_flow_source_transport_contract_t transport =
+      TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
   const char *stages[1];
   const char *identity;
   int rc;
@@ -591,6 +593,22 @@ static int cnet_plugin_register_source(
   identity = provider_identity(owner->config.kind);
   if (!identity) return SALTS_EINVAL;
   stages[0] = owner->name;
+
+  if (owner->config.kind == CNET_TYPED_LISTENER_SOURCE) {
+    transport.transport = TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+    transport.session_capacity = owner->config.max_connections;
+    /* One ready slot before native progress and one afterwards. */
+    transport.max_messages_per_poll = 2u;
+  } else if (owner->config.kind == CNET_TYPED_PACKET_SOURCE) {
+    transport.transport = owner->config.endpoint.protocol == CNET_PACKET_UDP
+                              ? TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET
+                              : TURBO_FLOW_SOURCE_TRANSPORT_KCP_PACKET;
+    transport.session_capacity = owner->config.endpoint.session_capacity;
+    if (owner->config.queue_capacity > SIZE_MAX / 2u) return SALTS_ERANGE;
+    /* Native progress cannot refill the queue while its owner drains it. */
+    transport.max_messages_per_poll = owner->config.queue_capacity * 2u;
+  }
+  transport.max_message_bytes = owner->config.max_message_bytes;
 
   ops.start = cnet_plugin_source_start;
   ops.stop = cnet_plugin_source_stop;
@@ -621,6 +639,9 @@ static int cnet_plugin_register_source(
   if (owner->config.kind != CNET_TYPED_LISTENER_SOURCE &&
       owner->config.kind != CNET_TYPED_PACKET_SOURCE)
     return SALTS_OK;
+
+  rc = turbo_flow_provider_adapter_source_transport_register(flow, owner->name, &transport);
+  if (rc != SALTS_OK) return rc;
 
   reply.capture = cnet_plugin_transport_reply_capture;
   reply.send = cnet_plugin_transport_reply_send;

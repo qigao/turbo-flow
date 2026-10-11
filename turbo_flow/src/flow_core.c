@@ -878,6 +878,64 @@ int turbo_flow_provider_adapter_transport_reply_register(
   return flow_transport_reply_attach(adapter, ops, ctx);
 }
 
+static int flow_source_transport_adapter_index(
+    const turbo_flow_t *flow, const char *stage_name) {
+  const flow_stage_plan_impl_t *stage;
+  const flow_adapter_registration_t *adapter;
+  int index;
+  if (!flow || !stage_name || !stage_name[0]) return SALTS_EINVAL;
+  index = turbo_flow_find_stage(flow, stage_name);
+  if (index < 0) return SALTS_ENOENT;
+  stage = (const flow_stage_plan_impl_t *)vec_at_const(&flow->stages, (size_t)index);
+  if (!stage || !stage->is_source) return SALTS_EINVAL;
+  if (!stage->provider_adapter_bound) return SALTS_ENOENT;
+  index = flow_adapter_index_for_stage(flow, stage, (uint32_t)index);
+  if (index < 0) return SALTS_EPROTO;
+  adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, (size_t)index);
+  if (!adapter || !adapter->provider_scoped ||
+      (adapter->schema.roles & TURBO_FLOW_ADAPTER_SOURCE) == 0u)
+    return SALTS_EPROTO;
+  return index;
+}
+
+int turbo_flow_provider_adapter_source_transport_register(
+    turbo_flow_t *flow, const char *stage_name,
+    const turbo_flow_source_transport_contract_t *contract) {
+  flow_adapter_registration_t *adapter;
+  int index;
+  if (!flow || !contract || contract->size != sizeof(*contract) ||
+      contract->version != TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION ||
+      (contract->transport != TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER &&
+       contract->transport != TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET &&
+       contract->transport != TURBO_FLOW_SOURCE_TRANSPORT_KCP_PACKET) ||
+      contract->session_capacity == 0u || contract->max_message_bytes == 0u ||
+      contract->max_messages_per_poll == 0u)
+    return SALTS_EINVAL;
+  if (flow->state != TURBO_FLOW_STATE_PARSED) return SALTS_EBUSY;
+  index = flow_source_transport_adapter_index(flow, stage_name);
+  if (index < 0) return index;
+  adapter = (flow_adapter_registration_t *)vec_at(&flow->adapters, (size_t)index);
+  if (adapter->source_transport.version != 0u) return SALTS_EALREADY;
+  adapter->source_transport = *contract;
+  return SALTS_OK;
+}
+
+int turbo_flow_provider_adapter_source_transport_query(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_source_transport_contract_t *out) {
+  const flow_adapter_registration_t *adapter;
+  int index;
+  if (!out || out->size != sizeof(*out) ||
+      out->version != TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION)
+    return SALTS_EINVAL;
+  index = flow_source_transport_adapter_index(flow, stage_name);
+  if (index < 0) return index;
+  adapter = (const flow_adapter_registration_t *)vec_at_const(&flow->adapters, (size_t)index);
+  if (adapter->source_transport.version == 0u) return SALTS_ENOTSUP;
+  *out = adapter->source_transport;
+  return SALTS_OK;
+}
+
 static const flow_adapter_registration_t *flow_transport_reply_adapter(
     const turbo_flow_t *flow, const char *adapter_name) {
   int index;

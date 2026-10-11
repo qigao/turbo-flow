@@ -591,6 +591,22 @@ static int run_case(unsigned kind) {
   acceptance.owner_live = 1;
   if (!turbo_flow_runtime_owner_contract_valid(&acceptance.owner))
     return SALTS_EPROTO;
+  if (kind == CASE_LISTENER_SOURCE || kind == CASE_PACKET_SOURCE) {
+    turbo_flow_source_transport_contract_t limits =
+        TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+    check_equal(turbo_flow_provider_adapter_source_transport_query(acceptance.flow, "io", &limits),
+                SALTS_OK);
+    check_equal(limits.transport, kind == CASE_LISTENER_SOURCE
+                                     ? TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER
+                                     : TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET);
+    check_equal(limits.session_capacity, (size_t)4u);
+    check_equal(limits.max_message_bytes, (size_t)1024u);
+    check_equal(limits.max_messages_per_poll,
+                kind == CASE_LISTENER_SOURCE ? (size_t)2u
+                    : (size_t)acceptance.typed.packet_source.queue_capacity * 2u);
+    check_equal(turbo_flow_provider_adapter_source_transport_query(
+                    acceptance.flow, provider_identity(kind), &limits), SALTS_ENOENT);
+  }
   rc = turbo_flow_compile(acceptance.flow);
   if (rc != SALTS_OK) return rc;
 
