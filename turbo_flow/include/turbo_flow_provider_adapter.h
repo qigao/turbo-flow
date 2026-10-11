@@ -24,6 +24,12 @@ enum { TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_VERSION = 1u };
  * managed_owner_name and managed_boundary_ops are either both NULL or both
  * present. Callback code and ctx remain provider-owned until Graph registry
  * teardown, matching the existing adapter registration lifetime.
+ *
+ * An explicit managed boundary must cover the schema's SOURCE/SINK roles.
+ * When the schema includes SOURCE and that boundary is validated, the exact
+ * source start callback may call turbo_flow_managed_source_run_open(). Only a
+ * successful open moves the Publisher into the Flow-owned run. A SOURCE schema
+ * alone, without a managed boundary, does not grant managed Source admission.
  */
 typedef struct turbo_flow_provider_adapter_registration_v1_s {
   size_t size;

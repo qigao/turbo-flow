@@ -3,6 +3,7 @@
 #include "turbo_flow_provider.h"
 #include "turbo_flow_provider_adapter.h"
 
+#include <cflow/publishers.h>
 #include <string.h>
 
 typedef struct scoped_probe_s {
@@ -254,6 +255,231 @@ static int register_scoped(
   registration.schema = schema;
   registration.ctx = probe;
   return turbo_flow_provider_adapter_register(flow, &registration);
+}
+
+typedef struct scoped_source_s {
+  scoped_managed_owner_t owner;
+  turbo_flow_msg_t message;
+  cflow_publisher publisher;
+  cflow_publisher rejected_publisher;
+  turbo_flow_run_t *run;
+  turbo_flow_run_t *rejected_run;
+  int copied_stage_status;
+  int open_status;
+  int duplicate_status;
+  int stops;
+  int fail_after_open;
+  int ignore_open_error;
+} scoped_source_t;
+
+static int scoped_source_start(
+    void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
+  scoped_source_t *source = (scoped_source_t *)ctx;
+  turbo_flow_stage_plan_t copied_stage = *stage;
+  ++source->owner.probe.starts;
+  source->owner.probe.last_stage = stage->name;
+  source->copied_stage_status = turbo_flow_managed_source_run_open(
+      flow, &copied_stage, &source->rejected_publisher, NULL,
+      &source->rejected_run);
+  source->open_status = turbo_flow_managed_source_run_open(
+      flow, stage, &source->publisher, NULL, &source->run);
+  if (source->open_status == SALTS_OK) {
+    source->duplicate_status = turbo_flow_managed_source_run_open(
+        flow, stage, &source->rejected_publisher, NULL,
+        &source->rejected_run);
+    if (source->fail_after_open) return SALTS_EIO;
+  }
+  return source->ignore_open_error ? SALTS_OK : source->open_status;
+}
+
+static void scoped_source_stop(
+    void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage) {
+  scoped_source_t *source = (scoped_source_t *)ctx;
+  (void)flow;
+  (void)stage;
+  ++source->stops;
+}
+
+spec("provider-scoped managed Source startup") {
+  static turbo_flow_t *flow;
+  static scoped_source_t source;
+  static scoped_probe_t sink;
+  static turbo_flow_adapter_ops_t ops;
+  static turbo_flow_adapter_schema_t schema;
+  static turbo_flow_managed_boundary_provider_ops_t boundary_ops;
+  static turbo_flow_provider_adapter_registration_v1_t registration;
+  static const char *stages[] = {"input"};
+  static const char graph[] =
+      "source input adapter fixture.source\n"
+      "stage sink adapter fixture.sink\n"
+      "stage main {\n"
+      "  input -> sink\n"
+      "}\n";
+
+  before_each() {
+    turbo_flow_adapter_ops_t sink_adapter_ops = sink_ops();
+    turbo_flow_adapter_schema_t sink_adapter_schema = sink_schema();
+    const char *sink_stages[] = {"sink"};
+    memset(&source, 0, sizeof(source));
+    memset(&sink, 0, sizeof(sink));
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    turbo_flow_msg_init(&source.message);
+    scoped_boundary_init(&source.owner.boundary);
+    source.owner.boundary.descriptor.role_flags =
+        TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+    source.owner.boundary.descriptor.output = source.owner.boundary.descriptor.input;
+    memset(&source.owner.boundary.descriptor.input, 0,
+           sizeof(source.owner.boundary.descriptor.input));
+    check_true(cflow_publisher_from_array(
+        &source.publisher, turbo_flow_message_type(), &source.message, 1u));
+    check_true(cflow_publisher_from_array(
+        &source.rejected_publisher, turbo_flow_message_type(), &source.message, 1u));
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.sink", sink_stages, 1u,
+                                &sink_adapter_ops, &sink_adapter_schema, &sink),
+                SALTS_OK);
+    ops = source_ops();
+    ops.start = scoped_source_start;
+    ops.stop = scoped_source_stop;
+    ops.shutdown = scoped_managed_owner_shutdown;
+    schema = source_schema();
+    boundary_ops = (turbo_flow_managed_boundary_provider_ops_t)
+        TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
+    boundary_ops.resource.metadata = scoped_boundary_metadata;
+    boundary_ops.descriptor = scoped_boundary_descriptor;
+    boundary_ops.snapshot = scoped_boundary_snapshot;
+    registration = (turbo_flow_provider_adapter_registration_v1_t)
+        TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    registration.provider_identity = "fixture.source";
+    registration.stage_names = stages;
+    registration.stage_count = 1u;
+    registration.adapter_ops = &ops;
+    registration.schema = &schema;
+    registration.managed_owner_name = source.owner.boundary.metadata.owner_name;
+    registration.managed_boundary_ops = &boundary_ops;
+    registration.ctx = &source;
+  }
+
+  after_each() {
+    if (flow) {
+      turbo_flow_destroy(flow);
+      flow = NULL;
+    }
+    if (cflow_publisher_valid(&source.publisher))
+      cflow_publisher_destroy(&source.publisher);
+    if (cflow_publisher_valid(&source.rejected_publisher))
+      cflow_publisher_destroy(&source.rejected_publisher);
+    turbo_flow_msg_cleanup(&source.message);
+  }
+
+  it("moves a Publisher only from the exact managed provider start callback") {
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(source.owner.probe.starts, 1);
+    check_equal(source.owner.probe.last_stage, "input");
+    check_equal(source.copied_stage_status, SALTS_EINVAL);
+    check_equal(source.open_status, SALTS_OK);
+    check_equal(source.duplicate_status, SALTS_EINVAL);
+    check_not_null(source.run);
+    check_null(source.rejected_run);
+    check_false(cflow_publisher_valid(&source.publisher));
+    check_true(cflow_publisher_valid(&source.rejected_publisher));
+    check_equal(vec_size(&flow->active_runs), (size_t)1u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(vec_size(&flow->active_runs), (size_t)0u);
+    check_equal(source.stops, 1);
+    turbo_flow_destroy(flow);
+    flow = NULL;
+    check_equal(source.owner.probe.shutdowns, 1);
+  }
+
+  it("does not infer managed Source admission without an explicit boundary") {
+    registration.managed_owner_name = NULL;
+    registration.managed_boundary_ops = NULL;
+    source.ignore_open_error = 1;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(source.owner.probe.starts, 1);
+    check_equal(source.open_status, SALTS_EINVAL);
+    check_null(source.run);
+    check_true(cflow_publisher_valid(&source.publisher));
+    check_equal(vec_size(&flow->active_runs), (size_t)0u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(source.stops, 1);
+  }
+
+  it("rolls back a Flow-owned run when the provider start fails after open") {
+    source.fail_after_open = 1;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_EIO);
+    check_equal(source.open_status, SALTS_OK);
+    check_false(cflow_publisher_valid(&source.publisher));
+    check_equal(vec_size(&flow->active_runs), (size_t)0u);
+    check_equal(source.stops, 1);
+    turbo_flow_destroy(flow);
+    flow = NULL;
+    check_equal(source.owner.probe.shutdowns, 1);
+  }
+
+  it("opens the SOURCE side of a validated bidirectional provider") {
+    schema = dual_schema();
+    ops.consume = scoped_consume;
+    source.owner.boundary.descriptor.role_flags |= TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+    source.owner.boundary.descriptor.input = source.owner.boundary.descriptor.output;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(source.open_status, SALTS_OK);
+    check_false(cflow_publisher_valid(&source.publisher));
+  }
+
+  it("keeps a managed SINK outside managed Source admission") {
+    static const char sink_graph[] =
+        "source input\n"
+        "stage sink adapter fixture.sink\n"
+        "stage main {\n"
+        "  input -> sink\n"
+        "}\n";
+    const char *sink_stages[] = {"sink"};
+    check_equal(turbo_flow_reset(flow, 0), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, sink_graph, sizeof(sink_graph) - 1u),
+                SALTS_OK);
+    schema = sink_schema();
+    ops.consume = scoped_consume;
+    registration.provider_identity = "fixture.sink";
+    registration.stage_names = sink_stages;
+    source.owner.boundary.descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+    source.owner.boundary.descriptor.input = source.owner.boundary.descriptor.output;
+    source.ignore_open_error = 1;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(source.owner.probe.starts, 1);
+    check_equal(source.open_status, SALTS_EINVAL);
+    check_null(source.run);
+    check_true(cflow_publisher_valid(&source.publisher));
+    check_equal(turbo_flow_publish(flow, "input", &source.message), SALTS_OK);
+    check_equal(source.owner.probe.consumes, 1);
+  }
+
+  it("rejects a boundary missing the SOURCE role before taking ownership") {
+    source.owner.boundary.descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
+    source.owner.boundary.descriptor.input = source.owner.boundary.descriptor.output;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_EPROTO);
+    check_equal(turbo_flow_adapter_count(flow), (size_t)1u);
+    check_equal(turbo_flow_managed_boundary_count(flow), (size_t)0u);
+    check_equal(source.owner.probe.shutdowns, 0);
+    check_true(cflow_publisher_valid(&source.publisher));
+    source.owner.boundary.descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SOURCE;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(source.open_status, SALTS_OK);
+  }
 }
 
 spec("provider-scoped adapter stage binding") {

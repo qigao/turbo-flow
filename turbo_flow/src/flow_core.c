@@ -1545,6 +1545,9 @@ int turbo_flow_provider_adapter_register(
     }
     adapter->provider_managed_resource_index = resources_before;
     adapter->provider_managed_resource_bound = 1;
+    /* Only an explicitly validated boundary admits a Flow-owned Source run. */
+    adapter->managed_source =
+        (required_boundary_roles & TURBO_FLOW_MANAGED_BOUNDARY_SOURCE) != 0u;
   }
 
   if (registration->adapter_ops)
