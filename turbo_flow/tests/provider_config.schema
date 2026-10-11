@@ -12,4 +12,13 @@ message BatchConfig {
   @Min(1) @Max(64) uint32 concurrency;
 }
 
+message StaticHeader {
+  @Size(min = 1, max = 16) string name;
+  string value;
+}
+
+message HeaderPolicy {
+  list<StaticHeader> headers;
+}
+
 

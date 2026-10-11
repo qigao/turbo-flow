@@ -26,6 +26,8 @@
 %type dotted_name {flow_token_t}
 %type binding_segment {flow_token_t}
 %type provider_config_value {flow_provider_config_value_spec_t}
+%type provider_array_start {flow_provider_config_value_spec_t}
+%type provider_map_start {flow_provider_config_value_spec_t}
 
 %start_symbol start
 
@@ -251,16 +253,47 @@ stage_config_line ::= IDENT(N) provider_config_value(V) NEWLINE. {
 stage_config_line ::= NEWLINE.
 
 provider_config_value(A) ::= STRING(V). {
+  A = (flow_provider_config_value_spec_t){0};
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_TEXT;
   A.token = V;
 }
 provider_config_value(A) ::= NUMBER(V). {
+  A = (flow_provider_config_value_spec_t){0};
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_UINT;
   A.token = V;
 }
 provider_config_value(A) ::= IDENT(V). {
+  A = (flow_provider_config_value_spec_t){0};
   A.kind = FLOW_PROVIDER_CONFIG_VALUE_IDENT;
   A.token = V;
+}
+provider_config_value(A) ::= provider_array_start(S) provider_array_values RBRACKET(E). {
+  flow_parse_provider_container_end(ctx, E, FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END);
+  A = S;
+}
+provider_config_value(A) ::= provider_map_start(S) provider_map_fields RBRACE(E). {
+  flow_parse_provider_container_end(ctx, E, FLOW_PROVIDER_CONFIG_LITERAL_MAP_END);
+  A = S;
+}
+provider_array_start(A) ::= LBRACKET(T). {
+  A = flow_parse_provider_container_begin(ctx, T, FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN);
+}
+provider_map_start(A) ::= LBRACE(T). {
+  A = flow_parse_provider_container_begin(ctx, T, FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN);
+}
+provider_array_values ::= .
+provider_array_values ::= provider_array_items.
+provider_array_items ::= provider_array_item.
+provider_array_items ::= provider_array_items COMMA provider_array_item.
+provider_array_item ::= provider_config_value(V). {
+  flow_parse_provider_nested_value(ctx, (flow_token_t){0}, V);
+}
+provider_map_fields ::= .
+provider_map_fields ::= provider_map_items.
+provider_map_items ::= provider_map_item.
+provider_map_items ::= provider_map_items COMMA provider_map_item.
+provider_map_item ::= IDENT(N) provider_config_value(V). {
+  flow_parse_provider_nested_value(ctx, N, V);
 }
 
 exec_spec(A) ::= INLINE exec_options(O). {

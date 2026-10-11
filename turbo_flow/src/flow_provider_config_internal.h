@@ -15,7 +15,10 @@ extern "C" {
 typedef struct flow_provider_config_reader_s {
   cserde_reader reader;
   const vec_t *literals;
-  size_t token_index;
+  int started;
+  size_t literal_index;
+  int name_emitted;
+  int finished;
 } flow_provider_config_reader_t;
 
 enum {
@@ -56,18 +59,18 @@ TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_config_reader_init(
     flow_provider_config_reader_t *config_reader,
     const flow_stage_plan_impl_t *stage);
 
-int flow_provider_typed_config_bind(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_typed_config_bind(
     const flow_stage_plan_impl_t *stage,
     flow_provider_config_codec_factory_fn codec_factory,
     const DataBindMessageNativeArtifact *artifact,
     flow_provider_typed_config_t *out,
     DataBindMessagePlanDiagnostic *diagnostic);
 
-int flow_provider_typed_config_view(
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_typed_config_view(
     const flow_provider_typed_config_t *config,
     flow_provider_typed_config_view_t *out);
 
-int flow_provider_typed_config_destroy(flow_provider_typed_config_t *config);
+TURBO_FLOW_PRODUCT_INTERNAL_API int flow_provider_typed_config_destroy(flow_provider_typed_config_t *config);
 
 #ifdef __cplusplus
 }

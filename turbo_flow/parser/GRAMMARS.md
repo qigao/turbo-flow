@@ -267,6 +267,26 @@ bare `stage name { ... }` is an atomic node or a composite from its body.
 `step` declarations inside a stage block may also use an option block because
 `step` has no composite-stage meaning.
 
+Provider fields in node option blocks use the generic literal grammar:
+
+```text
+provider_field  := IDENT provider_value NEWLINE
+provider_value  := STRING | NUMBER | IDENT
+                 | "[" [provider_values] "]"
+                 | "{" [provider_members] "}"
+provider_values := provider_value | provider_values "," provider_value
+provider_members := IDENT provider_value
+                  | provider_members "," IDENT provider_value
+```
+
+Structured values occupy one physical line. `true` and `false` are boolean
+values; other identifiers are text. Strings may be empty. Array order and
+repeated values are preserved. Field semantics belong to the provider's
+DataBind MessagePlan. Source depth, token count, text storage, and top-level
+field count are bounded before provider lookup; see
+[structured literal ownership and limits](STAGE_CONFIG_DESIGN.md#bounded-structured-literals-270--271).
+This syntax does not change lexer identifiers or existing resource binding names.
+
 Supported stage options:
 
 ```text

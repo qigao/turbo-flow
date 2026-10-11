@@ -43,6 +43,7 @@ salts_idl_target(
 cmake_add_test(
   test_flow_provider_typed_config
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_flow_provider_typed_config.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/provider_config_header_cpp.cpp
   LIBS
     TurboFlow::Product
     Salts::TinyTest
@@ -57,7 +58,10 @@ add_dependencies(
 set_target_properties(test_flow_provider_typed_config PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
-  C_EXTENSIONS OFF)
+  C_EXTENSIONS OFF
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)
 set_tests_properties(test_flow_provider_typed_config PROPERTIES
   LABELS "graph;config;databind;provider" TIMEOUT 30)
 

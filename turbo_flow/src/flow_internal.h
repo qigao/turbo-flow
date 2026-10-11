@@ -26,6 +26,9 @@
 #define FLOW_WORKER_POOL_DEFAULT_CAPACITY 1024u
 #define FLOW_WORKER_POOL_MAX_CAPACITY 1048576u
 #define FLOW_PROVIDER_CONFIG_MAX_FIELDS 256u
+#define FLOW_PROVIDER_CONFIG_MAX_SOURCE_TOKENS 1024u
+#define FLOW_PROVIDER_CONFIG_MAX_SOURCE_DEPTH 32u
+#define FLOW_PROVIDER_CONFIG_MAX_SOURCE_BYTES 65536u
 enum {
   FLOW_DATA_SCHEMA_MAX_DEPTH = 16,
   FLOW_DATA_SCHEMA_MAX_NODES = 256,
@@ -41,11 +44,15 @@ typedef enum flow_databind_transport_kind_e {
 typedef enum flow_provider_config_literal_kind_e {
   FLOW_PROVIDER_CONFIG_LITERAL_TEXT = 1,
   FLOW_PROVIDER_CONFIG_LITERAL_UINT,
-  FLOW_PROVIDER_CONFIG_LITERAL_BOOL
+  FLOW_PROVIDER_CONFIG_LITERAL_BOOL,
+  FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN,
+  FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END,
+  FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN,
+  FLOW_PROVIDER_CONFIG_LITERAL_MAP_END
 } flow_provider_config_literal_kind_t;
 
 typedef struct flow_provider_config_literal_s {
-  tstr name;
+  tstr name; /* Optional map key; array entries and closing events are unnamed. */
   flow_provider_config_literal_kind_t kind;
   tstr text;
   uint64_t uint_value;

@@ -13,65 +13,66 @@ static cserde_status flow_provider_config_reader_next(
     void *context, cserde_token *out) {
   flow_provider_config_reader_t *reader =
       (flow_provider_config_reader_t *)context;
-  size_t count;
-  size_t position;
+  const flow_provider_config_literal_t *literal;
 
   if (!reader || !reader->literals || !out) return CSERDE_INVALID_ARGUMENT;
-  count = vec_size(reader->literals);
-  position = reader->token_index;
-
   memset(out, 0, sizeof(*out));
-  if (position == 0u) {
+  if (!reader->started) {
     out->kind = CSERDE_MAP_BEGIN;
-    ++reader->token_index;
+    reader->started = 1;
     return CSERDE_OK;
   }
-
-  --position;
-  if (position < count * 2u) {
-    const size_t literal_index = position / 2u;
-    const flow_provider_config_literal_t *literal =
-        (const flow_provider_config_literal_t *)vec_at_const(
-            reader->literals, literal_index);
-    if (!literal || !literal->name) return CSERDE_INVALID_STATE;
-
-    if ((position & 1u) == 0u) {
-      out->kind = CSERDE_STRING;
-      out->value.slice.data = (const unsigned char *)literal->name;
-      out->value.slice.size = tstr_len(literal->name);
-      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-    } else {
-      switch (literal->kind) {
-        case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
-          if (!literal->text) return CSERDE_INVALID_STATE;
-          out->kind = CSERDE_STRING;
-          out->value.slice.data = (const unsigned char *)literal->text;
-          out->value.slice.size = tstr_len(literal->text);
-          out->value.slice.lifetime = CSERDE_VIEW_STABLE;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
-          out->kind = CSERDE_UINT;
-          out->value.uint = literal->uint_value;
-          break;
-        case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
-          out->kind = CSERDE_BOOL;
-          out->value.boolean = literal->bool_value != 0;
-          break;
-        default:
-          return CSERDE_INVALID_STATE;
-      }
-    }
-    ++reader->token_index;
-    return CSERDE_OK;
-  }
-
-  if (position == count * 2u) {
+  if (reader->literal_index == vec_size(reader->literals)) {
+    if (reader->finished) return CSERDE_DONE;
     out->kind = CSERDE_MAP_END;
-    ++reader->token_index;
+    reader->finished = 1;
     return CSERDE_OK;
   }
-
-  return CSERDE_DONE;
+  literal = (const flow_provider_config_literal_t *)vec_at_const(
+      reader->literals, reader->literal_index);
+  if (!literal) return CSERDE_INVALID_STATE;
+  if (literal->name && !reader->name_emitted) {
+    out->kind = CSERDE_STRING;
+    out->value.slice.data = (const unsigned char *)literal->name;
+    out->value.slice.size = tstr_len(literal->name);
+    out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+    reader->name_emitted = 1;
+    return CSERDE_OK;
+  }
+  switch (literal->kind) {
+    case FLOW_PROVIDER_CONFIG_LITERAL_TEXT:
+      if (!literal->text) return CSERDE_INVALID_STATE;
+      out->kind = CSERDE_STRING;
+      out->value.slice.data = (const unsigned char *)literal->text;
+      out->value.slice.size = tstr_len(literal->text);
+      out->value.slice.lifetime = CSERDE_VIEW_STABLE;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_UINT:
+      out->kind = CSERDE_UINT;
+      out->value.uint = literal->uint_value;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_BOOL:
+      out->kind = CSERDE_BOOL;
+      out->value.boolean = literal->bool_value != 0;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_BEGIN:
+      out->kind = CSERDE_ARRAY_BEGIN;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_ARRAY_END:
+      out->kind = CSERDE_ARRAY_END;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_MAP_BEGIN:
+      out->kind = CSERDE_MAP_BEGIN;
+      break;
+    case FLOW_PROVIDER_CONFIG_LITERAL_MAP_END:
+      out->kind = CSERDE_MAP_END;
+      break;
+    default:
+      return CSERDE_INVALID_STATE;
+  }
+  ++reader->literal_index;
+  reader->name_emitted = 0;
+  return CSERDE_OK;
 }
 
 static const cserde_reader_ops FLOW_PROVIDER_CONFIG_READER_OPS = {

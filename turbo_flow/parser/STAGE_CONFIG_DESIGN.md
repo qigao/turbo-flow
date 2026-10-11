@@ -152,6 +152,51 @@ Requirements:
   never becomes a second TurboFlow schema registry;
 - runtime uses only the sealed provider binding and never reparses config.
 
+### Bounded structured literals (#270 / #271)
+
+Provider values additionally admit arrays and records on one physical line:
+
+```flow
+stage request adapter chttp.client {
+  headers [{ name "x-trace", value "a" }, { name "x-trace", value "b" }]
+}
+```
+
+Arrays preserve order and repeated values. Records use existing identifiers as
+keys and commas between fields; arrays use commas between values. Empty arrays,
+records and string values are admitted for schema validation. Existing scalar syntax and lexer
+identifier rules remain unchanged. Unknown fields, duplicate nested keys,
+presence, types and validation constraints remain DataBind MessagePlan policy.
+Duplicate top-level provider fields still fail in the parser.
+The current resource production already uses `adapter_name`, admitting adjacent
+dotted and quoted binding names; this extension preserves that documented
+behavior. An unquoted hyphenated identifier remains invalid. The older issue
+wording about rejecting dotted resources does not describe the current grammar.
+
+The parser stores a flat sequence of scalar/container events, with optional
+field names. This is source state, not a runtime dictionary or a second schema.
+A node permits at most 256 top-level fields, 1024 CSerde tokens including keys
+and the implicit outer map, 32 container levels including that map, and 65536
+owned text bytes including string terminators. Checked admission returns
+`SALTS_ENOSPC` before provider lookup when any limit is exceeded; malformed
+structure returns the existing parse error with source location. There is no
+truncation, fallback, or deferred provider-side capacity check.
+
+Parsing is exclusive and single-threaded. Parser events borrow source text only
+until node materialization copies it into stage-owned `tstr` storage. Failed
+copies release every partially owned name/value. Reusable `use` deep-copies the
+complete event sequence. The reader emits the implicit outer map plus those
+events in order, borrowing immutable stage text until reset/destroy; no reader
+may outlive that stage. Reset and destruction release the flat sequence without
+recursive cleanup. There are no asynchronous callbacks or queues on this path.
+
+This additive syntax reuses the existing parser, CSTL storage and CSerde reader.
+A provider-specific header parser or JSON/YAML bridge would duplicate semantic
+authority and is excluded. Existing scalar documents need no migration; a
+rollback requires removing structured fields before using an older binary.
+Formal config tests cover token order, exact limits, malformed syntax, deep
+copy/reset, and generated `list<Record>` MessagePlan admission and diagnostics.
+
 ## Deployment resources and secrets
 
 `.flow` expresses stable product intent:
