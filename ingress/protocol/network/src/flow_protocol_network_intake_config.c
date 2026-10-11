@@ -19,8 +19,8 @@ static int intake_config_field_error(turbo_flow_config_error_t *error, int statu
                                      const char *adapter_name, const char *field,
                                      const char *message) {
   char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
-  (void)snprintf(path, sizeof(path), "$.adapters.%s.config%s%s",
-                 adapter_name ? adapter_name : "?", field ? "." : "", field ? field : "");
+  (void)snprintf(path, sizeof(path), "$.adapters.%s.config%s%s", adapter_name ? adapter_name : "?",
+                 field ? "." : "", field ? field : "");
   return intake_config_error(error, status, path, message);
 }
 
@@ -83,13 +83,16 @@ static int intake_adapter_schema_version(const turbo_flow_resolved_adapter_view_
 
 static int intake_field_allowed(const char *field, uint32_t schema_version) {
   static const char *const base_fields[] = {
-      "schema_version", "protocol_provider", "protocol_kind", "protocol_version",
-      "source_id", "max_sessions", "max_frame_size", "max_pending_claims",
-      "max_pending_bytes"};
-  static const char *const mapper_fields[] = {
-      "mapper_plugin", "mapper_name", "mapper_profile", "mapper_message_type",
-      "mapper_semantic_type", "mapper_semantic_media_type",
-      "mapper_max_semantic_bytes", "mapper_max_output_bytes"};
+      "schema_version", "protocol_provider", "protocol_kind",      "protocol_version", "source_id",
+      "max_sessions",   "max_frame_size",    "max_pending_claims", "max_pending_bytes"};
+  static const char *const mapper_fields[] = {"mapper_plugin",
+                                              "mapper_name",
+                                              "mapper_profile",
+                                              "mapper_message_type",
+                                              "mapper_semantic_type",
+                                              "mapper_semantic_media_type",
+                                              "mapper_max_semantic_bytes",
+                                              "mapper_max_output_bytes"};
   for (size_t i = 0u; i < sizeof(base_fields) / sizeof(base_fields[0]); ++i)
     if (field && strcmp(field, base_fields[i]) == 0) return 1;
   if (schema_version == 3u) {
@@ -119,54 +122,17 @@ static int intake_validate_exact_fields(const turbo_flow_resolved_adapter_view_t
 }
 
 static int intake_adapter_u32(const turbo_flow_resolved_adapter_view_t *view,
-                              const char *adapter_name, const char *field,
-                              uint32_t *out, turbo_flow_config_error_t *error) {
+                              const char *adapter_name, const char *field, uint32_t *out,
+                              turbo_flow_config_error_t *error) {
   uint64_t raw = 0u;
   int rc;
   if (!out) return SALTS_EINVAL;
   rc = turbo_flow_resolved_adapter_get_u64(view, field, &raw);
   if (rc != SALTS_OK || raw > UINT32_MAX)
     return intake_config_field_error(error, rc == SALTS_OK ? SALTS_ERANGE : SALTS_EINVAL,
-                                     adapter_name, field,
-                                     "expected uint32 value");
+                                     adapter_name, field, "expected uint32 value");
   *out = (uint32_t)raw;
   return SALTS_OK;
-}
-
-static int intake_read_source(const turbo_flow_resolved_adapter_view_t *source,
-                              const char *source_adapter_name,
-                              flow_protocol_network_intake_settings_t *settings,
-                              size_t *transport_capacity, turbo_flow_config_error_t *error) {
-  const char *mode = NULL;
-  int rc;
-  if (!source || !source->kind || !settings || !transport_capacity)
-    return intake_config_error(error, SALTS_EINVAL, "$.adapters", "invalid source projection");
-
-  if (strcmp(source->kind, "cnet.listener_source") == 0) {
-    settings->transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP;
-    rc = intake_adapter_size(source, source_adapter_name, "max_connections", transport_capacity,
-                             error);
-  } else if (strcmp(source->kind, "cnet.packet_source") == 0) {
-    rc = turbo_flow_resolved_adapter_get_string(source, "packet_mode", &mode);
-    if (rc != SALTS_OK || !mode || !mode[0])
-      return intake_config_field_error(error, SALTS_EINVAL, source_adapter_name, "packet_mode",
-                                       "packet_mode is required");
-    if (strcmp(mode, "udp") != 0)
-      return intake_config_field_error(error, SALTS_ENOTSUP, source_adapter_name, "packet_mode",
-                                       "ProtocolNetworkIntake supports UDP packet sources only");
-    settings->transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
-    rc = intake_adapter_size(source, source_adapter_name, "session_capacity", transport_capacity,
-                             error);
-  } else {
-    return intake_config_error(error, SALTS_ENOTSUP, "$.adapters",
-                               "ProtocolNetworkIntake supports CNet listener or UDP packet sources");
-  }
-  if (rc != SALTS_OK) return rc;
-  rc = intake_adapter_size(source, source_adapter_name, "scheduler_max_steps_per_poll",
-                           &settings->source_scheduler_max_steps, error);
-  if (rc != SALTS_OK) return rc;
-  return intake_adapter_size(source, source_adapter_name, "max_message_bytes",
-                             &settings->source_max_message_bytes, error);
 }
 
 static int intake_read_protocol(const turbo_flow_resolved_adapter_view_t *intake,
@@ -174,17 +140,19 @@ static int intake_read_protocol(const turbo_flow_resolved_adapter_view_t *intake
                                 flow_protocol_network_intake_settings_t *settings,
                                 turbo_flow_config_error_t *error) {
   char kind[TURBO_FLOW_PROTOCOL_OPERATION_MAX + 1u] = {0};
-  int rc = intake_adapter_schema_version(intake, decoder_adapter_name,
-                                         &settings->schema_version, error);
+  int rc =
+      intake_adapter_schema_version(intake, decoder_adapter_name, &settings->schema_version, error);
   if (rc != SALTS_OK) return rc;
   rc = intake_adapter_string(intake, decoder_adapter_name, "protocol_provider",
-                             settings->protocol_provider, sizeof(settings->protocol_provider), error);
+                             settings->protocol_provider, sizeof(settings->protocol_provider),
+                             error);
   if (rc == SALTS_OK)
     rc = intake_adapter_string(intake, decoder_adapter_name, "protocol_kind", kind, sizeof(kind),
                                error);
   if (rc == SALTS_OK)
     rc = intake_adapter_string(intake, decoder_adapter_name, "protocol_version",
-                               settings->protocol_version, sizeof(settings->protocol_version), error);
+                               settings->protocol_version, sizeof(settings->protocol_version),
+                               error);
   if (rc == SALTS_OK)
     rc = intake_adapter_string(intake, decoder_adapter_name, "source_id", settings->source_id,
                                sizeof(settings->source_id), error);
@@ -199,8 +167,8 @@ static int intake_read_protocol(const turbo_flow_resolved_adapter_view_t *intake
   rc = intake_adapter_size(intake, decoder_adapter_name, "max_sessions", &settings->max_sessions,
                            error);
   if (rc == SALTS_OK)
-    rc = intake_adapter_size(intake, decoder_adapter_name, "max_frame_size", &settings->max_frame_size,
-                             error);
+    rc = intake_adapter_size(intake, decoder_adapter_name, "max_frame_size",
+                             &settings->max_frame_size, error);
   if (rc == SALTS_OK)
     rc = intake_adapter_size(intake, decoder_adapter_name, "max_pending_claims",
                              &settings->max_pending_claims, error);
@@ -209,11 +177,11 @@ static int intake_read_protocol(const turbo_flow_resolved_adapter_view_t *intake
                              &settings->max_pending_bytes, error);
   if (rc != SALTS_OK || settings->schema_version != 3u) return rc;
 
-  rc = intake_adapter_string(intake, decoder_adapter_name, "mapper_plugin",
-                             settings->mapper_plugin, sizeof(settings->mapper_plugin), error);
+  rc = intake_adapter_string(intake, decoder_adapter_name, "mapper_plugin", settings->mapper_plugin,
+                             sizeof(settings->mapper_plugin), error);
   if (rc == SALTS_OK)
-    rc = intake_adapter_string(intake, decoder_adapter_name, "mapper_name",
-                               settings->mapper_name, sizeof(settings->mapper_name), error);
+    rc = intake_adapter_string(intake, decoder_adapter_name, "mapper_name", settings->mapper_name,
+                               sizeof(settings->mapper_name), error);
   if (rc == SALTS_OK)
     rc = intake_adapter_string(intake, decoder_adapter_name, "mapper_profile",
                                settings->mapper_profile, sizeof(settings->mapper_profile), error);
@@ -246,10 +214,12 @@ static int intake_validate_pairing(const flow_protocol_network_intake_settings_t
   if (settings->protocol_kind == TURBO_FLOW_PROTOCOL_JTT_808) {
     if (settings->transport_kind != FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP ||
         strcmp(settings->protocol_provider, "jtt808") != 0)
-      return intake_config_field_error(error, SALTS_EINVAL, decoder_adapter_name, "protocol_provider",
-                                       "jtt808 requires the jtt808 provider and TCP listener source");
+      return intake_config_field_error(
+          error, SALTS_EINVAL, decoder_adapter_name, "protocol_provider",
+          "jtt808 requires the jtt808 provider and TCP listener source");
     if (strcmp(settings->protocol_version, "2019-A1") != 0)
-      return intake_config_field_error(error, SALTS_ENOTSUP, decoder_adapter_name, "protocol_version",
+      return intake_config_field_error(error, SALTS_ENOTSUP, decoder_adapter_name,
+                                       "protocol_version",
                                        "jtt808 network intake requires version 2019-A1");
     return SALTS_OK;
   }
@@ -257,10 +227,12 @@ static int intake_validate_pairing(const flow_protocol_network_intake_settings_t
   if (settings->protocol_kind == TURBO_FLOW_PROTOCOL_COAP) {
     if (settings->transport_kind != FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP ||
         strcmp(settings->protocol_provider, "coap") != 0)
-      return intake_config_field_error(error, SALTS_EINVAL, decoder_adapter_name, "protocol_provider",
+      return intake_config_field_error(error, SALTS_EINVAL, decoder_adapter_name,
+                                       "protocol_provider",
                                        "coap requires the coap provider and UDP packet source");
     if (strcmp(settings->protocol_version, "RFC7252") != 0)
-      return intake_config_field_error(error, SALTS_ENOTSUP, decoder_adapter_name, "protocol_version",
+      return intake_config_field_error(error, SALTS_ENOTSUP, decoder_adapter_name,
+                                       "protocol_version",
                                        "coap network intake requires version RFC7252");
     return SALTS_OK;
   }
@@ -280,26 +252,22 @@ static int intake_validate_bounds(const flow_protocol_network_intake_settings_t 
       settings->max_frame_size > SIZE_MAX / (settings->max_sessions + 1u))
     return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name, "max_frame_size",
                                      "protocol parser storage bound overflows");
-  if (settings->source_scheduler_max_steps > SIZE_MAX / 2u)
-    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name,
-                                     "max_pending_claims", "source progress bound overflows");
-  required_claims = settings->source_scheduler_max_steps * 2u;
+  required_claims = settings->source_max_messages_per_poll;
   if (settings->max_pending_claims < required_claims)
-    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name,
-                                     "max_pending_claims",
-                                     "pending claim capacity is below the bounded source progress budget");
+    return intake_config_field_error(
+        error, SALTS_ERANGE, decoder_adapter_name, "max_pending_claims",
+        "pending claim capacity is below the bounded source progress budget");
   if (settings->source_max_message_bytes > SIZE_MAX / settings->max_pending_claims)
-    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name,
-                                     "max_pending_bytes", "pending byte budget overflows");
+    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name, "max_pending_bytes",
+                                     "pending byte budget overflows");
   required_bytes = settings->source_max_message_bytes * settings->max_pending_claims;
   if (settings->max_pending_bytes < required_bytes)
-    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name,
-                                     "max_pending_bytes",
+    return intake_config_field_error(error, SALTS_ERANGE, decoder_adapter_name, "max_pending_bytes",
                                      "pending byte capacity is below the bounded claim budget");
   return SALTS_OK;
 }
 
-static int intake_validate_topology(const turbo_flow_t *flow, const char *source_adapter_name,
+static int intake_validate_topology(const turbo_flow_t *flow, const char *source_stage_name,
                                     const char *decoder_adapter_name,
                                     turbo_flow_config_error_t *error) {
   size_t source_index = SIZE_MAX;
@@ -314,7 +282,7 @@ static int intake_validate_topology(const turbo_flow_t *flow, const char *source
   for (size_t i = 0u; i < turbo_flow_stage_count(flow); ++i) {
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(flow, i);
     if (!stage || !stage->adapter_name) continue;
-    if (strcmp(stage->adapter_name, source_adapter_name) == 0) {
+    if (strcmp(stage->name, source_stage_name) == 0) {
       if (!stage->is_source || source_index != SIZE_MAX)
         return intake_config_error(error, SALTS_EINVAL, "$.graph",
                                    "configured intake Source must bind exactly one source stage");
@@ -343,40 +311,34 @@ static int intake_validate_topology(const turbo_flow_t *flow, const char *source
   return SALTS_OK;
 }
 
-int flow_protocol_network_intake_preflight(
-    const turbo_flow_resolved_config_t *resolved, const turbo_flow_t *flow,
-    const char *source_adapter_name, const char *decoder_adapter_name,
-    flow_protocol_network_intake_settings_t *settings, turbo_flow_config_error_t *error) {
-  turbo_flow_resolved_adapter_view_t source = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
+int flow_protocol_network_intake_preflight(const turbo_flow_resolved_config_t *resolved,
+                                           const turbo_flow_t *flow, const char *source_stage_name,
+                                           const char *decoder_adapter_name,
+                                           flow_protocol_network_intake_settings_t *settings,
+                                           turbo_flow_config_error_t *error) {
   turbo_flow_resolved_adapter_view_t intake = TURBO_FLOW_RESOLVED_ADAPTER_VIEW_INIT;
   flow_protocol_network_intake_settings_t current;
-  size_t transport_capacity = 0u;
   int rc;
 
   if (settings) memset(settings, 0, sizeof(*settings));
-  if (!resolved || !flow || !source_adapter_name || !source_adapter_name[0] ||
-      !decoder_adapter_name || !decoder_adapter_name[0] || !settings || !error ||
-      error->size < sizeof(*error))
+  if (!resolved || !flow || !source_stage_name || !source_stage_name[0] || !decoder_adapter_name ||
+      !decoder_adapter_name[0] || !settings || !error || error->size < sizeof(*error))
     return intake_config_error(error, SALTS_EINVAL, "$.protocol_intake",
                                "invalid network intake preflight arguments");
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   memset(&current, 0, sizeof(current));
 
-  rc = intake_name_copy(source_adapter_name, current.source_adapter_name,
-                        sizeof(current.source_adapter_name));
+  rc = intake_name_copy(source_stage_name, current.source_stage_name,
+                        sizeof(current.source_stage_name));
   if (rc != SALTS_OK)
-    return intake_config_error(error, rc, "$.graph", "source adapter name exceeds bound");
+    return intake_config_error(error, rc, "$.graph", "source stage name exceeds bound");
   rc = intake_name_copy(decoder_adapter_name, current.decoder_adapter_name,
                         sizeof(current.decoder_adapter_name));
   if (rc != SALTS_OK)
     return intake_config_error(error, rc, "$.graph", "intake adapter name exceeds bound");
 
-  rc = intake_validate_topology(flow, source_adapter_name, decoder_adapter_name, error);
+  rc = intake_validate_topology(flow, source_stage_name, decoder_adapter_name, error);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_resolved_config_adapter(resolved, source_adapter_name, &source);
-  if (rc != SALTS_OK)
-    return intake_config_error(error, SALTS_EINVAL, "$.adapters",
-                               "configured network Source adapter is missing");
   rc = turbo_flow_resolved_config_adapter(resolved, decoder_adapter_name, &intake);
   if (rc != SALTS_OK || !intake.kind || strcmp(intake.kind, "protocol.decode") != 0)
     return intake_config_error(error, SALTS_EINVAL, "$.adapters",
@@ -388,14 +350,44 @@ int flow_protocol_network_intake_preflight(
     rc = intake_validate_exact_fields(&intake, decoder_adapter_name, schema_version, error);
     if (rc != SALTS_OK) return rc;
   }
-  rc = intake_read_source(&source, source_adapter_name, &current, &transport_capacity, error);
-  if (rc != SALTS_OK) return rc;
   rc = intake_read_protocol(&intake, decoder_adapter_name, &current, error);
   if (rc != SALTS_OK) return rc;
-  rc = intake_validate_pairing(&current, decoder_adapter_name, error);
-  if (rc != SALTS_OK) return rc;
-  rc = intake_validate_bounds(&current, transport_capacity, decoder_adapter_name, error);
-  if (rc != SALTS_OK) return rc;
+  /* Transport pairing is checked after the canonical provider publishes bounds. */
+  if ((current.protocol_kind == TURBO_FLOW_PROTOCOL_JTT_808 &&
+       strcmp(current.protocol_version, "2019-A1") != 0) ||
+      (current.protocol_kind == TURBO_FLOW_PROTOCOL_COAP &&
+       strcmp(current.protocol_version, "RFC7252") != 0))
+    return intake_config_error(error, SALTS_ENOTSUP, "$.protocol.version",
+                               "unsupported network protocol version");
   *settings = current;
   return SALTS_OK;
+}
+
+int flow_protocol_network_intake_transport_bind(
+    const turbo_flow_source_transport_contract_t *transport,
+    flow_protocol_network_intake_settings_t *settings, turbo_flow_config_error_t *error) {
+  flow_protocol_network_intake_settings_t current;
+  int rc;
+  if (!transport || transport->size != sizeof(*transport) ||
+      transport->version != TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_VERSION || !settings || !error ||
+      error->size < sizeof(*error) || transport->session_capacity == 0u ||
+      transport->max_message_bytes == 0u || transport->max_messages_per_poll == 0u)
+    return intake_config_error(error, SALTS_EINVAL, "$.source.transport",
+                               "invalid Source transport admission contract");
+  current = *settings;
+  if (transport->transport == TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER)
+    current.transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP;
+  else if (transport->transport == TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET)
+    current.transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
+  else
+    return intake_config_error(error, SALTS_ENOTSUP, "$.source.transport",
+                               "network intake requires a TCP listener or UDP Source");
+  current.source_max_message_bytes = transport->max_message_bytes;
+  current.source_max_messages_per_poll = transport->max_messages_per_poll;
+  rc = intake_validate_pairing(&current, current.decoder_adapter_name, error);
+  if (rc == SALTS_OK)
+    rc = intake_validate_bounds(&current, transport->session_capacity, current.decoder_adapter_name,
+                                error);
+  if (rc == SALTS_OK) *settings = current;
+  return rc;
 }

@@ -1,5 +1,7 @@
 # Issue #118 Real Protocol Network Intake Implementation Plan
 
+> Historical v2 design. NetworkIntake v3 replaces the Source adapter-table path with an exact `.flow` stage, Component scope, and typed provider/resource bindings. Current API, migration, retry ownership, and executable examples are documented in [ADR_CNET_PLUGIN](../../../io/cnet/ADR_CNET_PLUGIN.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver installed `TurboFlow::ProtocolNetworkIntake` support for real JT/T 808/TCP and CoAP/UDP input, with durable Inbox admission before business Graph execution, bounded backpressure, transport-generation fencing, deterministic replay identity, and configured CNet output.

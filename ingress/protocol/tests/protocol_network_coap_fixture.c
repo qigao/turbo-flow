@@ -1,4 +1,6 @@
+#include "protocol_network_deployment.h"
 #include "protocol_network_e2e_fixture.h"
+#include "protocol_network_graphs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -10,16 +12,6 @@ static native_io_backend_kind protocol_network_coap_backend(void) {
   return NATIVE_IO_BACKEND_KQUEUE;
 #else
   return NATIVE_IO_BACKEND_EPOLL;
-#endif
-}
-
-static const char *protocol_network_coap_backend_name(void) {
-#if defined(_WIN32)
-  return "iocp";
-#elif defined(__APPLE__)
-  return "kqueue";
-#else
-  return "epoll";
 #endif
 }
 
@@ -51,20 +43,6 @@ static void protocol_network_coap_sent(void *user, cnet_datagram *datagram,
   probe->last_send_status = status;
 }
 
-static void protocol_network_coap_business_stage(void *ctx, const char *stage_name,
-                                                 const char *adapter_name,
-                                                 const turbo_flow_msg_t *message,
-                                                 uint64_t duration_ns, int status) {
-  protocol_network_e2e_business_probe_t *probe =
-      (protocol_network_e2e_business_probe_t *)ctx;
-  (void)adapter_name;
-  (void)message;
-  (void)duration_ns;
-  if (!probe || !stage_name || strcmp(stage_name, "output") != 0) return;
-  ++probe->stage_completions;
-  if (status != SALTS_OK) ++probe->failed_completions;
-}
-
 static int protocol_network_coap_receiver_open(protocol_network_e2e_fixture_t *fixture) {
   cnet_datagram_config config = CNET_DATAGRAM_CONFIG_INIT;
   int rc;
@@ -89,24 +67,21 @@ static int protocol_network_coap_receiver_open(protocol_network_e2e_fixture_t *f
 }
 
 static int protocol_network_coap_host_open(protocol_network_e2e_fixture_t *fixture,
-                                           const char *cnet_module, const char *coap_module,
-                                           const char *durable_module) {
+                                           const char *coap_module) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   int rc;
-  config.module_capacity = 3u;
+  config.module_capacity = 1u;
   config.adapter_provider_capacity = 0u;
   config.resource_provider_capacity = 0u;
   config.protocol_provider_capacity = 1u;
   config.business_provider_capacity = 0u;
-  config.transactional_adapter_provider_capacity = 6u;
-  config.transactional_resource_provider_capacity = 1u;
+  config.transactional_adapter_provider_capacity = 0u;
+  config.transactional_resource_provider_capacity = 0u;
   config.schema_capacity = 0u;
   config.operation_capacity = 0u;
   rc = turbo_flow_plugin_host_create(&config, &fixture->host, &error);
-  if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, cnet_module, &error);
   if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, coap_module, &error);
-  if (rc == SALTS_OK) rc = turbo_flow_plugin_host_load(fixture->host, durable_module, &error);
   if (rc == SALTS_OK)
     rc = turbo_flow_plugin_catalog_snapshot_create(fixture->host, &fixture->catalog, &error);
   return rc;
@@ -115,124 +90,39 @@ static int protocol_network_coap_host_open(protocol_network_e2e_fixture_t *fixtu
 static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture,
                                       protocol_network_e2e_storage_kind_t storage, char *out,
                                       size_t capacity) {
-  const char *backend = protocol_network_coap_backend_name();
-  int written;
-  if (!fixture || !out || capacity == 0u || fixture->receiver_port == 0u) return SALTS_EINVAL;
-  written = snprintf(
-      out, capacity,
-      "version: 1\n"
-      "adapters:\n"
-      "  udp.input:\n"
-      "    kind: cnet.packet_source\n"
-      "    config:\n"
-      "      schema_version: 1\n"
-      "      backend: %s\n"
-      "      packet_mode: udp\n"
-      "      bind_host: \"127.0.0.1\"\n"
-      "      bind_port: 0\n"
-      "      datagram_send_capacity: 4\n"
-      "      request_capacity: 8\n"
-      "      completion_batch_capacity: 4\n"
-      "      max_datagram_bytes: 1024\n"
-      "      receive_buffer_bytes: 1024\n"
-      "      reuse_port: false\n"
-      "      session_capacity: 1\n"
-      "      kcp_mtu: 0\n"
-      "      kcp_send_window: 0\n"
-      "      kcp_receive_window: 0\n"
-      "      kcp_interval_ms: 0\n"
-      "      kcp_fast_resend: 0\n"
-      "      kcp_no_congestion_window: false\n"
-      "      kcp_stream_mode: false\n"
-      "      kcp_send_segment_capacity: 0\n"
-      "      kcp_max_message_bytes: 0\n"
-      "      security_mode: none\n"
-      "      psk_hex: \"\"\n"
-      "      handshake_retry_ms: 0\n"
-      "      fec_backend: none\n"
-      "      fec_data_shards: 0\n"
-      "      fec_parity_shards: 0\n"
-      "      fec_max_payload_bytes: 0\n"
-      "      fec_receive_group_count: 0\n"
-      "      queue_capacity: 8\n"
-      "      max_message_bytes: 1024\n"
-      "      scheduler_capacity: 8\n"
-      "      scheduler_max_steps_per_poll: 32\n"
-      "      first_message_id: 1\n"
-      "      initial_demand: 9\n"
-      "      stop_timeout_ms: 1000\n"
-      "  protocol.decode:\n"
-      "    kind: protocol.decode\n"
-      "    config:\n"
-      "      schema_version: 2\n"
-      "      protocol_provider: coap\n"
-      "      protocol_kind: coap\n"
-      "      protocol_version: RFC7252\n"
-      "      source_id: coap.primary\n"
-      "      max_sessions: 1\n"
-      "      max_frame_size: 1024\n"
-      "      max_pending_claims: 64\n"
-      "      max_pending_bytes: 65536\n"
-      "  udp.output:\n"
-      "    kind: cnet.datagram_sink\n"
-      "    config:\n"
-      "      schema_version: 1\n"
-      "      backend: %s\n"
-      "      bind_host: \"127.0.0.1\"\n"
-      "      bind_port: 0\n"
-      "      datagram_send_capacity: 4\n"
-      "      request_capacity: 8\n"
-      "      completion_batch_capacity: 4\n"
-      "      max_datagram_bytes: 4096\n"
-      "      receive_buffer_bytes: 4096\n"
-      "      reuse_port: false\n"
-      "      peer_host: \"127.0.0.1\"\n"
-      "      peer_port: %u\n"
-      "      peer_scope_id: 0\n"
-      "      max_message_bytes: 4096\n"
-      "      actor_command_capacity: 8\n"
-      "      actor_max_steps_per_poll: 32\n"
-      "      stop_timeout_ms: 1000\n"
-      "channels:\n"
-      "  intake.store:\n"
-      "    kind: flow.durable.memory\n"
-      "    config:\n"
-      "      schema_version: 1\n"
-      "      identity_mode: stable_required\n"
-      "      max_message_bytes: 4096\n"
-      "      max_records: 8\n"
-      "      max_total_bytes: 32768\n"
-      "      max_record_bytes: 4096\n"
-      "      max_claims: 1\n",
-      backend, backend, (unsigned)fixture->receiver_port);
-  if (written < 0 || (size_t)written >= capacity) return SALTS_ENOSPC;
-  return protocol_network_e2e_storage_rewrite_yaml(fixture, storage, out, capacity);
+  static const char yaml[] =
+      "version: 1\nadapters:\n  protocol.decode:\n    kind: protocol.decode\n    config:\n"
+      "      schema_version: 2\n      protocol_provider: coap\n      protocol_kind: coap\n"
+      "      protocol_version: RFC7252\n      source_id: coap.primary\n      max_sessions: 1\n"
+      "      max_frame_size: 1024\n      max_pending_claims: 64\n      max_pending_bytes: 65536\n";
+  (void)fixture;
+  (void)storage;
+  if (capacity < sizeof(yaml)) return SALTS_ENOSPC;
+  memcpy(out, yaml, sizeof(yaml));
+  return SALTS_OK;
 }
 
 static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fixture) {
-  static const char graph[] = "source wire adapter udp.input\n"
-                              "stage decode adapter protocol.decode\n"
-                              "stage main {\n"
-                              "  wire -> decode\n"
-                              "}\n";
+  const char *graph = protocol_network_packet_graph;
   turbo_flow_protocol_network_intake_config_t config =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
-  turbo_flow_protocol_network_reply_policy_t reply =
-      TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_INIT;
+  turbo_flow_protocol_network_reply_policy_t reply = TURBO_FLOW_PROTOCOL_NETWORK_REPLY_POLICY_INIT;
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_t *flow = turbo_flow_create();
   int rc;
   if (!flow) return SALTS_ENOMEM;
-  rc = turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u);
+  rc = turbo_flow_parse_string(flow, graph, strlen(graph));
   if (rc != SALTS_OK) {
     turbo_flow_destroy(flow);
     return rc;
   }
   config.catalog = fixture->catalog;
   config.resolved = fixture->resolved;
-  config.downstream_flow =
-      turbo_flow_plugin_generation_flow(fixture->business_generation);
-  config.source_adapter_name = "udp.input";
+  config.downstream_flow = turbo_flow_plugin_generation_flow(fixture->business_generation);
+  config.source_stage_name = "wire";
+  config.component_runtime = fixture->component_runtime;
+  config.provider_resolver = &fixture->provider_resolver;
+  config.resource_resolver = &fixture->resource_resolver;
   config.decoder_adapter_name = "protocol.decode";
   config.decoded_source_name = "decoded";
   if (fixture->reply_enabled) {
@@ -242,58 +132,18 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
   }
   rc = turbo_flow_protocol_network_intake_create(&config, &flow, &fixture->intake, &error);
   if (rc != SALTS_OK)
-    (void)fprintf(stderr, "coap e2e intake create rc=%d path=%s reason=%s\n",
-                  rc, error.path, error.message);
+    (void)fprintf(stderr, "coap e2e intake create rc=%d path=%s reason=%s\n", rc, error.path,
+                  error.message);
   if (flow) turbo_flow_destroy(flow);
   return rc;
 }
 
-static int protocol_network_coap_business_open(protocol_network_e2e_fixture_t *fixture) {
-  static const char graph[] = "source decoded\n"
-                              "buffer intake resource intake.store\n"
-                              "stage output adapter udp.output\n"
-                              "stage main {\n"
-                              "  decoded -> intake -> output\n"
-                              "}\n";
-  turbo_flow_plugin_generation_config_t generation_config =
-      TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
-  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-  turbo_flow_observer_ops_t observer;
-  turbo_flow_t *flow = turbo_flow_create();
-  int rc;
-  if (!flow) return SALTS_ENOMEM;
-  rc = turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u);
-  if (rc != SALTS_OK) goto fail;
-  memset(&observer, 0, sizeof(observer));
-  observer.size = sizeof(observer);
-  observer.stage_complete = protocol_network_coap_business_stage;
-  rc = turbo_flow_set_observer(flow, &observer, &fixture->business);
-  if (rc != SALTS_OK) goto fail;
-  generation_config.owner_capacity = 2u;
-  rc = turbo_flow_plugin_generation_create(fixture->catalog, fixture->resolved, &flow,
-                                           &generation_config, NULL,
-                                           &fixture->business_generation,
-                                           &fixture->business_cleanup, &error);
-  if (rc != SALTS_OK) {
-    (void)fprintf(stderr, "coap e2e business generation rc=%d path=%s reason=%s\n",
-                  rc, error.path, error.message);
-    goto fail;
-  }
-  rc = turbo_flow_start(turbo_flow_plugin_generation_flow(fixture->business_generation));
-  if (rc != SALTS_OK) return rc;
-  return SALTS_OK;
-
-fail:
-  if (flow) turbo_flow_destroy(flow);
-  return rc;
-}
-
-static int protocol_network_e2e_coap_init_mode(
-    protocol_network_e2e_fixture_t *fixture,
-    const char *cnet_module, const char *coap_module,
-    const char *durable_module,
-    protocol_network_e2e_storage_kind_t storage,
-    char *turbodb_path, int reply_enabled) {
+static int protocol_network_e2e_coap_init_mode(protocol_network_e2e_fixture_t *fixture,
+                                               const char *cnet_module, const char *coap_module,
+                                               const char *durable_module,
+                                               protocol_network_e2e_storage_kind_t storage,
+                                               char *turbodb_path, int reply_enabled,
+                                               protocol_network_e2e_fixture_t *peer) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   char yaml[16384];
   int rc;
@@ -304,25 +154,29 @@ static int protocol_network_e2e_coap_init_mode(
   fixture->reply_enabled = reply_enabled ? 1 : 0;
   rc = protocol_network_e2e_storage_prepare(fixture, storage, turbodb_path);
   if (rc == SALTS_OK) rc = protocol_network_coap_receiver_open(fixture);
-  if (rc == SALTS_OK)
-    rc = protocol_network_coap_host_open(fixture, cnet_module, coap_module,
-                                         durable_module);
+  if (rc == SALTS_OK) rc = protocol_network_coap_host_open(fixture, coap_module);
+  if (rc == SALTS_OK) {
+    if (peer) fixture->deployment = peer->deployment;
+    rc = protocol_network_deployment_open(fixture, cnet_module, durable_module, 1);
+  }
   if (rc == SALTS_OK) rc = protocol_network_coap_yaml(fixture, storage, yaml, sizeof(yaml));
   if (rc == SALTS_OK)
     rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture->resolved, &error);
-  if (rc == SALTS_OK) rc = protocol_network_coap_business_open(fixture);
+  if (rc == SALTS_OK) rc = protocol_network_e2e_business_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
-  if (rc != SALTS_OK) protocol_network_e2e_destroy(fixture);
+  if (rc != SALTS_OK) {
+    const int cleanup = protocol_network_e2e_destroy(fixture);
+    if (cleanup != SALTS_OK) return cleanup;
+  }
   return rc;
 }
 
-int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture,
-                                   const char *cnet_module, const char *coap_module,
-                                   const char *durable_module,
+int protocol_network_e2e_coap_init(protocol_network_e2e_fixture_t *fixture, const char *cnet_module,
+                                   const char *coap_module, const char *durable_module,
                                    protocol_network_e2e_storage_kind_t storage,
                                    char *turbodb_path) {
-  return protocol_network_e2e_coap_init_mode(
-      fixture, cnet_module, coap_module, durable_module, storage, turbodb_path, 0);
+  return protocol_network_e2e_coap_init_mode(fixture, cnet_module, coap_module, durable_module,
+                                             storage, turbodb_path, 0, NULL);
 }
 
 int protocol_network_e2e_coap_init_reply(protocol_network_e2e_fixture_t *fixture,
@@ -330,8 +184,8 @@ int protocol_network_e2e_coap_init_reply(protocol_network_e2e_fixture_t *fixture
                                          const char *durable_module,
                                          protocol_network_e2e_storage_kind_t storage,
                                          char *turbodb_path) {
-  return protocol_network_e2e_coap_init_mode(
-      fixture, cnet_module, coap_module, durable_module, storage, turbodb_path, 1);
+  return protocol_network_e2e_coap_init_mode(fixture, cnet_module, coap_module, durable_module,
+                                             storage, turbodb_path, 1, NULL);
 }
 
 int protocol_network_e2e_udp_send_frame(protocol_network_e2e_fixture_t *fixture,
@@ -351,4 +205,13 @@ int protocol_network_e2e_udp_send_frame(protocol_network_e2e_fixture_t *fixture,
   peer.port = (uint16_t)port;
   tag = fixture->next_udp_tag++;
   return cnet_datagram_send(&fixture->receiver, &peer, data, size, tag);
+}
+
+int protocol_network_e2e_coap_init_peer(protocol_network_e2e_fixture_t *fixture,
+                                        protocol_network_e2e_fixture_t *peer,
+                                        const char *cnet_module, const char *coap_module,
+                                        const char *durable_module,
+                                        protocol_network_e2e_storage_kind_t storage, char *path) {
+  return protocol_network_e2e_coap_init_mode(fixture, cnet_module, coap_module, durable_module,
+                                             storage, path, 0, peer);
 }

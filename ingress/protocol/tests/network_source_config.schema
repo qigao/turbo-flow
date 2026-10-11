@@ -1,0 +1,5 @@
+schema NetworkSourceFixture [version(1)];
+
+message NetworkSourceConfig {
+  @Max(7) uint32 mode;
+}

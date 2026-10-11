@@ -1,5 +1,7 @@
 # Issue #118 Real Protocol Intake Completion Design
 
+> Historical v2 design. NetworkIntake v3 replaces the Source adapter-table path with an exact `.flow` stage, Component scope, and typed provider/resource bindings. Current API, migration, retry ownership, and executable examples are documented in [ADR_CNET_PLUGIN](../../../io/cnet/ADR_CNET_PLUGIN.md).
+
 Date: 2026-09-15
 
 Parent: #118

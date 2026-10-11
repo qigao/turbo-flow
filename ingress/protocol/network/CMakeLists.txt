@@ -30,10 +30,10 @@ target_include_directories(
   tf_protocol_network_intake
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/turbo_flow/src)
 target_link_libraries(
   tf_protocol_network_intake
-  PUBLIC TurboFlow::Graph TurboFlow::PluginHost
+  PUBLIC TurboFlow::Graph TurboFlow::PluginHost TurboFlow::Product
   PRIVATE tf_protocol_network_intake_core TurboFlow::CNetAdapter
           xxHash::xxhash)
 

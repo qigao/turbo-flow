@@ -7,12 +7,6 @@
 static const char listener_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  tcp.input:\n"
-    "    kind: cnet.listener_source\n"
-    "    config:\n"
-    "      max_connections: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -29,13 +23,6 @@ static const char listener_yaml[] =
 static const char packet_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  udp.input:\n"
-    "    kind: cnet.packet_source\n"
-    "    config:\n"
-    "      packet_mode: udp\n"
-    "      session_capacity: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -52,13 +39,6 @@ static const char packet_yaml[] =
 static const char packet_v3_yaml[] =
     "version: 1\n"
     "adapters:\n"
-    "  udp.input:\n"
-    "    kind: cnet.packet_source\n"
-    "    config:\n"
-    "      packet_mode: udp\n"
-    "      session_capacity: 4\n"
-    "      max_message_bytes: 1024\n"
-    "      scheduler_max_steps_per_poll: 32\n"
     "  protocol.decode:\n"
     "    kind: protocol.decode\n"
     "    config:\n"
@@ -81,14 +61,14 @@ static const char packet_v3_yaml[] =
     "      mapper_max_output_bytes: 2048\n";
 
 static const char listener_graph[] =
-    "source wire adapter tcp.input\n"
+    "source wire adapter cnet.listener_source\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> decode\n"
     "}\n";
 
 static const char packet_graph[] =
-    "source wire adapter udp.input\n"
+    "source wire adapter cnet.packet_source\n"
     "stage decode adapter protocol.decode\n"
     "stage main {\n"
     "  wire -> decode\n"
@@ -136,8 +116,17 @@ static int run_preflight(const char *yaml, const char *graph, const char *source
                          turbo_flow_config_error_t *error) {
   turbo_flow_resolved_config_t *resolved = resolved_yaml(yaml);
   turbo_flow_t *flow = parsed_flow(graph);
-  int rc = flow_protocol_network_intake_preflight(resolved, flow, source_name, "protocol.decode",
+  turbo_flow_source_transport_contract_t transport = TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+  int rc = flow_protocol_network_intake_preflight(resolved, flow, "wire", "protocol.decode",
                                                   settings, error);
+  transport.transport = strcmp(source_name, "tcp.input") == 0
+      ? TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER
+      : (strcmp(source_name, "kcp.input") == 0 ? TURBO_FLOW_SOURCE_TRANSPORT_KCP_PACKET
+                                              : TURBO_FLOW_SOURCE_TRANSPORT_UDP_PACKET);
+  transport.session_capacity = 4u;
+  transport.max_message_bytes = 1024u;
+  transport.max_messages_per_poll = 64u;
+  if (rc == SALTS_OK) rc = flow_protocol_network_intake_transport_bind(&transport, settings, error);
   turbo_flow_destroy(flow);
   turbo_flow_resolved_config_destroy(resolved);
   return rc;
@@ -236,9 +225,7 @@ spec("protocol network intake configuration") {
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ENOTSUP);
 
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(replace_once(packet_yaml, "      packet_mode: udp\n", "      packet_mode: kcp\n",
-                             yaml, sizeof(yaml)), SALTS_OK);
-    check_equal(run_preflight(yaml, packet_graph, "udp.input", &settings, &error), SALTS_ENOTSUP);
+    check_equal(run_preflight(packet_yaml, packet_graph, "kcp.input", &settings, &error), SALTS_ENOTSUP);
   }
 
   it("rejects zero mismatched and insufficient bounds") {
@@ -273,13 +260,73 @@ spec("protocol network intake configuration") {
     check_equal(run_preflight(yaml, listener_graph, "tcp.input", &settings, &error), SALTS_ERANGE);
   }
 
+  it("uses the exact provider message budget rather than scheduler steps") {
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_source_transport_contract_t transport = TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+    check_equal(run_preflight(listener_yaml, listener_graph, "tcp.input", &settings, &error), SALTS_OK);
+    transport.transport = TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+    transport.session_capacity = 4u;
+    transport.max_message_bytes = 1024u;
+    transport.max_messages_per_poll = 64u;
+    check_equal(flow_protocol_network_intake_transport_bind(&transport, &settings, &error), SALTS_OK);
+    check_equal(settings.source_max_messages_per_poll, (size_t)64u);
+    transport.max_messages_per_poll = 65u;
+    check_equal(flow_protocol_network_intake_transport_bind(&transport, &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "max_pending_claims");
+    check_equal(settings.source_max_messages_per_poll, (size_t)64u);
+  }
+
+  it("rejects invalid transport ABI and zero limits without changing settings") {
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_source_transport_contract_t transport = TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+    check_equal(run_preflight(listener_yaml, listener_graph, "tcp.input", &settings, &error), SALTS_OK);
+    transport.transport = TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+    transport.session_capacity = 4u;
+    transport.max_message_bytes = 1024u;
+    transport.max_messages_per_poll = 64u;
+    for (unsigned field = 0u; field < 5u; ++field) {
+      turbo_flow_source_transport_contract_t invalid = transport;
+      switch (field) {
+        case 0u: --invalid.size; break;
+        case 1u: ++invalid.version; break;
+        case 2u: invalid.session_capacity = 0u; break;
+        case 3u: invalid.max_message_bytes = 0u; break;
+        default: invalid.max_messages_per_poll = 0u; break;
+      }
+      check_equal(flow_protocol_network_intake_transport_bind(&invalid, &settings, &error), SALTS_EINVAL);
+      check_equal(settings.source_max_message_bytes, (size_t)1024u);
+      check_equal(settings.source_max_messages_per_poll, (size_t)64u);
+    }
+  }
+
+  it("rejects byte and parser storage overflow before committing transport bounds") {
+    flow_protocol_network_intake_settings_t settings;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    turbo_flow_source_transport_contract_t transport = TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+    check_equal(run_preflight(listener_yaml, listener_graph, "tcp.input", &settings, &error), SALTS_OK);
+    transport.transport = TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+    transport.session_capacity = 4u;
+    transport.max_message_bytes = SIZE_MAX / settings.max_pending_claims + 1u;
+    transport.max_messages_per_poll = 64u;
+    check_equal(flow_protocol_network_intake_transport_bind(&transport, &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "max_pending_bytes");
+    check_equal(settings.source_max_message_bytes, (size_t)1024u);
+    transport.max_message_bytes = 1024u;
+    transport.session_capacity = SIZE_MAX;
+    settings.max_sessions = SIZE_MAX;
+    check_equal(flow_protocol_network_intake_transport_bind(&transport, &settings, &error), SALTS_ERANGE);
+    check_contains(error.path, "max_frame_size");
+  }
+
   it("rejects wrong adapter names non-parsed flows and non-two-stage topology") {
     flow_protocol_network_intake_settings_t settings;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_resolved_config_t *resolved = resolved_yaml(listener_yaml);
     turbo_flow_t *flow = parsed_flow(listener_graph);
     static const char extra_graph[] =
-        "source wire adapter tcp.input\n"
+        "source wire adapter cnet.listener_source\n"
         "stage middle\n"
         "stage decode adapter protocol.decode\n"
         "stage main {\n"
@@ -292,11 +339,11 @@ spec("protocol network intake configuration") {
                                                        &settings, &error),
                 SALTS_EINVAL);
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(flow_protocol_network_intake_preflight(resolved, extra, "tcp.input",
+    check_equal(flow_protocol_network_intake_preflight(resolved, extra, "wire",
                                                        "protocol.decode", &settings, &error),
                 SALTS_EINVAL);
     error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(flow_protocol_network_intake_preflight(resolved, unparsed, "tcp.input",
+    check_equal(flow_protocol_network_intake_preflight(resolved, unparsed, "wire",
                                                        "protocol.decode", &settings, &error),
                 SALTS_EINVAL);
 

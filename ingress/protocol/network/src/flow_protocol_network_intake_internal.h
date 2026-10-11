@@ -22,7 +22,7 @@ typedef struct flow_protocol_network_intake_settings_s {
   char protocol_provider[TURBO_FLOW_PROTOCOL_OPERATION_MAX + 1u];
   char protocol_version[TURBO_FLOW_PROTOCOL_VERSION_MAX + 1u];
   char source_id[TURBO_FLOW_DURABLE_SOURCE_ID_MAX + 1u];
-  char source_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  char source_stage_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
   char decoder_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
   uint32_t schema_version;
   char mapper_plugin[TURBO_FLOW_CONFIG_PLUGIN_ID_MAX + 1u];
@@ -37,7 +37,7 @@ typedef struct flow_protocol_network_intake_settings_s {
   size_t max_frame_size;
   size_t max_pending_claims;
   size_t max_pending_bytes;
-  size_t source_scheduler_max_steps;
+  size_t source_max_messages_per_poll;
   size_t source_max_message_bytes;
   turbo_flow_protocol_network_reply_point_t reply_point;
   size_t reply_max_encoded_bytes;
@@ -71,8 +71,13 @@ typedef struct flow_protocol_network_intake_sink_config_s {
 
 int flow_protocol_network_intake_preflight(
     const turbo_flow_resolved_config_t *resolved, const turbo_flow_t *flow,
-    const char *source_adapter_name, const char *decoder_adapter_name,
+    const char *source_stage_name, const char *decoder_adapter_name,
     flow_protocol_network_intake_settings_t *settings, turbo_flow_config_error_t *error);
+
+int flow_protocol_network_intake_transport_bind(
+    const turbo_flow_source_transport_contract_t *transport,
+    flow_protocol_network_intake_settings_t *settings,
+    turbo_flow_config_error_t *error);
 
 int flow_protocol_network_intake_sink_create(
     const flow_protocol_network_intake_sink_config_t *config,

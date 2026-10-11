@@ -388,13 +388,13 @@ intake_test_settings(turbo_flow_protocol_kind_t kind) {
          kind == TURBO_FLOW_PROTOCOL_JTT_808 ? sizeof("2019-A1") : sizeof("RFC7252"));
   memcpy(settings.source_id, kind == TURBO_FLOW_PROTOCOL_JTT_808 ? "fleet.test" : "coap.test",
          kind == TURBO_FLOW_PROTOCOL_JTT_808 ? sizeof("fleet.test") : sizeof("coap.test"));
-  memcpy(settings.source_adapter_name, "wire.input", sizeof("wire.input"));
+  memcpy(settings.source_stage_name, "input", sizeof("input"));
   memcpy(settings.decoder_adapter_name, "protocol.decode", sizeof("protocol.decode"));
   settings.max_sessions = 1u;
   settings.max_frame_size = 64u;
   settings.max_pending_claims = 4u;
   settings.max_pending_bytes = 256u;
-  settings.source_scheduler_max_steps = 2u;
+  settings.source_max_messages_per_poll = 2u;
   settings.source_max_message_bytes = 64u;
   return settings;
 }
@@ -417,13 +417,11 @@ static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
     const turbo_flow_protocol_mapper_contract_t *mapper_contract,
     intake_reply_probe_t *reply_probe,
     turbo_flow_t **downstream_out, turbo_flow_durable_buffer_binding_t **binding_out) {
-  static const char graph[] = "source input\n"
-                              "stage decode adapter protocol.decode\n"
-                              "stage main {\n"
-                              "  input -> decode\n"
-                              "}\n";
+  const char *graph = reply_probe
+      ? "source input adapter fixture.reply\nstage decode adapter protocol.decode\nstage main {\n  input -> decode\n}\n"
+      : "source input\nstage decode adapter protocol.decode\nstage main {\n  input -> decode\n}\n";
   static const char downstream_graph[] = "source decoded\n"
-                                         "buffer intake provider flow.durable.memory resource protocol.store\n"
+                                         "buffer intake provider flow.durable.memory resource protocol_store\n"
                                          "stage main {\n"
                                          "  decoded -> intake\n"
                                          "}\n";
@@ -437,7 +435,7 @@ static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
   check_equal(turbo_flow_parse_string(downstream, downstream_graph,
                                       sizeof(downstream_graph) - 1u),
               SALTS_OK);
-  binding_config.resource_name = "protocol.store";
+  binding_config.resource_name = "protocol_store";
   binding_config.inbox = inbox;
   binding_config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
   binding_config.max_message_bytes = 4096u;
@@ -445,7 +443,7 @@ static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
   check_not_null(*binding_out);
   check_equal(turbo_flow_compile(downstream), SALTS_OK);
   check_equal(turbo_flow_start(downstream), SALTS_OK);
-  check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+  check_equal(turbo_flow_parse_string(flow, graph, strlen(graph)), SALTS_OK);
   if (reply_probe) {
     turbo_flow_adapter_ops_t adapter = {0};
     turbo_flow_adapter_schema_t schema = {0};
@@ -454,16 +452,21 @@ static turbo_flow_t *intake_test_flow_with_mapper_and_reply(
     schema.kind = TURBO_FLOW_ADAPTER_KIND_CUSTOM;
     schema.roles = TURBO_FLOW_ADAPTER_SOURCE;
     schema.direction = TURBO_FLOW_ADAPTER_INPUT;
-    check_equal(turbo_flow_register_adapter_ex(
-                    flow, settings->source_adapter_name,
-                    &adapter, reply_probe, &schema),
-                SALTS_OK);
+    const char *stages[] = {settings->source_stage_name};
+    turbo_flow_provider_adapter_registration_v1_t registration = TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+    registration.provider_identity = "fixture.reply";
+    registration.stage_names = stages;
+    registration.stage_count = 1u;
+    registration.adapter_ops = &adapter;
+    registration.schema = &schema;
+    registration.ctx = reply_probe;
+    check_equal(turbo_flow_provider_adapter_register(flow, &registration), SALTS_OK);
     reply.capture = intake_reply_capture;
     reply.send = intake_reply_send;
     reply.take_terminal = intake_reply_take;
     reply.send_slices = intake_reply_send_slices;
-    check_equal(turbo_flow_register_adapter_transport_reply(
-                    flow, settings->source_adapter_name, &reply, reply_probe),
+    check_equal(turbo_flow_provider_adapter_transport_reply_register(
+                    flow, settings->source_stage_name, &reply, reply_probe),
                 SALTS_OK);
   }
   memset(&config, 0, sizeof(config));

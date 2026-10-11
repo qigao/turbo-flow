@@ -121,10 +121,20 @@ cmake_add_test(
 set_tests_properties(test_protocol_network_intake_edges
                      PROPERTIES LABELS "protocol-ingress;network-intake;inbox")
 
+salts_idl_target(
+  TARGET protocol_network_source_config
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/network_source_config.schema"
+  ARTIFACT_NAME "network_source_config"
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
+
 add_library(test_protocol_network_source_fixture SHARED
             protocol_network_source_fixture.c)
-target_link_libraries(test_protocol_network_source_fixture PRIVATE TurboFlow::PluginHost)
-target_compile_definitions(test_protocol_network_source_fixture PRIVATE TURBO_FLOW_PLUGIN_BUILD)
+target_link_libraries(test_protocol_network_source_fixture PRIVATE
+  TurboFlow::Product Salts::Plugin ${protocol_network_source_config_NATIVE_TARGET})
+target_include_directories(test_protocol_network_source_fixture PRIVATE
+  ${protocol_network_source_config_GENERATED_DIR})
+add_dependencies(test_protocol_network_source_fixture protocol_network_source_config_idl_codegen)
 set_target_properties(
   test_protocol_network_source_fixture
   PROPERTIES C_VISIBILITY_PRESET hidden
@@ -143,31 +153,49 @@ add_dependencies(test_protocol_network_intake test_protocol_network_source_fixtu
 set_tests_properties(test_protocol_network_intake
                      PROPERTIES LABELS "protocol-ingress;network-intake;plugin")
 
+add_library(test_protocol_network_deployment MODULE protocol_network_deployment_fixture.c)
+target_link_libraries(test_protocol_network_deployment PRIVATE
+  TurboFlow::CNetAdapter Salts::Plugin)
+target_include_directories(test_protocol_network_deployment PRIVATE
+  ${PROJECT_SOURCE_DIR}/io/durable/include)
+set_target_properties(test_protocol_network_deployment PROPERTIES
+  C_VISIBILITY_PRESET hidden FOLDER "ingress/protocol/tests/plugin-fixtures")
+if(TARGET tf_turbodb_plugin)
+  target_link_libraries(test_protocol_network_deployment PRIVATE TurboFlow::TurboDbAdapter)
+  target_include_directories(test_protocol_network_deployment PRIVATE
+    ${PROJECT_SOURCE_DIR}/io/turbodb/tests)
+  target_compile_definitions(test_protocol_network_deployment PRIVATE
+    FLOW_E2E_RESOURCE_TURBODB=1
+    FLOW_TURBODB_SQLITE_DRIVER="${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_MODULE_SUFFIX}")
+endif()
+
 cmake_add_test(
   test_protocol_network_jtt808
-  SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c
+  SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c protocol_network_deployment.c
   LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
   DEFS
+    FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
     FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
     FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
     FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_jtt808 tf_cnet_plugin tf_protocol_jtt808
+add_dependencies(test_protocol_network_jtt808 test_protocol_network_deployment tf_cnet_plugin tf_protocol_jtt808
                  tf_durable_memory_plugin)
 set_tests_properties(test_protocol_network_jtt808
                      PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
 
 cmake_add_test(
   test_protocol_network_coap
-  SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
+  SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c protocol_network_deployment.c
           protocol_network_coap_fixture.c
   LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
   DEFS
+    FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
     FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
     FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
     FLOW_DURABLE_MEMORY_PLUGIN_MODULE="$<TARGET_FILE:tf_durable_memory_plugin>"
   FOLDER "ingress/protocol/tests")
-add_dependencies(test_protocol_network_coap tf_cnet_plugin tf_protocol_coap
+add_dependencies(test_protocol_network_coap test_protocol_network_deployment tf_cnet_plugin tf_protocol_coap
                  tf_durable_memory_plugin)
 set_tests_properties(test_protocol_network_coap
                      PROPERTIES LABELS "protocol-ingress;network-intake;e2e;cnet")
@@ -176,16 +204,17 @@ set_tests_properties(test_protocol_network_coap
 if(TARGET tf_turbodb_plugin)
   cmake_add_test(
     test_protocol_network_jtt808_turbodb
-    SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c
+    SOURCES test_protocol_network_jtt808.c protocol_network_e2e_fixture.c protocol_network_deployment.c
     LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost TurboFlow::TurboDbAdapter
          Salts::CNet Salts::TinyTest
     DEFS
+    FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
       FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
       FLOW_PROTOCOL_JTT808_MODULE="$<TARGET_FILE:tf_protocol_jtt808>"
       FLOW_TURBODB_PLUGIN_MODULE="$<TARGET_FILE:tf_turbodb_plugin>"
       FLOW_E2E_DURABLE_TURBODB=1
     FOLDER "ingress/protocol/tests")
-  add_dependencies(test_protocol_network_jtt808_turbodb tf_cnet_plugin tf_protocol_jtt808
+  add_dependencies(test_protocol_network_jtt808_turbodb test_protocol_network_deployment tf_cnet_plugin tf_protocol_jtt808
                    tf_turbodb_plugin)
   set_tests_properties(
     test_protocol_network_jtt808_turbodb
@@ -193,17 +222,18 @@ if(TARGET tf_turbodb_plugin)
 
   cmake_add_test(
     test_protocol_network_coap_turbodb
-    SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c
+    SOURCES test_protocol_network_coap.c protocol_network_e2e_fixture.c protocol_network_deployment.c
             protocol_network_coap_fixture.c
     LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost TurboFlow::TurboDbAdapter
          Salts::CNet Salts::TinyTest
     DEFS
+    FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
       FLOW_CNET_PLUGIN_MODULE="$<TARGET_FILE:tf_cnet_plugin>"
       FLOW_PROTOCOL_COAP_MODULE="$<TARGET_FILE:tf_protocol_coap>"
       FLOW_TURBODB_PLUGIN_MODULE="$<TARGET_FILE:tf_turbodb_plugin>"
       FLOW_E2E_DURABLE_TURBODB=1
     FOLDER "ingress/protocol/tests")
-  add_dependencies(test_protocol_network_coap_turbodb tf_cnet_plugin tf_protocol_coap
+  add_dependencies(test_protocol_network_coap_turbodb test_protocol_network_deployment tf_cnet_plugin tf_protocol_coap
                    tf_turbodb_plugin)
   set_tests_properties(
     test_protocol_network_coap_turbodb
@@ -253,4 +283,28 @@ if(TARGET tf_protocol_business_ocpp201_core)
   set_tests_properties(
     test_protocol_business_ocpp201_core_schema
     PROPERTIES LABELS "protocol-ingress;protocol-business;databind")
+endif()
+
+# This integration is registered after all participating provider targets exist.
+if(TARGET tf_rulesforge_provider AND TARGET tf_applicant_mapper_provider)
+  cmake_add_test(test_flow_rulesforge_durable_network
+    SOURCES ${PROJECT_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_durable_network.c
+            protocol_network_deployment.c
+    LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
+    INCLUDES ${PROJECT_SOURCE_DIR}/plugins/rulesforge/include
+             ${PROJECT_SOURCE_DIR}/plugins/applicant_mapper/include
+             ${CMAKE_CURRENT_SOURCE_DIR}
+    DEFS FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>"
+         TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"
+         TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>"
+         FLOW_PROTOCOL_JTT808_PLUGIN="$<TARGET_FILE:tf_protocol_jtt808>"
+         FLOW_PROTOCOL_COAP_PLUGIN="$<TARGET_FILE:tf_protocol_coap>"
+         FLOW_APPLICANT_MAPPER_PLUGIN="$<TARGET_FILE:tf_applicant_mapper_provider>"
+         FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
+    FOLDER "ingress/protocol/tests")
+  add_dependencies(test_flow_rulesforge_durable_network
+    tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin tf_protocol_jtt808
+    tf_protocol_coap tf_applicant_mapper_provider test_protocol_network_deployment)
+  set_tests_properties(test_flow_rulesforge_durable_network PROPERTIES
+    LABELS "graph;plugin;abi3;materializer;durable;cnet;network-intake" TIMEOUT 30)
 endif()

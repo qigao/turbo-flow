@@ -44,7 +44,8 @@ set_target_properties(tf_protocol_plugin_support PROPERTIES
 target_include_directories(
   tf_protocol_plugin_support
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(tf_protocol_plugin_support PUBLIC TurboFlow::ProtocolIngress)
+target_link_libraries(tf_protocol_plugin_support
+                      PUBLIC TurboFlow::ProtocolIngress Salts::CFlow)
 
 function(turbo_flow_add_protocol target_name export_name source_file)
   add_library(${target_name} SHARED ${source_file})

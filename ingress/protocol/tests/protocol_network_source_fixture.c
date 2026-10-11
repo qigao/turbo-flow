@@ -1,4 +1,7 @@
-#include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_provider.h"
+#include "network_source_config_native.h"
+#include <salts/plugin.h>
+#include <salts/thread.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,16 +10,11 @@
 typedef struct network_source_fixture_root_s network_source_fixture_root_t;
 typedef struct network_source_fixture_owner_s network_source_fixture_owner_t;
 
-typedef struct network_source_fixture_provider_s {
-  network_source_fixture_root_t *root;
-} network_source_fixture_provider_t;
-
 struct network_source_fixture_root_s {
-  const turbo_flow_plugin_host_v1_t *host;
-  network_source_fixture_provider_t provider;
   network_source_fixture_owner_t *owner;
-  int quiesced;
+  int started;
 };
+static network_source_fixture_root_t root;
 
 struct network_source_fixture_owner_s {
   network_source_fixture_root_t *root;
@@ -25,6 +23,9 @@ struct network_source_fixture_owner_s {
   int quiesced;
   int status;
   uint64_t polls;
+  uint32_t mode;
+  unsigned drain_calls;
+  unsigned shutdown_calls;
 };
 
 static int fixture_metadata(void *ctx, turbo_flow_resource_metadata_t *out) {
@@ -95,7 +96,7 @@ static int fixture_source_start(void *ctx, turbo_flow_t *flow, const turbo_flow_
   (void)flow;
   (void)stage;
   if (!owner || owner->started || owner->quiesced) return SALTS_EBUSY;
-  if (strcmp(owner->name, "start.fail") == 0) {
+  if (owner->mode == 4u) {
     owner->status = SALTS_EIO;
     return SALTS_EIO;
   }
@@ -142,8 +143,10 @@ static int fixture_register_source(network_source_fixture_owner_t *owner, turbo_
   turbo_flow_adapter_schema_t schema = {0};
   turbo_flow_managed_boundary_provider_ops_t boundary =
       TURBO_FLOW_MANAGED_BOUNDARY_PROVIDER_OPS_INIT;
-  turbo_flow_managed_source_registration_t registration =
-      TURBO_FLOW_MANAGED_SOURCE_REGISTRATION_INIT;
+  const char *stages[] = {owner->name};
+  turbo_flow_provider_adapter_registration_v1_t registration = TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
+  turbo_flow_source_transport_contract_t limits = TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT;
+  int rc;
   ops.start = fixture_source_start;
   ops.stop = fixture_source_stop;
   ops.shutdown = fixture_source_shutdown;
@@ -154,13 +157,22 @@ static int fixture_register_source(network_source_fixture_owner_t *owner, turbo_
   boundary.resource.metadata = fixture_metadata;
   boundary.descriptor = fixture_descriptor;
   boundary.snapshot = fixture_boundary_snapshot;
-  registration.adapter_name = owner->name;
+  registration.provider_identity = "fixture.source";
+  registration.stage_names = stages;
+  registration.stage_count = 1u;
   registration.adapter_ops = &ops;
   registration.schema = &schema;
-  registration.owner_name = owner->name;
-  registration.boundary_ops = &boundary;
+  registration.managed_owner_name = owner->name;
+  registration.managed_boundary_ops = &boundary;
   registration.ctx = owner;
-  return turbo_flow_register_managed_source_adapter(flow, &registration);
+  rc = turbo_flow_provider_adapter_register(flow, &registration);
+  if (rc != SALTS_OK) return rc;
+  limits.transport = owner->mode == 7u ? TURBO_FLOW_SOURCE_TRANSPORT_KCP_PACKET
+                                      : TURBO_FLOW_SOURCE_TRANSPORT_TCP_LISTENER;
+  limits.session_capacity = 1u;
+  limits.max_message_bytes = 64u;
+  limits.max_messages_per_poll = 2u;
+  return turbo_flow_provider_adapter_source_transport_register(flow, owner->name, &limits);
 }
 
 static int fixture_owner_quiesce(void *ctx, uint64_t timeout_ms) {
@@ -175,23 +187,23 @@ static int fixture_owner_drain(void *ctx, uint64_t timeout_ms) {
   network_source_fixture_owner_t *owner = (network_source_fixture_owner_t *)ctx;
   (void)timeout_ms;
   if (!owner) return SALTS_EINVAL;
+  if ((owner->mode == 5u || owner->mode == 7u) && owner->drain_calls++ == 0u) return SALTS_EBUSY;
   return owner->started ? SALTS_EBUSY : SALTS_OK;
 }
 
 static int fixture_owner_shutdown(void *ctx) {
   network_source_fixture_owner_t *owner = (network_source_fixture_owner_t *)ctx;
   if (!owner || !owner->quiesced || owner->started) return SALTS_EBUSY;
+  if (owner->mode == 6u && owner->shutdown_calls++ == 0u) return SALTS_EBUSY;
   return SALTS_OK;
 }
 
 static void fixture_owner_destroy(void *ctx) {
   network_source_fixture_owner_t *owner = (network_source_fixture_owner_t *)ctx;
-  const turbo_flow_plugin_host_v1_t *host;
   if (!owner) return;
-  host = owner->root->host;
   owner->root->owner = NULL;
   memset(owner, 0, sizeof(*owner));
-  host->deallocate(host->ctx, owner);
+  free(owner);
 }
 
 static int fixture_owner_poll(void *ctx, uint32_t timeout_ms) {
@@ -200,149 +212,101 @@ static int fixture_owner_poll(void *ctx, uint32_t timeout_ms) {
   if (!owner || !owner->started || owner->quiesced) return SALTS_EBUSY;
   if (owner->polls == UINT64_MAX) return SALTS_ERANGE;
   ++owner->polls;
-  if (strcmp(owner->name, "poll.fail") == 0) {
+  if (owner->mode == 3u) {
     owner->status = SALTS_EIO;
     return SALTS_EIO;
   }
   return SALTS_OK;
 }
 
-static int fixture_preflight(void *ctx, const turbo_flow_resolved_config_t *resolved,
-                             const char *name, turbo_flow_config_error_t *error) {
-  network_source_fixture_provider_t *provider = (network_source_fixture_provider_t *)ctx;
-  (void)resolved;
-  if (!provider || !provider->root || provider->root->quiesced || !name || !name[0])
-    return SALTS_EINVAL;
-  if (strcmp(name, "preflight.fail") == 0) {
-    if (error && error->size >= sizeof(*error)) {
-      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-      error->status = SALTS_EIO;
-      (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.fixture_preflight", name);
-    }
-    return SALTS_EIO;
-  }
+CMETA_IMPLEMENTS(turbo_flow_runtime_owner, fixture_runtime,
+    TURBO_FLOW_RUNTIME_OWNER_CONTROL_THREAD | TURBO_FLOW_RUNTIME_OWNER_EXTERNAL_POLL,
+    .quiesce = fixture_owner_quiesce, .drain = fixture_owner_drain,
+    .shutdown = fixture_owner_shutdown, .poll = fixture_owner_poll, .destroy = fixture_owner_destroy);
+
+static int fixture_contract(void *ctx, turbo_flow_provider_contract_v1_t *out) {
+  if (ctx != &root || !out || out->size != sizeof(*out)) return SALTS_EINVAL;
+  *out = (turbo_flow_provider_contract_v1_t)TURBO_FLOW_PROVIDER_CONTRACT_V1_INIT;
+  out->config.codec_factory = NetworkSourceFixture_codec_create;
+  out->config.message_artifact = NetworkSourceConfig_native_artifact();
   return SALTS_OK;
+}
+
+static int fixture_preflight(void *ctx, const turbo_flow_provider_instance_v1_t *instance,
+                             turbo_flow_config_error_t *error) {
+  const NetworkSourceConfig_t *config;
+  (void)error;
+  if (ctx != &root || !root.started || !instance || instance->size != sizeof(*instance) ||
+      !instance->instance_name || !instance->config.value ||
+      instance->config.value_bytes != sizeof(NetworkSourceConfig_t)) return SALTS_EINVAL;
+  config = instance->config.value;
+  return config->mode == 1u ? SALTS_EIO : SALTS_OK;
 }
 
 static int fixture_materialize(void *ctx, turbo_flow_t *flow,
-                               const turbo_flow_resolved_config_t *resolved, const char *name,
-                               turbo_flow_plugin_product_owner_v1_t *owner_out,
+                               const turbo_flow_provider_instance_v1_t *instance,
+                               turbo_flow_runtime_owner *owner_out,
                                turbo_flow_config_error_t *error) {
-  network_source_fixture_provider_t *provider = (network_source_fixture_provider_t *)ctx;
   network_source_fixture_owner_t *owner;
-  turbo_flow_plugin_product_owner_v1_t descriptor = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-  size_t name_size;
-  int rc;
-  (void)resolved;
-  if (!provider || !provider->root || !flow || !name || !owner_out ||
-      owner_out->size != sizeof(*owner_out))
-    return SALTS_EINVAL;
-  if (provider->root->owner) return SALTS_EBUSY;
-  if (strcmp(name, "materialize.fail") == 0) {
-    if (error && error->size >= sizeof(*error)) {
-      *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-      error->status = SALTS_EIO;
-      (void)snprintf(error->path, sizeof(error->path), "$.adapters.%s.fixture_materialize", name);
-    }
-    return SALTS_EIO;
-  }
-  name_size = strlen(name);
-  if (name_size == 0u || name_size >= sizeof(owner->name)) return SALTS_ERANGE;
-  owner = (network_source_fixture_owner_t *)provider->root->host->allocate(
-      provider->root->host->ctx, sizeof(*owner));
+  const NetworkSourceConfig_t *config;
+  int rc = fixture_preflight(ctx, instance, error);
+  if (rc != SALTS_OK || !flow || !owner_out) return rc != SALTS_OK ? rc : SALTS_EINVAL;
+  config = instance->config.value;
+  if (config->mode == 2u) return SALTS_EIO;
+  if (root.owner) return SALTS_EBUSY;
+  if (strlen(instance->instance_name) >= sizeof(owner->name)) return SALTS_ERANGE;
+  owner = calloc(1u, sizeof(*owner));
   if (!owner) return SALTS_ENOMEM;
-  memset(owner, 0, sizeof(*owner));
-  owner->root = provider->root;
-  owner->status = SALTS_OK;
-  memcpy(owner->name, name, name_size + 1u);
-  descriptor.flags = TURBO_FLOW_PLUGIN_PRODUCT_OWNER_CONTROL_THREAD |
-                     TURBO_FLOW_PLUGIN_PRODUCT_OWNER_EXTERNAL_POLL;
-  descriptor.ctx = owner;
-  descriptor.quiesce = fixture_owner_quiesce;
-  descriptor.drain = fixture_owner_drain;
-  descriptor.shutdown = fixture_owner_shutdown;
-  descriptor.destroy = fixture_owner_destroy;
-  descriptor.poll = fixture_owner_poll;
-  rc = turbo_flow_plugin_product_owner_publish(owner_out, &descriptor);
-  if (rc != SALTS_OK) goto fail;
+  owner->root = &root;
+  owner->mode = config->mode;
+  memcpy(owner->name, instance->instance_name, strlen(instance->instance_name) + 1u);
   rc = fixture_register_source(owner, flow);
-  if (rc != SALTS_OK) {
-    *owner_out = (turbo_flow_plugin_product_owner_v1_t)TURBO_FLOW_PLUGIN_PRODUCT_OWNER_V1_INIT;
-    goto fail;
-  }
-  provider->root->owner = owner;
-  return SALTS_OK;
-fail:
-  memset(owner, 0, sizeof(*owner));
-  provider->root->host->deallocate(provider->root->host->ctx, owner);
-  return rc;
-}
-
-static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **plugin_out) {
-  network_source_fixture_root_t *root;
-  if (plugin_out) *plugin_out = NULL;
-  if (!host || !plugin_out || host->size != sizeof(*host) || !host->allocate || !host->deallocate)
-    return SALTS_EINVAL;
-  root = (network_source_fixture_root_t *)host->allocate(host->ctx, sizeof(*root));
-  if (!root) return SALTS_ENOMEM;
-  memset(root, 0, sizeof(*root));
-  root->host = host;
-  root->provider.root = root;
-  *plugin_out = root;
+  if (rc != SALTS_OK) { free(owner); return rc; }
+  root.owner = owner;
+  *owner_out = fixture_runtime_as_turbo_flow_runtime_owner(owner);
   return SALTS_OK;
 }
 
-static int fixture_register(void *plugin,
-                            const turbo_flow_plugin_registration_v1_t *registration) {
-  network_source_fixture_root_t *root = (network_source_fixture_root_t *)plugin;
-  turbo_flow_plugin_transactional_adapter_provider_v1_t provider =
-      TURBO_FLOW_PLUGIN_TRANSACTIONAL_ADAPTER_PROVIDER_V1_INIT;
-  if (!root || !registration || registration->size != sizeof(*registration) ||
-      !registration->add_transactional_adapter_provider)
-    return SALTS_EINVAL;
-  provider.kind = "cnet.listener_source";
-  provider.ctx = &root->provider;
-  provider.preflight = fixture_preflight;
-  provider.materialize = fixture_materialize;
-  return registration->add_transactional_adapter_provider(registration->ctx, &provider);
+CMETA_IMPLEMENTS(turbo_flow_provider_factory, fixture_factory, 0u,
+    .contract = fixture_contract, .preflight = fixture_preflight, .materialize = fixture_materialize);
+static turbo_flow_provider_factory factory;
+static cmeta_plugin_export factory_export;
+static cmeta_once_t once = SALTS_ONCE_INIT;
+
+static void fixture_init(void) {
+  factory = fixture_factory_as_turbo_flow_provider_factory(&root);
+  factory_export = (cmeta_plugin_export){
+      .struct_size = CMETA_PLUGIN_EXPORT_SIZE, .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
+      .export_id = "fixture.source", .contract_id = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_ID,
+      .contract_version = TURBO_FLOW_PROVIDER_FACTORY_CONTRACT_VERSION,
+      .value.interface = {.desc = turbo_flow_provider_factory_interface(), .value = &factory}};
 }
-
-static int fixture_quiesce(void *plugin, uint64_t timeout_ms) {
-  network_source_fixture_root_t *root = (network_source_fixture_root_t *)plugin;
-  (void)timeout_ms;
-  if (!root) return SALTS_EINVAL;
-  if (root->owner) return SALTS_EBUSY;
-  root->quiesced = 1;
-  return SALTS_OK;
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_start(void *ctx) {
+  if (ctx != &root || root.owner) return CMETA_PLUGIN_BUSY;
+  root.started = 1;
+  return CMETA_PLUGIN_OK;
 }
-
-static int fixture_shutdown(void *plugin) {
-  network_source_fixture_root_t *root = (network_source_fixture_root_t *)plugin;
-  return root && root->quiesced && !root->owner ? SALTS_OK : SALTS_EBUSY;
+static cmeta_plugin_status CMETA_PLUGIN_CALL fixture_request_stop(void *ctx) {
+  if (ctx != &root) return CMETA_PLUGIN_INVALID_ARGUMENT;
+  root.started = 0;
+  return CMETA_PLUGIN_OK;
 }
-
-static void fixture_destroy(void *plugin) {
-  network_source_fixture_root_t *root = (network_source_fixture_root_t *)plugin;
-  const turbo_flow_plugin_host_v1_t *host;
-  if (!root) return;
-  host = root->host;
-  memset(root, 0, sizeof(*root));
-  host->deallocate(host->ctx, root);
+static bool CMETA_PLUGIN_CALL fixture_is_quiescent(const void *ctx) {
+  return ctx == &root && !root.started && !root.owner;
 }
-
-static const turbo_flow_plugin_api_v1_t fixture_api = {
-    sizeof(turbo_flow_plugin_api_v1_t),
-    TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR,
-    TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
-    "turbo-flow.protocol-network-source-fixture",
-    "1.0.0",
-    TURBO_FLOW_PLUGIN_CAP_TRANSACTIONAL_ADAPTER | TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL,
-    fixture_load,
-    fixture_register,
-    fixture_quiesce,
-    fixture_shutdown,
-    fixture_destroy};
-
-TURBO_FLOW_PLUGIN_ENTRY const turbo_flow_plugin_api_v1_t *turbo_flow_plugin_get_api(void) {
-  return &fixture_api;
+static void CMETA_PLUGIN_CALL fixture_destroy(void *ctx) {
+  if (ctx == &root) memset(&root, 0, sizeof(root));
+}
+static cmeta_plugin_manifest manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE, .abi_version = CMETA_PLUGIN_ABI_VERSION,
+    .plugin_id = "fixture.network.source", .version = {1u, 0u, 0u}, .self = &root,
+    .start = fixture_start, .request_stop = fixture_request_stop,
+    .is_quiescent = fixture_is_quiescent, .destroy = fixture_destroy};
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL cmeta_plugin_query(uint32_t host_abi) {
+  if (host_abi != CMETA_PLUGIN_ABI_VERSION) return NULL;
+  cmeta_once(&once, fixture_init);
+  manifest.exports = &factory_export;
+  manifest.export_count = 1u;
+  return &manifest;
 }

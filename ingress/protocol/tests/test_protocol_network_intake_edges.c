@@ -50,18 +50,19 @@ static turbo_flow_protocol_t *intake_edge_protocol(void) {
 static flow_protocol_network_intake_settings_t intake_edge_settings(void) {
   flow_protocol_network_intake_settings_t settings;
   memset(&settings, 0, sizeof(settings));
+  settings.schema_version = 2u;
   settings.protocol_kind = TURBO_FLOW_PROTOCOL_JTT_808;
   settings.transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP;
   memcpy(settings.protocol_provider, "jtt808", sizeof("jtt808"));
   memcpy(settings.protocol_version, "2019-A1", sizeof("2019-A1"));
   memcpy(settings.source_id, "fleet.edge", sizeof("fleet.edge"));
-  memcpy(settings.source_adapter_name, "wire.input", sizeof("wire.input"));
+  memcpy(settings.source_stage_name, "input", sizeof("input"));
   memcpy(settings.decoder_adapter_name, "protocol.decode", sizeof("protocol.decode"));
   settings.max_sessions = 1u;
   settings.max_frame_size = 64u;
   settings.max_pending_claims = 4u;
   settings.max_pending_bytes = 256u;
-  settings.source_scheduler_max_steps = 2u;
+  settings.source_max_messages_per_poll = 2u;
   settings.source_max_message_bytes = 64u;
   return settings;
 }
@@ -87,7 +88,7 @@ static turbo_flow_t *intake_edge_flow(
                               "  input -> decode\n"
                               "}\n";
   static const char downstream_graph[] = "source decoded\n"
-                                         "buffer intake resource protocol.store\n"
+                                         "buffer intake provider flow.durable.memory resource protocol_store\n"
                                          "stage main {\n"
                                          "  decoded -> intake\n"
                                          "}\n";
@@ -101,7 +102,7 @@ static turbo_flow_t *intake_edge_flow(
   check_equal(turbo_flow_parse_string(downstream, downstream_graph,
                                       sizeof(downstream_graph) - 1u),
               SALTS_OK);
-  binding_config.resource_name = "protocol.store";
+  binding_config.resource_name = "protocol_store";
   binding_config.inbox = inbox;
   binding_config.identity_mode = TURBO_FLOW_DURABLE_IDENTITY_STABLE_REQUIRED;
   binding_config.max_message_bytes = 4096u;
@@ -186,10 +187,23 @@ static int intake_edge_publish(turbo_flow_t *flow, turbo_flow_msg_t *message,
   return rc;
 }
 
+static void intake_edge_wait_pending(flow_protocol_network_intake_sink_t *sink,
+                                     size_t count) {
+  flow_protocol_network_intake_sink_metrics_t metrics;
+  for (size_t i = 0u; i < 5000u; ++i) {
+    flow_protocol_network_intake_sink_metrics(sink, &metrics);
+    if (metrics.pending_claims == count && metrics.backpressured) return;
+    cmeta_sleep_ms(1u);
+  }
+  check_equal(metrics.pending_claims, count);
+  check_true(metrics.backpressured);
+}
+
 static turbo_flow_inbox_record_t intake_edge_prefill(void) {
   turbo_flow_inbox_record_t record;
   turbo_flow_inbox_record_init(&record);
   record.source_id = vstr_from_buf("prefill", sizeof("prefill") - 1u);
+  record.partition_key = vstr_from_buf("prefill", sizeof("prefill") - 1u);
   record.admission_id = vstr_from_buf("prefill", sizeof("prefill") - 1u);
   record.source_sequence = 1u;
   check_equal(turbo_flow_content_descriptor_init(
@@ -246,6 +260,7 @@ spec("protocol network intake edge ownership") {
     intake_edge_completion_init(&completion);
     message = intake_edge_listener_message(1u, 1u, two_frames, sizeof(two_frames));
     check_equal(intake_edge_publish(flow, &message, &completion), SALTS_OK);
+    intake_edge_wait_pending(sink, 1u);
     memset(&metrics, 0, sizeof(metrics));
     flow_protocol_network_intake_sink_metrics(sink, &metrics);
     check_true(metrics.backpressured);
@@ -290,6 +305,7 @@ spec("protocol network intake edge ownership") {
     intake_edge_completion_init(&first);
     message = intake_edge_listener_message(1u, 1u, first_frame, sizeof(first_frame));
     check_equal(intake_edge_publish(flow, &message, &first), SALTS_OK);
+    intake_edge_wait_pending(sink, 1u);
     flow_protocol_network_intake_sink_metrics(sink, &metrics);
     check_true(metrics.backpressured);
     check_equal(metrics.pending_claims, (size_t)1u);
@@ -298,6 +314,7 @@ spec("protocol network intake edge ownership") {
     intake_edge_completion_init(&second);
     message = intake_edge_listener_message(2u, 1u, second_frame, sizeof(second_frame));
     check_equal(intake_edge_publish(flow, &message, &second), SALTS_OK);
+    intake_edge_wait_pending(sink, 2u);
     flow_protocol_network_intake_sink_metrics(sink, &metrics);
     check_equal(metrics.pending_claims, (size_t)2u);
     check_equal(metrics.frames_admitted, (uint64_t)0u);

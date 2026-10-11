@@ -83,13 +83,42 @@ Publisher 值。正式 UDP 测试将 4 条消息排队，在 steps=1 的一次 p
 先用 `TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT` 初始化。不存在的 stage 返回 `SALTS_ENOENT`，
 已绑定但未提供此能力的 Source 返回 `SALTS_ENOTSUP`；查询失败不覆盖输出。
 
-本步骤先提供并验证 producer 契约。NetworkIntake 仍需在 #274 后续迁移中删除 resolved CNet
-字段读取，使用该契约检查 pending claims/bytes，并保留 compiled instance 和 Component scope。
-不把当前旧 consumer 的 scheduler 预算视为正确的 UDP 容量证明。
+NetworkIntake v3 使用该契约检查 pending claims/bytes，已删除 Source 的 resolved CNet
+字段读取。每个 intake 保留地址稳定的 Component scope、compiled instance 和 runtime owner；
+decoder/protocol/mapper 仍使用其现有 catalog，后续迁移归 #253/#241。
 
 选择复制 adapter 契约，避免 intake 依赖 CNet 私有 typed config 或给所有 factory 增加网络
 专属方法。现有注册结构、factory Interface 和直接使用 CNetAdapter 的调用保持兼容；新查询是
 additive C ABI。回滚需同时回滚依赖该契约的 consumer，不能用读取旧配置作为运行时 fallback。
+
+## NetworkIntake v3 消费端迁移
+
+`source_stage_name` 指向已解析 `.flow` 中的精确 Source stage，例如 `wire`；该 stage 的
+adapter identity 选择 `cnet.listener_source` 或 `cnet.packet_source`。调用方显式传入
+`component_runtime`、provider resolver v2 和 resource resolver v1。Source typed config 由
+MessagePlan 绑定，endpoint/TLS/PSK 由 resource Interface 提供；不再从 YAML adapter table
+选择或配置 CNet。当前协议组合准入 TCP listener/JTT808 和 UDP packet/CoAP，KCP 明确拒绝。
+
+选择复用 compiled provider instance，避免把 provider factory 或原生 CNet owner 复制进
+NetworkIntake。给 CNet 恢复 PluginHost export、在 intake 中保留 resolved field reader 均会
+重新建立第二条配置和发布路径，因此不采用。协议 codec/mapper 的迁移单独推进，避免扩大
+本次 Source 所有权变更。
+
+create 先校验 decoder、typed config 和显式资源，再 materialize Source、登记 decoder、compile。
+reply capability 在 compile 冻结 stage binding 后校验，仍早于 start 和网络 I/O。端点快照通过
+`turbo_flow_provider_adapter_source_connection_snapshot()` 查询同一 stage；reply 也只路由到
+该 stage，避免同 provider 的多个实例错误共享全局 adapter alias。
+
+所有权迁移以 materialize 为界：之前失败，`*intake_flow_io` 仍归调用方；开始 materialize 后
+置 NULL，由 intake 清理。普通失败返回 NULL intake；若回滚清理失败，则返回错误及非 NULL
+retry owner，调用方必须显式 stop/destroy 并检查结果。stop 保留 compiled instance、resource
+lease 和 Component scope；destroy 完成 shutdown、Graph teardown、owner destroy、typed config
+与 resource release 后才释放 scope。任何失败保留尚未完成的清理义务。
+
+这是公开 config/snapshot v3 的布局变更，v2 被拒绝。消费者需同步重新编译、替换 Source
+配置并提供 resolver；decoder 配置暂时保留。回滚必须成套回滚消费者和对应 SDK，不能混用
+v2/v3 布局。可执行迁移示例位于 `ingress/protocol/tests/protocol_network_e2e_fixture.c` 和
+`turbo_flow/tests/test_flow_rulesforge_durable_network.c`。
 
 ## 停止、排空和卸载
 
@@ -119,3 +148,20 @@ Windows 安装把 provider 和 canonical SDK imported targets 声明的 runtime 
 materialization；`test_flow_provider_adapter_binding` 覆盖精确 stage、契约复制、无效 ABI/容量、
 重复登记和 reset；`test_cnet_packet_source` 覆盖真实 UDP 批量交付，listener 套件覆盖 TCP/TLS。
 这些测试的 Windows Release 结果不替代 NetworkIntake 闭环、安装态、其他平台或 sanitizer 验收。
+
+NetworkIntake 正式测试覆盖 v2 拒绝、preflight/materialize 失败、失败创建的 retry owner、
+start/poll 错误和 drain/shutdown 重试。JTT808/CoAP 实网测试分别使用内存与 TurboDB 2.3.4
+资源；RulesForge 组合用 TCP/UDP 两个 Source 驱动同一业务图和 UDP Sink。真实 DSO lease 断言
+覆盖 create/start/stop/destroy：单 intake 的资源 lease 为 3，Source destroy 后为 2，业务图
+destroy 后为 0；双 Source 组合为 4 → 2 → 0，最后释放 Component provider leases 并卸载。
+这些 Windows Release 结果仍不代表其他平台、安装态或 sanitizer qualification 已完成。
+
+2026-10-11 本地验证使用 `win-release-user`、Salts `2.3.0-rc.10`
+（`6ba9868a965f3273cf87ab243dab1884072eb7a3`）和 TurboDB `2.3.4`
+（`a8f849e7cd7193b89a8ade596bf9ef072a0533fc`）。NetworkIntake、provider/config/Component、
+mapper、RulesForge 与实网组合共 16 个 CTest 套件通过；相邻 Plugin generation/CNet 回归
+8/9 通过。仍失败的是 `test_cnet_stream_sink` 的三个 Windows Pipe 用例：当前 SDK 的
+`cnet_send_slicev()` 对 Pipe 返回 `SALTS_ENOTSUP`，未跳过测试或转换发送路径。
+构建和测试日志位于本地 `build/Msvc-Release/274-final-{build,tests}.log` 与
+`274-adjacent-{build,tests}.log`。复验使用同一 user preset 构建上述 targets，再通过 CTest
+选择相同套件；本条记录限定于这组安装 SDK 与 Windows Release。

@@ -1,9 +1,11 @@
+#include "protocol_network_deployment.h"
 #include "protocol_network_e2e_fixture.h"
 #include "tinytest.h"
 
 #include <salts/clock.h>
 
 #include <stdio.h>
+#include <string.h>
 
 #ifndef FLOW_CNET_PLUGIN_MODULE
   #error FLOW_CNET_PLUGIN_MODULE is required
@@ -29,9 +31,9 @@
 
 enum { PROTOCOL_NETWORK_COAP_TIMEOUT_MS = 5000 };
 
-static void protocol_network_coap_wait_admitted(
-    protocol_network_e2e_fixture_t *fixture,
-    turbo_flow_protocol_network_intake_snapshot_t *intake) {
+static void
+protocol_network_coap_wait_admitted(protocol_network_e2e_fixture_t *fixture,
+                                    turbo_flow_protocol_network_intake_snapshot_t *intake) {
   uint64_t deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
   while (intake->frames_admitted == 0u && cmeta_monotonic_ms() < deadline)
     check_equal(protocol_network_e2e_poll(fixture, 1u, intake), SALTS_OK);
@@ -59,9 +61,9 @@ static void protocol_network_coap_admit(protocol_network_e2e_fixture_t *fixture,
 }
 
 static void protocol_network_coap_deliver_business(protocol_network_e2e_fixture_t *fixture) {
-  check_equal(protocol_network_e2e_business_request_and_drive(
-                  fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
-              SALTS_OK);
+  check_equal(
+      protocol_network_e2e_business_request_and_drive(fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
+      SALTS_OK);
   check_equal(fixture->business.stage_completions, 1u);
   check_equal(fixture->business.failed_completions, 0u);
   check_equal(fixture->udp.received, 1u);
@@ -69,25 +71,70 @@ static void protocol_network_coap_deliver_business(protocol_network_e2e_fixture_
 }
 
 spec("real CoAP UDP protocol intake") {
-  it("admits a real UDP packet before business execution and sends only after explicit durable progress") {
+  static protocol_network_e2e_fixture_t fixture, first, second;
+  before_each() {
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&first, 0, sizeof(first));
+    memset(&second, 0, sizeof(second));
+  }
+  after_each() {
+    check_equal(protocol_network_e2e_destroy(&second), SALTS_OK);
+    check_equal(protocol_network_e2e_destroy(&first), SALTS_OK);
+    check_equal(protocol_network_e2e_destroy(&fixture), SALTS_OK);
+  }
+
+  it("retains provider and resource leases until Source and business owners are destroyed") {
+    protocol_network_deployment_lifetime_t lifetime = {0};
+    turbo_flow_protocol_network_intake_snapshot_t snapshot =
+        TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    check_equal(protocol_network_e2e_coap_init(
+                    &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
+                SALTS_OK);
+    check_equal(protocol_network_deployment_lifetime(&fixture, &lifetime), SALTS_OK);
+    check_equal(lifetime.cnet_leases, (size_t)3u);
+    check_equal(lifetime.durable_leases, (size_t)1u);
+    check_equal(lifetime.resource_leases, (size_t)3u);
+    check_equal(lifetime.component_scopes, (size_t)2u);
+    check_equal(protocol_network_e2e_start(&fixture, &snapshot), SALTS_OK);
+    check_equal(turbo_flow_protocol_network_intake_stop(fixture.intake, 1000u), SALTS_OK);
+    check_equal(protocol_network_deployment_lifetime(&fixture, &lifetime), SALTS_OK);
+    check_equal(lifetime.resource_leases, (size_t)3u);
+    check_equal(lifetime.component_scopes, (size_t)2u);
+    check_equal(turbo_flow_protocol_network_intake_destroy(fixture.intake), SALTS_OK);
+    fixture.intake = NULL;
+    check_equal(protocol_network_deployment_lifetime(&fixture, &lifetime), SALTS_OK);
+    check_equal(lifetime.resource_leases, (size_t)2u);
+    check_equal(lifetime.component_scopes, (size_t)1u);
+    check_equal(turbo_flow_plugin_generation_destroy(fixture.business_generation, 1000u, &error),
+                SALTS_OK);
+    fixture.business_generation = NULL;
+    check_equal(protocol_network_deployment_lifetime(&fixture, &lifetime), SALTS_OK);
+    check_equal(lifetime.resource_leases, (size_t)0u);
+    check_equal(lifetime.component_scopes, (size_t)0u);
+    check_equal(lifetime.cnet_leases, (size_t)3u);
+    check_equal(lifetime.durable_leases, (size_t)1u);
+    check_equal(protocol_network_deployment_close(&fixture), SALTS_OK);
+  }
+
+  it("admits a real UDP packet before business execution and sends only after explicit durable "
+     "progress") {
     static const uint8_t coap_get[] = {0x40u, 0x01u, 0x12u, 0x34u};
-    protocol_network_e2e_fixture_t fixture;
-    check_equal(protocol_network_e2e_coap_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
-                                               FLOW_PROTOCOL_COAP_MODULE,
-                                               FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND,
-                                                 FLOW_E2E_STORAGE_PATH()),
+    check_equal(protocol_network_e2e_coap_init(
+                    &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     protocol_network_coap_admit(&fixture, coap_get);
     check_equal(fixture.business.stage_completions, (size_t)0u);
     protocol_network_coap_deliver_business(&fixture);
 
-    protocol_network_e2e_destroy(&fixture);
+    check_equal(protocol_network_e2e_destroy(&fixture), SALTS_OK);
   }
 
-  it("sends codec-owned CoAP ACK on the original UDP session only under explicit durable-admission policy") {
+  it("sends codec-owned CoAP ACK on the original UDP session only under explicit durable-admission "
+     "policy") {
     static const uint8_t coap_get[] = {0x40u, 0x01u, 0x12u, 0x34u};
-    protocol_network_e2e_fixture_t fixture;
     turbo_flow_protocol_network_intake_snapshot_t intake =
         TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
     unsigned port = 0u;
@@ -95,14 +142,13 @@ spec("real CoAP UDP protocol intake") {
 
     check_equal(protocol_network_e2e_coap_init_reply(
                     &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
-                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND,
-                    FLOW_E2E_STORAGE_PATH()),
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
     check_equal(sscanf(intake.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
     check_true(port > 0u && port <= UINT16_MAX);
-    check_equal(protocol_network_e2e_udp_send_frame(
-                    &fixture, intake.source_endpoint, coap_get, sizeof(coap_get)),
+    check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, coap_get,
+                                                    sizeof(coap_get)),
                 SALTS_OK);
 
     deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
@@ -119,33 +165,27 @@ spec("real CoAP UDP protocol intake") {
     check_equal(fixture.udp.last_payload[2], (uint8_t)0x12u);
     check_equal(fixture.udp.last_payload[3], (uint8_t)0x34u);
 
-    check_equal(protocol_network_e2e_business_request_and_drive(
-                    &fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
-                SALTS_OK);
+    check_equal(
+        protocol_network_e2e_business_request_and_drive(&fixture, PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
+        SALTS_OK);
     check_equal(fixture.business.stage_completions, (size_t)1u);
     check_equal(fixture.business.failed_completions, (size_t)0u);
     check_equal(fixture.udp.received, (size_t)2u);
 
-    protocol_network_e2e_destroy(&fixture);
+    check_equal(protocol_network_e2e_destroy(&fixture), SALTS_OK);
   }
 
   it("keeps the same Sink provider type independent across two explicit destination peers") {
     static const uint8_t coap_a[] = {0x40u, 0x01u, 0x00u, 0x11u};
     static const uint8_t coap_b[] = {0x40u, 0x01u, 0x00u, 0x22u};
-    protocol_network_e2e_fixture_t first;
-    protocol_network_e2e_fixture_t second;
 
-    check_equal(protocol_network_e2e_coap_init(&first, FLOW_CNET_PLUGIN_MODULE,
-                                               FLOW_PROTOCOL_COAP_MODULE,
-                                               FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND,
-                                                 FLOW_E2E_STORAGE_PATH()),
+    check_equal(protocol_network_e2e_coap_init(
+                    &first, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
-    check_equal(protocol_network_e2e_coap_init(&second, FLOW_CNET_PLUGIN_MODULE,
-                                               FLOW_PROTOCOL_COAP_MODULE,
-                                               FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                                 FLOW_E2E_STORAGE_KIND,
-                                                 FLOW_E2E_STORAGE_PATH()),
+    check_equal(protocol_network_e2e_coap_init_peer(
+                    &second, &first, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_true(first.receiver_port != 0u);
     check_true(second.receiver_port != 0u);
@@ -163,13 +203,12 @@ spec("real CoAP UDP protocol intake") {
     check_equal(first.udp.received, 1u);
     check_equal(second.udp.received, 1u);
 
-    protocol_network_e2e_destroy(&second);
-    protocol_network_e2e_destroy(&first);
+    check_equal(protocol_network_e2e_destroy(&second), SALTS_OK);
+    check_equal(protocol_network_e2e_destroy(&first), SALTS_OK);
   }
 
 #if defined(FLOW_E2E_DURABLE_TURBODB)
   it("backpressures at a full TurboDB boundary without business execution or memory fallback") {
-    protocol_network_e2e_fixture_t fixture;
     turbo_flow_protocol_network_intake_snapshot_t intake =
         TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_SNAPSHOT_INIT;
     uint8_t frame[] = {0x40u, 0x01u, 0x00u, 0x01u};
@@ -177,11 +216,9 @@ spec("real CoAP UDP protocol intake") {
     size_t sent_before;
     unsigned port = 0u;
 
-    check_equal(protocol_network_e2e_coap_init(&fixture, FLOW_CNET_PLUGIN_MODULE,
-                                               FLOW_PROTOCOL_COAP_MODULE,
-                                               FLOW_E2E_DURABLE_PLUGIN_MODULE,
-                                               FLOW_E2E_STORAGE_KIND,
-                                               FLOW_E2E_STORAGE_PATH()),
+    check_equal(protocol_network_e2e_coap_init(
+                    &fixture, FLOW_CNET_PLUGIN_MODULE, FLOW_PROTOCOL_COAP_MODULE,
+                    FLOW_E2E_DURABLE_PLUGIN_MODULE, FLOW_E2E_STORAGE_KIND, FLOW_E2E_STORAGE_PATH()),
                 SALTS_OK);
     check_equal(protocol_network_e2e_start(&fixture, &intake), SALTS_OK);
     check_equal(sscanf(intake.source_endpoint, "udp://127.0.0.1:%u", &port), 1);
@@ -194,8 +231,7 @@ spec("real CoAP UDP protocol intake") {
                                                       sizeof(frame)),
                   SALTS_OK);
       deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
-      while (intake.frames_admitted < (uint64_t)(i + 1u) &&
-             cmeta_monotonic_ms() < deadline)
+      while (intake.frames_admitted < (uint64_t)(i + 1u) && cmeta_monotonic_ms() < deadline)
         check_equal(protocol_network_e2e_poll(&fixture, 1u, &intake), SALTS_OK);
       check_equal(intake.frames_admitted, (uint64_t)(i + 1u));
       check_true(fixture.udp.sent > sent_before);
@@ -205,9 +241,9 @@ spec("real CoAP UDP protocol intake") {
 
     frame[3] = 0x09u;
     sent_before = fixture.udp.sent;
-    check_equal(protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame,
-                                                    sizeof(frame)),
-                SALTS_OK);
+    check_equal(
+        protocol_network_e2e_udp_send_frame(&fixture, intake.source_endpoint, frame, sizeof(frame)),
+        SALTS_OK);
     deadline = cmeta_monotonic_ms() + PROTOCOL_NETWORK_COAP_TIMEOUT_MS;
     while (intake.state != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_BACKPRESSURED &&
            cmeta_monotonic_ms() < deadline)
@@ -220,7 +256,16 @@ spec("real CoAP UDP protocol intake") {
     check_equal(fixture.business.failed_completions, (size_t)0u);
     check_equal(fixture.udp.received, (size_t)0u);
 
-    protocol_network_e2e_destroy(&fixture);
+    /* Stop cancels the ninth, unadmitted claim. The eight durable records
+     * remain authoritative and must be explicitly drained before teardown. */
+    check_equal(turbo_flow_protocol_network_intake_stop(fixture.intake, 1000u), SALTS_OK);
+    for (size_t i = 0u; i < 8u; ++i)
+      check_equal(protocol_network_e2e_business_request_and_drive(&fixture,
+                                                                  PROTOCOL_NETWORK_COAP_TIMEOUT_MS),
+                  SALTS_OK);
+    check_equal(fixture.business.stage_completions, (size_t)8u);
+    check_equal(fixture.udp.received, (size_t)8u);
+    check_equal(protocol_network_e2e_destroy(&fixture), SALTS_OK);
   }
 #endif
 }

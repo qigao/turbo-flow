@@ -92,21 +92,20 @@ static void intake_counter_add(uint64_t *counter, uint64_t amount) {
 static size_t intake_text_size(const char *text, size_t capacity) {
   size_t size = 0u;
   if (!text) return 0u;
-  while (size < capacity && text[size] != '\0') ++size;
+  while (size < capacity && text[size] != '\0')
+    ++size;
   return size;
 }
 
-static int intake_identity_resolve(
-    flow_protocol_network_intake_sink_t *sink,
-    const turbo_flow_protocol_message_output_t *message,
-    turbo_flow_durable_identity_t *identity) {
+static int intake_identity_resolve(flow_protocol_network_intake_sink_t *sink,
+                                   const turbo_flow_protocol_message_output_t *message,
+                                   turbo_flow_durable_identity_t *identity) {
   const turbo_flow_protocol_metadata_t *metadata;
   const char *protocol_name;
   XXH128_hash_t digest;
   size_t correlation_size;
   int count;
-  if (!sink || !message || !identity ||
-      identity->size != sizeof(*identity) ||
+  if (!sink || !message || !identity || identity->size != sizeof(*identity) ||
       identity->version != TURBO_FLOW_DURABLE_IDENTITY_API_VERSION)
     return SALTS_EINVAL;
   metadata = &message->metadata;
@@ -116,15 +115,14 @@ static int intake_identity_resolve(
     return SALTS_EPROTO;
   digest = XXH3_128bits(message->payload, message->payload_size);
   count = snprintf(sink->admission_id, sizeof(sink->admission_id),
-                   "%s/%s/%" PRIu32 "/%" PRIu64 "/%016" PRIx64 "%016" PRIx64,
-                   protocol_name, metadata->device_id, metadata->message_type, metadata->sequence,
-                   digest.high64, digest.low64);
+                   "%s/%s/%" PRIu32 "/%" PRIu64 "/%016" PRIx64 "%016" PRIx64, protocol_name,
+                   metadata->device_id, metadata->message_type, metadata->sequence, digest.high64,
+                   digest.low64);
   if (count < 0 || (size_t)count >= sizeof(sink->admission_id)) return SALTS_EMSGSIZE;
   correlation_size = intake_text_size(metadata->correlation_id, sizeof(metadata->correlation_id));
   if (correlation_size == sizeof(metadata->correlation_id)) return SALTS_EPROTO;
   *identity = (turbo_flow_durable_identity_t)TURBO_FLOW_DURABLE_IDENTITY_INIT;
-  identity->source_id =
-      vstr_from_buf(sink->settings.source_id, strlen(sink->settings.source_id));
+  identity->source_id = vstr_from_buf(sink->settings.source_id, strlen(sink->settings.source_id));
   identity->admission_id = vstr_from_buf(sink->admission_id, (size_t)count);
   if (correlation_size > 0u)
     identity->correlation = vstr_from_buf(metadata->correlation_id, correlation_size);
@@ -132,18 +130,14 @@ static int intake_identity_resolve(
   return SALTS_OK;
 }
 
-static int intake_mapper_content_exact(
-    const turbo_flow_content_descriptor_t *expected,
-    const turbo_flow_content_descriptor_t *actual) {
-  if (!expected || !actual ||
-      turbo_flow_content_descriptor_check(expected) != SALTS_OK ||
+static int intake_mapper_content_exact(const turbo_flow_content_descriptor_t *expected,
+                                       const turbo_flow_content_descriptor_t *actual) {
+  if (!expected || !actual || turbo_flow_content_descriptor_check(expected) != SALTS_OK ||
       turbo_flow_content_descriptor_check(actual) != SALTS_OK ||
       turbo_flow_content_descriptor_validate(expected, actual) != SALTS_OK)
     return 0;
-  return expected->domain == actual->domain &&
-         expected->profile == actual->profile &&
-         expected->encoding == actual->encoding &&
-         expected->flags == actual->flags &&
+  return expected->domain == actual->domain && expected->profile == actual->profile &&
+         expected->encoding == actual->encoding && expected->flags == actual->flags &&
          expected->schema_version == actual->schema_version &&
          strcmp(expected->media_type, actual->media_type) == 0 &&
          strcmp(expected->schema_name, actual->schema_name) == 0 &&
@@ -151,11 +145,9 @@ static int intake_mapper_content_exact(
          strcmp(expected->identity, actual->identity) == 0;
 }
 
-static int intake_map_business(
-    flow_protocol_network_intake_sink_t *sink,
-    const turbo_flow_protocol_source_admit_request_t *admit,
-    size_t *payload_size,
-    turbo_flow_content_descriptor_t *content) {
+static int intake_map_business(flow_protocol_network_intake_sink_t *sink,
+                               const turbo_flow_protocol_source_admit_request_t *admit,
+                               size_t *payload_size, turbo_flow_content_descriptor_t *content) {
   turbo_flow_protocol_mapper_request_t request = TURBO_FLOW_PROTOCOL_MAPPER_REQUEST_INIT;
   turbo_flow_protocol_mapper_output_t output = TURBO_FLOW_PROTOCOL_MAPPER_OUTPUT_INIT;
   uint8_t *owned_payload;
@@ -205,14 +197,12 @@ static int intake_map_business(
   return SALTS_OK;
 }
 
-static size_t intake_reply_index(const flow_protocol_network_intake_sink_t *sink,
-                                size_t offset) {
+static size_t intake_reply_index(const flow_protocol_network_intake_sink_t *sink, size_t offset) {
   return (sink->reply_head + offset) % sink->settings.max_pending_claims;
 }
 
 static uint8_t *intake_reply_storage(flow_protocol_network_intake_sink_t *sink, size_t index) {
-  if (!sink || !sink->reply_bytes ||
-      index >= sink->settings.max_pending_claims ||
+  if (!sink || !sink->reply_bytes || index >= sink->settings.max_pending_claims ||
       sink->settings.reply_max_encoded_bytes == 0u)
     return NULL;
   return sink->reply_bytes + index * sink->settings.reply_max_encoded_bytes;
@@ -220,14 +210,13 @@ static uint8_t *intake_reply_storage(flow_protocol_network_intake_sink_t *sink, 
 
 static void intake_reply_release_segments(intake_pending_reply_t *reply) {
   if (!reply) return;
-  for (size_t i = 0u; i < reply->segment_count &&
-                      i < TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS; ++i)
+  for (size_t i = 0u; i < reply->segment_count && i < TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS;
+       ++i)
     mem_slice_release(&reply->segments[i]);
   reply->segment_count = 0u;
 }
 
-static int intake_reply_flatten_segments(flow_protocol_network_intake_sink_t *sink,
-                                         size_t index,
+static int intake_reply_flatten_segments(flow_protocol_network_intake_sink_t *sink, size_t index,
                                          intake_pending_reply_t *reply) {
   uint8_t *storage;
   size_t offset = 0u;
@@ -259,8 +248,7 @@ static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
   if (reply_out) *reply_out = NULL;
   if (!sink || !message || !reply_out || !output) return SALTS_EINVAL;
   if (sink->settings.reply_point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) return SALTS_OK;
-  if (!sink->active_reply_session_valid || !message->payload ||
-      message->payload_size == 0u)
+  if (!sink->active_reply_session_valid || !message->payload || message->payload_size == 0u)
     return SALTS_EPROTO;
   if (sink->reply_count >= sink->settings.max_pending_claims) return SALTS_ENOBUFS;
   index = intake_reply_index(sink, sink->reply_count);
@@ -272,17 +260,15 @@ static int intake_reply_prepare(flow_protocol_network_intake_sink_t *sink,
   frame.data = message->payload;
   frame.data_size = message->payload_size;
   frame.device_id = message->metadata.device_id[0] ? message->metadata.device_id : NULL;
-  frame.protocol_version =
-      message->metadata.protocol_version[0] ? message->metadata.protocol_version
-                                            : sink->settings.protocol_version;
+  frame.protocol_version = message->metadata.protocol_version[0]
+                               ? message->metadata.protocol_version
+                               : sink->settings.protocol_version;
 
   if (sink->settings.transport_kind == FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP) {
-    turbo_flow_protocol_frame_slices_output_t vector =
-        TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
+    turbo_flow_protocol_frame_slices_output_t vector = TURBO_FLOW_PROTOCOL_FRAME_SLICES_OUTPUT_INIT;
     vector.segments = reply->segments;
     vector.segment_capacity = TURBO_FLOW_PROTOCOL_REPLY_VECTOR_MAX_SEGMENTS;
-    rc = turbo_flow_protocol_reply_slices(
-        sink->protocol, &frame, SALTS_OK, &vector);
+    rc = turbo_flow_protocol_reply_slices(sink->protocol, &frame, SALTS_OK, &vector);
     if (rc == SALTS_OK) {
       if (vector.data_size > sink->settings.reply_max_encoded_bytes) {
         turbo_flow_protocol_frame_slices_output_release(&vector);
@@ -322,28 +308,27 @@ static void intake_reply_commit(flow_protocol_network_intake_sink_t *sink,
   if (sink->next_reply_tag == 0u) sink->next_reply_tag = 1u;
 }
 
-static int intake_reply_session_equal(
-    const turbo_flow_transport_reply_session_t *lhs,
-    const turbo_flow_transport_reply_session_t *rhs) {
+static int intake_reply_session_equal(const turbo_flow_transport_reply_session_t *lhs,
+                                      const turbo_flow_transport_reply_session_t *rhs) {
   if (!lhs || !rhs || lhs->size != sizeof(*lhs) || rhs->size != sizeof(*rhs) ||
       lhs->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
-      rhs->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION ||
-      lhs->token_size == 0u || lhs->token_size != rhs->token_size ||
+      rhs->version != TURBO_FLOW_TRANSPORT_REPLY_API_VERSION || lhs->token_size == 0u ||
+      lhs->token_size != rhs->token_size ||
       lhs->token_size > TURBO_FLOW_TRANSPORT_REPLY_SESSION_BYTES)
     return 0;
   return memcmp(lhs->token, rhs->token, lhs->token_size) == 0;
 }
 
-static intake_pending_reply_t *intake_reply_inflight_reserve(
-    flow_protocol_network_intake_sink_t *sink) {
+static intake_pending_reply_t *
+intake_reply_inflight_reserve(flow_protocol_network_intake_sink_t *sink) {
   if (!sink || !sink->inflight_replies) return NULL;
   for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i)
     if (sink->inflight_replies[i].tag == 0u) return &sink->inflight_replies[i];
   return NULL;
 }
 
-static intake_pending_reply_t *intake_reply_inflight_find(
-    flow_protocol_network_intake_sink_t *sink, uint64_t tag) {
+static intake_pending_reply_t *intake_reply_inflight_find(flow_protocol_network_intake_sink_t *sink,
+                                                          uint64_t tag) {
   if (!sink || !sink->inflight_replies || tag == 0u) return NULL;
   for (size_t i = 0u; i < sink->settings.max_pending_claims; ++i)
     if (sink->inflight_replies[i].tag == tag) return &sink->inflight_replies[i];
@@ -354,24 +339,21 @@ static int intake_reply_drain_terminals(flow_protocol_network_intake_sink_t *sin
   if (!sink) return SALTS_EINVAL;
   if (sink->settings.reply_point == TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) return SALTS_OK;
   for (;;) {
-    turbo_flow_transport_reply_terminal_t terminal =
-        TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
-    int rc = turbo_flow_transport_reply_take_terminal(
-        sink->flow, sink->settings.source_adapter_name, &terminal);
+    turbo_flow_transport_reply_terminal_t terminal = TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_INIT;
+    int rc = turbo_flow_transport_reply_take_terminal_stage(
+        sink->flow, sink->settings.source_stage_name, &terminal);
     intake_pending_reply_t *expected;
     if (rc == SALTS_ENOENT) return SALTS_OK;
     if (rc != SALTS_OK) return rc;
     if (sink->pending_replies == 0u) return SALTS_EPROTO;
     expected = intake_reply_inflight_find(sink, terminal.tag);
-    if (!expected ||
-        !intake_reply_session_equal(&expected->session, &terminal.session) ||
+    if (!expected || !intake_reply_session_equal(&expected->session, &terminal.session) ||
         expected->data_size != terminal.data_size)
       return SALTS_EPROTO;
     *expected = (intake_pending_reply_t){0};
     --sink->pending_replies;
     intake_counter_add(&sink->reply_terminals, 1u);
-    if (terminal.kind != TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT ||
-        terminal.status != SALTS_OK)
+    if (terminal.kind != TURBO_FLOW_TRANSPORT_REPLY_TERMINAL_SENT || terminal.status != SALTS_OK)
       intake_counter_add(&sink->reply_failures, 1u);
   }
 }
@@ -393,8 +375,8 @@ static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
       request.segments = reply->segments;
       request.segment_count = reply->segment_count;
       request.tag = reply->tag;
-      rc = turbo_flow_transport_reply_send_slices(
-          sink->flow, sink->settings.source_adapter_name, &request);
+      rc = turbo_flow_transport_reply_send_slices_stage(sink->flow,
+                                                        sink->settings.source_stage_name, &request);
       if (rc == SALTS_ENOTSUP) {
         rc = intake_reply_flatten_segments(sink, index, reply);
         if (rc != SALTS_OK) goto reply_failed;
@@ -409,16 +391,14 @@ static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
     }
 
     {
-      turbo_flow_transport_reply_request_t request =
-          TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
+      turbo_flow_transport_reply_request_t request = TURBO_FLOW_TRANSPORT_REPLY_REQUEST_INIT;
       request.session = reply->session;
       request.data = intake_reply_storage(sink, index);
       request.data_size = reply->data_size;
       request.tag = reply->tag;
-      if (!request.data || request.data_size == 0u || request.tag == 0u)
-        return SALTS_EPROTO;
-      rc = turbo_flow_transport_reply_send(
-          sink->flow, sink->settings.source_adapter_name, &request);
+      if (!request.data || request.data_size == 0u || request.tag == 0u) return SALTS_EPROTO;
+      rc = turbo_flow_transport_reply_send_stage(sink->flow, sink->settings.source_stage_name,
+                                                 &request);
     }
     if (rc == SALTS_EBUSY || rc == SALTS_ENOBUFS || rc == SALTS_ENOSPC) {
       sink->reply_backpressured = 1;
@@ -426,15 +406,12 @@ static int intake_reply_drive(flow_protocol_network_intake_sink_t *sink) {
     }
     if (rc != SALTS_OK) goto reply_failed;
 
-reply_admitted:
-    {
-      intake_pending_reply_t *inflight = intake_reply_inflight_reserve(sink);
-      if (!inflight) return SALTS_EPROTO;
-      *inflight = (intake_pending_reply_t){
-          .session = reply->session,
-          .data_size = reply->data_size,
-          .tag = reply->tag};
-    }
+  reply_admitted: {
+    intake_pending_reply_t *inflight = intake_reply_inflight_reserve(sink);
+    if (!inflight) return SALTS_EPROTO;
+    *inflight = (intake_pending_reply_t){
+        .session = reply->session, .data_size = reply->data_size, .tag = reply->tag};
+  }
     intake_reply_release_segments(reply);
     intake_counter_add(&sink->replies_admitted, 1u);
     ++sink->pending_replies;
@@ -443,7 +420,7 @@ reply_admitted:
     --sink->reply_count;
     continue;
 
-reply_failed:
+  reply_failed:
     intake_counter_add(&sink->reply_failures, 1u);
     intake_reply_release_segments(reply);
     memset(reply, 0, sizeof(*reply));
@@ -470,8 +447,7 @@ static int intake_decoded_admit(void *ctx,
       request->delivery_id == 0u || request->session_id == 0u ||
       request->session_generation == 0u || !request->message)
     return SALTS_EINVAL;
-  if ((sink->mapper_bound && !request->semantic) ||
-      (!sink->mapper_bound && request->semantic))
+  if ((sink->mapper_bound && !request->semantic) || (!sink->mapper_bound && request->semantic))
     return SALTS_EPROTO;
 
   rc = intake_identity_resolve(sink, request->message, &identity);
@@ -591,13 +567,14 @@ static int intake_transport_identity(flow_protocol_network_intake_sink_t *sink,
   } else {
     return SALTS_ENOTSUP;
   }
-  if (*generation_out == 0u || (size_t)*slot_out >= sink->settings.max_sessions) return SALTS_EPROTO;
+  if (*generation_out == 0u || (size_t)*slot_out >= sink->settings.max_sessions)
+    return SALTS_EPROTO;
   return SALTS_OK;
 }
 
-static int intake_session_open(flow_protocol_network_intake_sink_t *sink, intake_parser_slot_t *slot,
-                               uint32_t transport_slot, uint64_t generation,
-                               const char *device_id) {
+static int intake_session_open(flow_protocol_network_intake_sink_t *sink,
+                               intake_parser_slot_t *slot, uint32_t transport_slot,
+                               uint64_t generation, const char *device_id) {
   turbo_flow_protocol_source_session_open_request_t request =
       TURBO_FLOW_PROTOCOL_SOURCE_SESSION_OPEN_REQUEST_INIT;
   int rc;
@@ -705,23 +682,23 @@ static int intake_process_front(flow_protocol_network_intake_sink_t *sink) {
     if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
       sink->active_reply_session =
           (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
-      rc = turbo_flow_transport_reply_capture(
-          sink->flow, sink->settings.source_adapter_name, message, &sink->active_reply_session);
+      rc = turbo_flow_transport_reply_capture_stage(sink->flow, sink->settings.source_stage_name,
+                                                    message, &sink->active_reply_session);
       if (rc == SALTS_OK) sink->active_reply_session_valid = 1;
     } else {
       rc = SALTS_OK;
     }
     if (rc == SALTS_OK) {
       if (sink->blocked) {
-        rc = turbo_flow_protocol_source_session_feed(
-            sink->protocol_source, sink->blocked_session_id,
-            sink->blocked_generation, NULL, 0u, &result);
+        rc =
+            turbo_flow_protocol_source_session_feed(sink->protocol_source, sink->blocked_session_id,
+                                                    sink->blocked_generation, NULL, 0u, &result);
       } else {
         rc = intake_session_prepare(sink, message, &session_id, &generation);
         if (rc == SALTS_OK)
           rc = turbo_flow_protocol_source_session_feed(
-              sink->protocol_source, session_id, generation,
-              (const uint8_t *)message->payload.data, message->payload.len, &result);
+              sink->protocol_source, session_id, generation, (const uint8_t *)message->payload.data,
+              message->payload.len, &result);
       }
     }
     sink->active_reply_session_valid = 0;
@@ -871,10 +848,9 @@ static int intake_boundary_descriptor(void *ctx, turbo_flow_managed_boundary_des
   memcpy(descriptor.owner_name, metadata.owner_name, strlen(metadata.owner_name) + 1u);
   descriptor.role_flags = TURBO_FLOW_MANAGED_BOUNDARY_SINK;
   descriptor.capability_flags = 0u;
-  rc = turbo_flow_content_descriptor_init(&descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT,
-                                          TURBO_FLOW_CONTENT_PROFILE_GENERIC,
-                                          TURBO_FLOW_DATA_ENCODING_OPAQUE, INTAKE_MEDIA_TYPE,
-                                          INTAKE_CONTENT_IDENTITY);
+  rc = turbo_flow_content_descriptor_init(
+      &descriptor.input, TURBO_FLOW_DOMAIN_IO_TRANSPORT, TURBO_FLOW_CONTENT_PROFILE_GENERIC,
+      TURBO_FLOW_DATA_ENCODING_OPAQUE, INTAKE_MEDIA_TYPE, INTAKE_CONTENT_IDENTITY);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_content_descriptor_declare_schema(&descriptor.input, INTAKE_SCHEMA_NAME,
                                                     INTAKE_TYPE_NAME, 1u);
@@ -904,7 +880,8 @@ static int intake_boundary_snapshot(void *ctx, turbo_flow_managed_boundary_snaps
   snapshot.accepted = sink->accepted;
   snapshot.completed = sink->completed;
   snapshot.rejected = sink->rejected;
-  snapshot.backpressured = sink->blocked || sink->pending_count >= sink->settings.max_pending_claims;
+  snapshot.backpressured =
+      sink->blocked || sink->pending_count >= sink->settings.max_pending_claims;
   snapshot.last_status = sink->terminal_status;
   *out = snapshot;
   return SALTS_OK;
@@ -953,10 +930,8 @@ int flow_protocol_network_intake_sink_create(
       (config->settings->schema_version != 2u && config->settings->schema_version != 3u) ||
       strcmp(config->adapter_name, config->settings->decoder_adapter_name) != 0 ||
       !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name) ||
-      (config->settings->schema_version == 3u &&
-       (!config->mapper || !config->mapper_contract)) ||
-      (config->settings->schema_version == 2u &&
-       (config->mapper || config->mapper_contract)))
+      (config->settings->schema_version == 3u && (!config->mapper || !config->mapper_contract)) ||
+      (config->settings->schema_version == 2u && (config->mapper || config->mapper_contract)))
     return SALTS_EINVAL;
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||
@@ -973,8 +948,7 @@ int flow_protocol_network_intake_sink_create(
   if (config->mapper_contract &&
       config->mapper_contract->max_semantic_bytes > SIZE_MAX - source_buffer_bytes)
     return SALTS_ERANGE;
-  if (config->mapper_contract)
-    source_buffer_bytes += config->mapper_contract->max_semantic_bytes;
+  if (config->mapper_contract) source_buffer_bytes += config->mapper_contract->max_semantic_bytes;
   sink = (flow_protocol_network_intake_sink_t *)calloc(1u, sizeof(*sink));
   if (!sink) return SALTS_ENOMEM;
   sink->flow = config->flow;
@@ -986,21 +960,17 @@ int flow_protocol_network_intake_sink_create(
     sink->mapper_contract = *config->mapper_contract;
     sink->mapper_bound = 1;
   }
-  sink->max_envelope_bytes = sink->mapper_bound
-                                 ? 0u
-                                 : sink->settings.max_frame_size +
-                                       TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
-  sink->mapped_capacity =
-      sink->mapper_bound ? sink->mapper_contract.max_output_bytes : 0u;
+  sink->max_envelope_bytes =
+      sink->mapper_bound ? 0u
+                         : sink->settings.max_frame_size + TURBO_FLOW_PROTOCOL_ENVELOPE_OVERHEAD;
+  sink->mapped_capacity = sink->mapper_bound ? sink->mapper_contract.max_output_bytes : 0u;
   sink->next_reply_tag = 1u;
   sink->active_reply_session =
       (turbo_flow_transport_reply_session_t)TURBO_FLOW_TRANSPORT_REPLY_SESSION_INIT;
   sink->adapter_name = tstr_dup(config->adapter_name);
   sink->decoded_source_name = tstr_dup(config->decoded_source_name);
-  sink->envelope_scratch =
-      sink->mapper_bound ? NULL : (uint8_t *)malloc(sink->max_envelope_bytes);
-  sink->mapped_scratch =
-      sink->mapper_bound ? (uint8_t *)malloc(sink->mapped_capacity) : NULL;
+  sink->envelope_scratch = sink->mapper_bound ? NULL : (uint8_t *)malloc(sink->max_envelope_bytes);
+  sink->mapped_scratch = sink->mapper_bound ? (uint8_t *)malloc(sink->mapped_capacity) : NULL;
   sink->parser_slots =
       (intake_parser_slot_t *)calloc(sink->settings.max_sessions, sizeof(*sink->parser_slots));
   sink->pending =
@@ -1008,16 +978,15 @@ int flow_protocol_network_intake_sink_create(
   if (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE) {
     sink->replies =
         (intake_pending_reply_t *)calloc(sink->settings.max_pending_claims, sizeof(*sink->replies));
-    sink->inflight_replies = (intake_pending_reply_t *)calloc(
-        sink->settings.max_pending_claims, sizeof(*sink->inflight_replies));
-    sink->reply_bytes = (uint8_t *)calloc(
-        sink->settings.max_pending_claims, sink->settings.reply_max_encoded_bytes);
+    sink->inflight_replies = (intake_pending_reply_t *)calloc(sink->settings.max_pending_claims,
+                                                              sizeof(*sink->inflight_replies));
+    sink->reply_bytes = (uint8_t *)calloc(sink->settings.max_pending_claims,
+                                          sink->settings.reply_max_encoded_bytes);
   }
   sink->terminal_status = SALTS_OK;
   if (!sink->adapter_name || !sink->decoded_source_name ||
       (!sink->mapper_bound && !sink->envelope_scratch) ||
-      (sink->mapper_bound && !sink->mapped_scratch) ||
-      !sink->parser_slots || !sink->pending ||
+      (sink->mapper_bound && !sink->mapped_scratch) || !sink->parser_slots || !sink->pending ||
       (sink->settings.reply_point != TURBO_FLOW_PROTOCOL_NETWORK_REPLY_NONE &&
        (!sink->replies || !sink->inflight_replies || !sink->reply_bytes))) {
     tstr_free(sink->adapter_name);
@@ -1035,14 +1004,13 @@ int flow_protocol_network_intake_sink_create(
   source_config.max_sessions = sink->settings.max_sessions;
   source_config.max_frame_size = sink->settings.max_frame_size;
   source_config.max_buffered_bytes = source_buffer_bytes;
-  source_config.decode_mode = sink->mapper_bound
-                                  ? TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC
-                                  : TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW;
+  source_config.decode_mode = sink->mapper_bound ? TURBO_FLOW_PROTOCOL_SOURCE_DECODE_SEMANTIC
+                                                 : TURBO_FLOW_PROTOCOL_SOURCE_DECODE_RAW;
   source_config.max_semantic_bytes =
       sink->mapper_bound ? sink->mapper_contract.max_semantic_bytes : 0u;
   source_ops.admit = intake_decoded_admit;
-  rc = turbo_flow_protocol_source_create(sink->protocol, &source_config, &source_ops,
-                                         sink, &sink->protocol_source);
+  rc = turbo_flow_protocol_source_create(sink->protocol, &source_config, &source_ops, sink,
+                                         &sink->protocol_source);
   if (rc != SALTS_OK) goto fail;
   *out = sink;
   return SALTS_OK;
@@ -1135,8 +1103,7 @@ void flow_protocol_network_intake_sink_metrics(
   metrics->reply_terminals = sink->reply_terminals;
   metrics->reply_failures = sink->reply_failures;
   metrics->pending_replies = sink->pending_replies + sink->reply_count;
-  metrics->backpressured =
-      sink->blocked || sink->reply_backpressured || sink->reply_count != 0u;
+  metrics->backpressured = sink->blocked || sink->reply_backpressured || sink->reply_count != 0u;
   metrics->terminal_status = sink->terminal_status;
 }
 

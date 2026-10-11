@@ -89,6 +89,8 @@ See [transport-independent business graph design](docs/architecture/transport-in
 
 Protocol decoders validate framing and normalize accepted data into the canonical protocol envelope. Real network intake then publishes that message into the generic durable-buffer boundary; protocol ingress does not own a separate storage runtime.
 
+NetworkIntake v3 selects its Source by the exact `.flow` stage name and receives explicit Component/provider/resource resolvers. CNet Source configuration uses typed provider literals and deployment resource Interfaces. Its compiled instance and generation scope survive stop until final destruction; failed cleanup returns an owner for explicit retry. See the [CNet migration and lifetime contract](io/cnet/ADR_CNET_PLUGIN.md#networkintake-v3-消费端迁移) and the real TCP/UDP integration tests.
+
 Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet/CHTTP-facing adapters. MQTT receive is a Source and MQTT send is a Sink; MQTT is not TurboFlow's internal message format.
 
 ## Authoring boundary
