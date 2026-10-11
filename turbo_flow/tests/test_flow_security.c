@@ -588,37 +588,43 @@ spec("security realm v3") {
     turbo_flow_security_realm_destroy(realm);
   }
 
-  it("creates a fail-closed realm from YAML metadata without ACL bodies") {
-    static const char yaml[] = "version: 1\n"
-                               "channels:\n"
-                               "  security.main:\n"
-                               "    kind: security_realm\n"
-                               "    config:\n"
-                               "      resource_uid: security:main\n"
-                               "      owner_name: security.main\n"
-                               "      policy_source: acl.provider\n"
-                               "adapters: {}\n";
-    static const char bad_yaml[] =
-        "version: 1\nchannels:\n  security.main:\n    kind: security_realm\n"
-        "    config:\n      resource_uid: security:main\n      owner_name: security.main\n"
-        "      policy_source: acl.provider\n      rules: []\n"
-        "adapters: {}\n";
-    turbo_flow_resolved_config_t *resolved = NULL;
-    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+  it("copies deployment realm metadata and stays fail-closed without a bound provider") {
+    char uid[] = "security:main";
+    char owner[] = "security.main";
+    char source[] = "acl.provider";
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
     turbo_flow_security_realm_t *realm = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_resource_metadata_t metadata = TURBO_FLOW_RESOURCE_METADATA_INIT;
     turbo_flow_resource_document_t document = TURBO_FLOW_RESOURCE_DOCUMENT_INIT;
+    turbo_flow_security_principal_t principal = security_principal("root-a", 9u);
+    turbo_flow_security_request_t request = TURBO_FLOW_SECURITY_REQUEST_INIT;
+    turbo_flow_security_decision_t decision = TURBO_FLOW_SECURITY_DECISION_INIT;
     tstr payload;
 
     check_not_null(flow);
-    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
-                 SALTS_OK);
-    check_equal(
-        turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        SALTS_OK);
+    config.resource_uid = uid;
+    config.owner_name = owner;
+    config.policy_source = source;
+    check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_OK);
+    memset(uid, 'x', sizeof(uid) - 1u);
+    memset(owner, 'x', sizeof(owner) - 1u);
+    memset(source, 'x', sizeof(source) - 1u);
+    check_equal(turbo_flow_security_realm_policy_source(realm), "acl.provider");
+    request.principal = &principal;
+    request.domain_id = "root-a";
+    request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
+    request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
+    request.resource = "root-a/telemetry/value";
+    check_equal(turbo_flow_security_realm_evaluate(realm, &request, 100u, &decision), SALTS_OK);
+    check_equal(decision.effect, TURBO_FLOW_SECURITY_DENY);
+    check_equal(decision.reason, TURBO_FLOW_SECURITY_REASON_POLICY_VERSION_MISMATCH);
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_ENOTSUP);
+    check_equal(decision.effect, TURBO_FLOW_SECURITY_DENY);
     check_equal(turbo_flow_security_realm_register(flow, realm), SALTS_OK);
     check_equal(turbo_flow_resource_metadata_at(flow, 0u, &metadata), SALTS_OK);
+    check_equal(metadata.uid, "security:main");
+    check_equal(metadata.owner_name, "security.main");
     check_equal(metadata.kind, TURBO_FLOW_RESOURCE_SECURITY_REALM);
     check_equal(metadata.generation, 1u);
     check_equal(metadata.observed_generation, 0u);
@@ -636,19 +642,23 @@ spec("security realm v3") {
     turbo_flow_resource_document_cleanup(&document);
     turbo_flow_destroy(flow);
     turbo_flow_security_realm_destroy(realm);
-    turbo_flow_resolved_config_destroy(resolved);
+  }
 
-    resolved = NULL;
-    realm = NULL;
-    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(turbo_flow_config_resolve_yaml(bad_yaml, sizeof(bad_yaml) - 1u, &resolved, &error),
-                 SALTS_OK);
-    check_equal(
-        turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        SALTS_EINVAL);
-    check_contains(error.path, "rules");
-    check_null(realm);
-    turbo_flow_resolved_config_destroy(resolved);
+  it("rejects incomplete deployment identities and mixed initial/source policy ownership") {
+    turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+    turbo_flow_security_rule_t rule = security_rule(TURBO_FLOW_SECURITY_ALLOW,
+                                                    TURBO_FLOW_SECURITY_MATCH_PREFIX, "root-a/");
+    for (int fault = 0; fault < 4; ++fault) {
+      turbo_flow_security_realm_t *realm = NULL;
+      config.resource_uid = fault == 0 ? NULL : "security:main";
+      config.owner_name = fault == 1 ? "" : "security.main";
+      config.policy_source = fault == 2 ? NULL : "acl.provider";
+      config.policy_version = fault == 3 ? 9u : 0u;
+      config.rules = fault == 3 ? &rule : NULL;
+      config.rule_count = fault == 3 ? 1u : 0u;
+      check_equal(turbo_flow_security_realm_create(&config, &realm), SALTS_EINVAL);
+      check_null(realm);
+    }
   }
 
   it("requires explicit release for short-lived provider-owned secret leases") {

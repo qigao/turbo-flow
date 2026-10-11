@@ -2,7 +2,6 @@
 #define TURBO_FLOW_SECURITY_H
 
 #include "turbo_flow.h"
-#include "turbo_flow_resolved_config.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -385,7 +384,8 @@ typedef struct turbo_flow_security_realm_config_s {
   const turbo_flow_security_rule_t *rules;
   size_t rule_count;
   turbo_flow_security_matcher_t matcher;
-  /** Required when no initial rules are supplied; copied and resolved by the product root. */
+  /** Required when no initial rules are supplied; copied as a deployment resource identity.
+   * The caller explicitly binds the provider before publication; no implicit lookup occurs. */
   const char *policy_source;
 } turbo_flow_security_realm_config_t;
 
@@ -405,11 +405,22 @@ TURBO_FLOW_C_API int turbo_flow_security_authenticate(const turbo_flow_security_
                                                const turbo_flow_security_auth_request_t *request,
                                                turbo_flow_security_principal_t *principal_out);
 
+/**
+ * Create a deployment-owned realm from explicit native inputs.
+ * @param config Borrowed during creation. Identity strings and initial rules are copied.
+ * Supply either versioned initial rules or policy_source, never both. Matcher context/code
+ * remains borrowed until realm destruction. A policy_source realm starts fail-closed.
+ * @param out Receives an owned realm on success; cleared on failure.
+ * @return SALTS_OK, SALTS_EINVAL for invalid/mixed policy inputs, or an allocation/matcher error.
+ * Stop all users before destroy; bound provider owners must outlive the realm.
+ * Example: initialize TURBO_FLOW_SECURITY_REALM_CONFIG_INIT, set resource_uid/owner_name/
+ * policy_source, create the realm, then bind the exact deployment policy provider.
+ */
 TURBO_FLOW_C_API int turbo_flow_security_realm_create(const turbo_flow_security_realm_config_t *config,
                                                turbo_flow_security_realm_t **out);
 TURBO_FLOW_C_API void turbo_flow_security_realm_destroy(turbo_flow_security_realm_t *realm);
 
-/** Borrowed configured source channel name, or NULL for a programmatic static realm. */
+/** Borrowed deployment policy-source identity, or NULL for a programmatic static realm. */
 TURBO_FLOW_C_API const char *
 turbo_flow_security_realm_policy_source(const turbo_flow_security_realm_t *realm);
 
@@ -442,15 +453,6 @@ TURBO_FLOW_C_API int turbo_flow_security_realm_authorize(turbo_flow_security_rea
 /** Register the realm as a borrowed, independently addressable SECURITY_REALM resource. */
 TURBO_FLOW_C_API int turbo_flow_security_realm_register(turbo_flow_t *flow,
                                                  turbo_flow_security_realm_t *realm);
-
-/**
- * Create a fail-closed realm from strict YAML metadata and a policy_source reference.
- * ACL rule bodies and policy versions are rejected in YAML.
- */
-TURBO_FLOW_C_API int turbo_flow_security_realm_create_resolved(
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_matcher_t *matcher, turbo_flow_security_realm_t **out,
-    turbo_flow_config_error_t *error);
 
 /** Opaque provider-owned secret lease; it never belongs in a graph message or resource document. */
 typedef struct turbo_flow_security_secret_lease_s {
@@ -504,44 +506,12 @@ typedef struct turbo_flow_security_auth_provider_owner_s {
    NULL,                                                                                           \
    NULL}
 
-typedef int (*turbo_flow_security_auth_provider_create_resolved_fn)(
-    void *ctx, const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_auth_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
-
-/** One statically or dynamically registered provider backend factory. */
-typedef struct turbo_flow_security_auth_provider_factory_s {
-  size_t size;
-  uint32_t abi_version;
-  const char *backend;
-  turbo_flow_security_auth_provider_create_resolved_fn create_resolved;
-  void *ctx;
-} turbo_flow_security_auth_provider_factory_t;
-
-#define TURBO_FLOW_SECURITY_AUTH_PROVIDER_FACTORY_INIT                                             \
-  {sizeof(turbo_flow_security_auth_provider_factory_t), TURBO_FLOW_SECURITY_ABI_V3, NULL, NULL,    \
-   NULL}
-
 TURBO_FLOW_C_API int turbo_flow_security_secret_acquire(const turbo_flow_security_key_provider_t *provider,
                                                  const char *reference,
                                                  turbo_flow_security_secret_lease_t *lease_out);
 TURBO_FLOW_C_API void
 turbo_flow_security_secret_release(const turbo_flow_security_key_provider_t *provider,
                                    turbo_flow_security_secret_lease_t *lease);
-
-/** Invoke one exact backend factory and validate its lifecycle envelope. */
-TURBO_FLOW_C_API int turbo_flow_security_auth_provider_owner_create_resolved(
-    const turbo_flow_security_auth_provider_factory_t *factory,
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_auth_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
-
-/** Select exactly one registered backend from an `auth_provider` channel. */
-TURBO_FLOW_C_API int turbo_flow_security_auth_provider_owner_create_registered(
-    const turbo_flow_security_auth_provider_factory_t *const *factories, size_t factory_count,
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_auth_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
 TURBO_FLOW_C_API void
 turbo_flow_security_auth_provider_owner_destroy(turbo_flow_security_auth_provider_owner_t *owner);
@@ -567,36 +537,6 @@ struct turbo_flow_security_policy_provider_owner_s {
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL}
-
-typedef int (*turbo_flow_security_policy_provider_create_resolved_fn)(
-    void *ctx, const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
-
-typedef struct turbo_flow_security_policy_provider_factory_s {
-  size_t size;
-  uint32_t abi_version;
-  const char *backend;
-  turbo_flow_security_policy_provider_create_resolved_fn create_resolved;
-  void *ctx;
-} turbo_flow_security_policy_provider_factory_t;
-
-#define TURBO_FLOW_SECURITY_POLICY_PROVIDER_FACTORY_INIT                                           \
-  {sizeof(turbo_flow_security_policy_provider_factory_t), TURBO_FLOW_SECURITY_ABI_V3, NULL, NULL,  \
-   NULL}
-
-TURBO_FLOW_C_API int turbo_flow_security_policy_provider_owner_create_resolved(
-    const turbo_flow_security_policy_provider_factory_t *factory,
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
-
-/** Select exactly one registered backend from an `acl_provider` channel. */
-TURBO_FLOW_C_API int turbo_flow_security_policy_provider_owner_create_registered(
-    const turbo_flow_security_policy_provider_factory_t *const *factories, size_t factory_count,
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error);
 
 TURBO_FLOW_C_API void turbo_flow_security_policy_provider_owner_destroy(
     turbo_flow_security_policy_provider_owner_t *owner);

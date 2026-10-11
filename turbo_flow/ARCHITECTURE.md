@@ -651,3 +651,53 @@ Conditions do not mutate snapshots and cannot invoke arbitrary callbacks.
 Commands retain their existing lifecycle, rollback, and error semantics. The
 host owns scheduling, hysteresis, cooldown, rule storage, and serialization
 with lifecycle/configuration operations.
+
+
+## Security deployment inputs after Config removal
+
+Security realm and embedded SQLite ACL-store construction use their existing
+native configuration structs. Deployment owns resource UID, owner name, policy
+source identity, database path and namespace. `policy_source` is an identity
+only: the composition root explicitly binds a policy/authorization provider; a
+realm never discovers a backend from a string, environment or global registry.
+The YAML realm/SQLite readers and resolved backend-factory registry are removed.
+
+Realm creation copies its identity strings and initial rules. A realm accepts
+exactly one policy mode: an initial versioned rule set or a policy-source
+reference. Source-backed realms remain fail-closed until an explicitly bound
+provider supplies a valid exact version. SQLite creation copies database path
+and namespace and keeps its existing finite rule limit and per-call connection
+ownership. ACL publication/refresh still validates versions and copies bounded
+policy bundles; no change to stored database format or authorization decisions
+is part of this migration.
+
+Construction and provider binding belong to the deployment control thread before
+publication. Provider Interfaces and custom matcher contexts are borrowed;
+deployment must keep their owners/module scopes alive while the realm can use
+them. Teardown stops users and unregisters/destroys the borrowing Flow, destroys
+the realm, then releases provider owners and module scopes. Native provider owner
+envelopes and secret acquire/release remain available independently of Config.
+Snapshots expose identity/version/counts, never credentials or ACL rule bodies.
+
+The alternatives were to retain YAML wrappers or introduce another untyped
+configuration factory. Both retain competing configuration/discovery semantics.
+Consumers instead create the exact deployment owner, create the native realm and
+bind its public provider Interface. The removed factory symbols have no aliases;
+restoring old clients requires the previous complete SDK. Canonical Plugin
+publication/control assembly remains tracked by #75/#76; this native migration
+does not claim that delivery complete. RuleSet authoring and Product assembly
+remain separate #241 consumers.
+
+Security migration validation (2026-10-11, Windows MSVC Release): installed
+Salts.Native 2.3.0-rc.12, source
+`40347c08e7888887a29ab8201122f0b7a1990dd8`, vcpkg cache contract 8.
+`cmake --build --preset win-release-user` passed, as did installation.
+`ctest --preset win-release-user -R "^test_flow_security(_sqlite)?$" --output-on-failure`
+passed 2/2; the adjacent Security/Policy/PluginHost/provider-generation/Component
+regression selection passed 6/6. The formal
+`test_turbo_flow_install_consumer` test failed after its CNet and CHTTP plugin
+consumers passed: the Config-only preset disables SaltsUtils, but installed
+package admission imports CHTTP, whose current package requires SaltsUtils.
+This remains an installed-component dependency gate under #281/#287, not a
+successful installed-consumer qualification. Debug, sanitizer and other-platform
+qualification were not run for this slice.

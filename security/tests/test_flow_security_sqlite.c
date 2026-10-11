@@ -68,14 +68,16 @@ spec("SQLite ACL control store") {
     realm_config.owner_name = "security.mqtt";
     realm_config.policy_source = "acl.sqlite";
     check_equal(turbo_flow_security_realm_create(&realm_config, &realm), SALTS_OK);
-    check_equal(turbo_flow_security_realm_bind_policy_provider(
-                     realm, turbo_flow_security_sqlite_provider_interface(provider)),
-                 SALTS_OK);
     request.principal = &principal;
     request.domain_id = "domain-a";
     request.action = TURBO_FLOW_SECURITY_ACTION_PUBLISH;
     request.resource_type = TURBO_FLOW_SECURITY_RESOURCE_MQTT_TOPIC;
     request.resource = "root-a/telemetry/value";
+    check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_ENOTSUP);
+    check_equal(decision.effect, TURBO_FLOW_SECURITY_DENY);
+    check_equal(turbo_flow_security_realm_bind_policy_provider(
+                     realm, turbo_flow_security_sqlite_provider_interface(provider)),
+                 SALTS_OK);
     check_equal(turbo_flow_security_realm_authorize(realm, &request, 100u, &decision), SALTS_OK);
 
     bundle.policy_version = 2u;
@@ -96,40 +98,26 @@ spec("SQLite ACL control store") {
     free(path);
   }
 
-  it("resolves provider metadata but rejects ACL bodies in YAML realms") {
-    static const char yaml[] =
-        "version: 1\nchannels:\n  acl.sqlite:\n    kind: acl_provider\n    config:\n"
-        "      backend: sqlite\n      database_path: acl.sqlite3\n"
-        "      namespace_name: mqtt\n  security.main:\n    kind: security_realm\n    config:\n"
-        "      resource_uid: security:mqtt\n      owner_name: security.main\n"
-        "      policy_source: acl.sqlite\nadapters: {}\n";
-    static const char bad_yaml[] =
-        "version: 1\nchannels:\n  security.main:\n    kind: security_realm\n    config:\n"
-        "      resource_uid: security:mqtt\n      owner_name: security.main\n"
-        "      policy_source: acl.sqlite\n      rules: []\nadapters: {}\n";
-    turbo_flow_resolved_config_t *resolved = NULL;
-    turbo_flow_security_realm_t *realm = NULL;
-    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-
-    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
-                 SALTS_OK);
-    check_equal(
-        turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        SALTS_OK);
-    check_equal(turbo_flow_security_realm_policy_source(realm), "acl.sqlite");
-    turbo_flow_security_realm_destroy(realm);
-    turbo_flow_resolved_config_destroy(resolved);
-
-    resolved = NULL;
-    realm = NULL;
-    error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(turbo_flow_config_resolve_yaml(bad_yaml, sizeof(bad_yaml) - 1u, &resolved, &error),
-                 SALTS_OK);
-    check_equal(
-        turbo_flow_security_realm_create_resolved(resolved, "security.main", NULL, &realm, &error),
-        SALTS_EINVAL);
-    check_contains(error.path, "rules");
-    turbo_flow_resolved_config_destroy(resolved);
+  it("validates bounded deployment inputs before opening the ACL store") {
+    char *path = tt_make_temp_file("flow-acl-config", ".sqlite3");
+    char long_namespace[TURBO_FLOW_SECURITY_SQLITE_NAMESPACE_MAX + 2u];
+    check_not_null(path);
+    memset(long_namespace, 'x', sizeof(long_namespace) - 1u);
+    long_namespace[sizeof(long_namespace) - 1u] = '\0';
+    for (int fault = 0; fault < 7; ++fault) {
+      turbo_flow_security_sqlite_config_t config = TURBO_FLOW_SECURITY_SQLITE_CONFIG_INIT;
+      turbo_flow_security_sqlite_provider_t *provider = NULL;
+      config.database_path = fault == 0 ? NULL : path;
+      config.namespace_name = fault == 1 ? "" : fault == 2 ? long_namespace : "acl";
+      config.busy_timeout_ms = fault == 3 ? -1 : 0;
+      if (fault == 4) config.max_rules = 0u;
+      if (fault == 5) config.max_rules = TURBO_FLOW_SECURITY_MAX_RULES + 1u;
+      if (fault == 6) config.api_version++;
+      check_equal(turbo_flow_security_sqlite_provider_create(&config, &provider), SALTS_EINVAL);
+      check_null(provider);
+    }
+    check_equal(tt_remove_file(path), 0);
+    free(path);
   }
 
   it("isolates namespaces and rejects process-local memory stores") {

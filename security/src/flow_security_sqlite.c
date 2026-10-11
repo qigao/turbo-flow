@@ -1,15 +1,11 @@
 #include "turbo_flow_security_sqlite.h"
 
 #include "cmeta_error.h"
-#include <json_parser.h>
 #include "tstr.h"
 #include "turbo_flow_stl_error_internal.h"
 
-#include <limits.h>
-#include <math.h>
 #include <sqlite3.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -411,123 +407,6 @@ fail:
   return rc;
 }
 
-static int flow_security_sqlite_config_error(turbo_flow_config_error_t *error, int status,
-                                             const char *channel, const char *field,
-                                             const char *message) {
-  if (error && error->size >= sizeof(*error)) {
-    *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    error->status = status;
-    (void)snprintf(error->path, sizeof(error->path), "$.channels.%s.config%s%s", channel,
-                   field ? "." : "", field ? field : "");
-    (void)snprintf(error->message, sizeof(error->message), "%s", message);
-  }
-  return status;
-}
-
-static int flow_security_sqlite_json_u64(const json_value_t *value, uint64_t *out) {
-  double number;
-  if (!value || json_type(value) != JSON_NUMBER || !out) return SALTS_EINVAL;
-  number = json_number(value);
-  if (!isfinite(number) || number < 0.0 || number > 9007199254740991.0 ||
-      (double)(uint64_t)number != number)
-    return SALTS_ERANGE;
-  *out = (uint64_t)number;
-  return SALTS_OK;
-}
-
-int turbo_flow_security_sqlite_provider_create_resolved(
-    const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    turbo_flow_security_sqlite_provider_t **out, turbo_flow_config_error_t *error) {
-  static const char *const allowed[] = {"backend", "database_path", "namespace_name",
-                                        "busy_timeout_ms", "max_rules"};
-  turbo_flow_security_sqlite_config_t config = TURBO_FLOW_SECURITY_SQLITE_CONFIG_INIT;
-  json_value_t *document = NULL;
-  json_value_t *channels;
-  json_value_t *channel;
-  json_value_t *kind;
-  json_value_t *fields;
-  json_value_t *value;
-  const char *json;
-  size_t json_size = 0u;
-  uint64_t number;
-  int rc = SALTS_OK;
-  if (out) *out = NULL;
-  if (!resolved || !channel_name || !channel_name[0] || !out || !error ||
-      error->size < sizeof(*error))
-    return SALTS_EINVAL;
-  *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-  json = turbo_flow_resolved_config_json(resolved, &json_size);
-  if (json) document = json_parse(json, json_size);
-  if (!document)
-    return flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
-                                             "invalid resolved configuration snapshot");
-  channels = json_object_get(document, "channels");
-  channel = channels ? json_object_get(channels, channel_name) : NULL;
-  kind = channel ? json_object_get(channel, "kind") : NULL;
-  fields = channel ? json_object_get(channel, "config") : NULL;
-  if (!channel || json_type(channel) != JSON_OBJECT || !kind ||
-      json_type(kind) != JSON_STRING ||
-      strcmp(json_string(kind), "acl_provider") != 0 || !fields ||
-      json_type(fields) != JSON_OBJECT) {
-    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
-                                           "channel must be kind acl_provider with config");
-    goto done;
-  }
-  for (size_t i = 0u; i < json_object_size(fields); ++i) {
-    const char *field = json_object_key(fields, i);
-    int known = 0;
-    for (size_t j = 0u; j < sizeof(allowed) / sizeof(allowed[0]); ++j)
-      if (field && strcmp(field, allowed[j]) == 0) known = 1;
-    if (!known) {
-      rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, field,
-                                             "unknown SQLite ACL provider field");
-      goto done;
-    }
-  }
-  config.database_path = json_get_string(fields, "database_path");
-  config.namespace_name = json_get_string(fields, "namespace_name");
-  if (!config.database_path || !config.database_path[0] || !config.namespace_name ||
-      !config.namespace_name[0]) {
-    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, NULL,
-                                           "database_path and namespace_name are required");
-    goto done;
-  }
-  value = json_object_get(fields, "backend");
-  if (!value || json_type(value) != JSON_STRING ||
-      strcmp(json_string(value), TURBO_FLOW_SECURITY_SQLITE_BACKEND) != 0) {
-    rc = flow_security_sqlite_config_error(error, SALTS_EINVAL, channel_name, "backend",
-                                           "backend must be exactly sqlite");
-    goto done;
-  }
-  value = json_object_get(fields, "busy_timeout_ms");
-  if (value) {
-    if (flow_security_sqlite_json_u64(value, &number) != SALTS_OK || number > INT_MAX) {
-      rc = flow_security_sqlite_config_error(error, SALTS_ERANGE, channel_name, "busy_timeout_ms",
-                                             "busy_timeout_ms is out of range");
-      goto done;
-    }
-    config.busy_timeout_ms = (int)number;
-  }
-  value = json_object_get(fields, "max_rules");
-  if (value) {
-    if (flow_security_sqlite_json_u64(value, &number) != SALTS_OK || number == 0u ||
-        number > TURBO_FLOW_SECURITY_MAX_RULES) {
-      rc = flow_security_sqlite_config_error(error, SALTS_ERANGE, channel_name, "max_rules",
-                                             "max_rules must be between 1 and 4096");
-      goto done;
-    }
-    config.max_rules = (size_t)number;
-  }
-  rc = turbo_flow_security_sqlite_provider_create(&config, out);
-  if (rc != SALTS_OK)
-    rc = flow_security_sqlite_config_error(error, rc, channel_name, NULL,
-                                           "SQLite ACL provider creation failed");
-
-done:
-  json_free(document);
-  return rc;
-}
-
 const turbo_flow_security_policy_provider_t *turbo_flow_security_sqlite_provider_interface(
     const turbo_flow_security_sqlite_provider_t *provider) {
   return provider ? &provider->interface : NULL;
@@ -538,35 +417,4 @@ void turbo_flow_security_sqlite_provider_destroy(turbo_flow_security_sqlite_prov
   tstr_freep(&provider->database_path);
   tstr_freep(&provider->namespace_name);
   free(provider);
-}
-
-static void flow_security_sqlite_owner_destroy(void *owner) {
-  turbo_flow_security_sqlite_provider_destroy((turbo_flow_security_sqlite_provider_t *)owner);
-}
-
-static int flow_security_sqlite_factory_create(
-    void *ctx, const turbo_flow_resolved_config_t *resolved, const char *channel_name,
-    const turbo_flow_security_key_provider_t *key_provider,
-    turbo_flow_security_policy_provider_owner_t *owner_out, turbo_flow_config_error_t *error) {
-  turbo_flow_security_sqlite_provider_t *provider = NULL;
-  int rc;
-  (void)ctx;
-  (void)key_provider;
-  if (!owner_out || owner_out->size < sizeof(*owner_out)) return SALTS_EINVAL;
-  rc =
-      turbo_flow_security_sqlite_provider_create_resolved(resolved, channel_name, &provider, error);
-  if (rc != SALTS_OK) return rc;
-  owner_out->backend = TURBO_FLOW_SECURITY_SQLITE_BACKEND;
-  owner_out->provider = &provider->interface;
-  owner_out->owner = provider;
-  owner_out->destroy = flow_security_sqlite_owner_destroy;
-  return SALTS_OK;
-}
-
-const turbo_flow_security_policy_provider_factory_t *
-turbo_flow_security_sqlite_provider_factory(void) {
-  static const turbo_flow_security_policy_provider_factory_t factory = {
-      sizeof(turbo_flow_security_policy_provider_factory_t), TURBO_FLOW_SECURITY_ABI_V3,
-      TURBO_FLOW_SECURITY_SQLITE_BACKEND, flow_security_sqlite_factory_create, NULL};
-  return &factory;
 }

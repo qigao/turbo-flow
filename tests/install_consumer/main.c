@@ -15,9 +15,26 @@
 #include <turbo_flow_protocol_envelope.h>
 #include <turbo_flow_protocol_inbox_envelope.h>
 #include <turbo_flow_protocol_source.h>
+#include <turbo_flow_security.h>
 #if defined(TURBO_FLOW_TEST_HAS_TURBODB_ADAPTER)
   #include <turbo_flow_turbodb.h>
 #endif
+
+static int install_security_deployment_realm(void) {
+  turbo_flow_security_realm_config_t config = TURBO_FLOW_SECURITY_REALM_CONFIG_INIT;
+  turbo_flow_security_realm_t *realm = NULL;
+  int rc;
+  config.resource_uid = "security:installed";
+  config.owner_name = "installed.security";
+  config.policy_source = "installed_policy";
+  rc = turbo_flow_security_realm_create(&config, &realm);
+  if (rc != SALTS_OK) return rc;
+  if (strcmp(turbo_flow_security_realm_policy_source(realm), "installed_policy") != 0 ||
+      turbo_flow_security_realm_refresh(realm, 1u, 100u) != SALTS_ENOTSUP)
+    rc = SALTS_EPROTO;
+  turbo_flow_security_realm_destroy(realm);
+  return rc;
+}
 
 static int install_durable_recovery_api(void) {
   int (*scan_failed)(turbo_flow_t *, const char *, uint64_t, turbo_flow_inbox_failed_entry_t *,
@@ -583,7 +600,8 @@ int main(int argc, char **argv) {
       domain_snapshot.size != sizeof(domain_snapshot) || !result_domain_create ||
       !result_domain_destroy || !result_domain_snapshot || domain)
     return 1;
-  if (install_operation_binding_config() != SALTS_OK ||
+  if (install_security_deployment_realm() != SALTS_OK ||
+      install_operation_binding_config() != SALTS_OK ||
       install_exact_ingress_layout() != SALTS_OK || install_inbox_contract() != SALTS_OK ||
       install_durable_recovery_api() != SALTS_OK || install_inbox_source_header() != SALTS_OK ||
       install_protocol_source_envelope_headers() != SALTS_OK)
