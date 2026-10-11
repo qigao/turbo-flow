@@ -1,6 +1,7 @@
 #ifndef FLOW_PLUGIN_OPERATION_INTERNAL_H
 #define FLOW_PLUGIN_OPERATION_INTERNAL_H
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_resource.h"
 #include <cstl/vec.h>
 #include <salts/plugin.h>
 #include <salts/thread.h>
@@ -18,6 +19,8 @@ typedef struct flow_plugin_result_entry_s {
   turbo_flow_projection_owner_t *owner;
   void *context;
   turbo_flow_plugin_operation_vtable_v3_t vtable;
+  turbo_flow_resource_binding_t *resource;
+  turbo_flow_provider_resource_view_v1_t resource_view;
 } flow_plugin_result_entry_t;
 struct turbo_flow_plugin_result_domain_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
@@ -33,7 +36,8 @@ int flow_plugin_result_domain_attach(turbo_flow_plugin_result_domain_t *domain);
 void flow_plugin_result_domain_detach(turbo_flow_plugin_result_domain_t *domain);
 int flow_plugin_result_domain_materialize(turbo_flow_plugin_result_domain_t *domain,
                                           const turbo_flow_plugin_operation_v3_t *op,
-                                          const turbo_flow_plugin_operation_request_v3_t *request,
+                                          turbo_flow_plugin_operation_request_v3_t *request,
+                                          turbo_flow_resource_binding_t **resource_io,
                                           flow_plugin_result_entry_t **out,
                                           turbo_flow_plugin_operation_error_v3_t *error);
 
@@ -45,6 +49,8 @@ typedef struct flow_plugin_operation_binding_s {
   const cmeta_data_desc *input_data;
   const cmeta_data_desc *output_data;
   turbo_flow_plugin_operation_request_v3_t request;
+  turbo_flow_resource_binding_t *resource;
+  turbo_flow_provider_resource_view_v1_t resource_view;
   flow_plugin_result_entry_t *result;
   void *session;
   const turbo_flow_plugin_materializer_binding_t *materializer;
@@ -54,9 +60,12 @@ typedef struct flow_plugin_operation_binding_s {
   turbo_flow_plugin_operation_error_v3_t error;
 } flow_plugin_operation_binding_t;
 int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapshot,
-                                   const turbo_flow_resolved_config_t *resolved, turbo_flow_t *flow,
-                                   turbo_flow_plugin_result_domain_t *domain, size_t budget,
-                                   vec_t *bindings, turbo_flow_config_error_t *error);
+                                   turbo_flow_t *flow, turbo_flow_plugin_result_domain_t *domain,
+                                   size_t budget, vec_t *bindings,
+                                   turbo_flow_config_error_t *error);
+int flow_plugin_operations_resolve_resources(vec_t *bindings,
+                                             const turbo_flow_resource_resolver_v1_t *resolver,
+                                             turbo_flow_config_error_t *error);
 int flow_plugin_operations_preflight(vec_t *bindings, turbo_flow_config_error_t *error);
 int flow_plugin_operation_configure(const turbo_flow_t *flow, vec_t *operations,
                                     turbo_flow_config_error_t *error);

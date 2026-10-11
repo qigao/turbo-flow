@@ -1,5 +1,6 @@
 #include "../src/flow_plugin_operation_internal.h"
 #include "plugin_operation_fixture.h"
+#include "salts_resource_fixture.h"
 #include "tinytest.h"
 #include <cmeta/function.h>
 #include <salts/clock.h>
@@ -147,9 +148,31 @@ typedef struct runtime_test_s {
   turbo_flow_plugin_generation_config_t config;
   turbo_flow_config_error_t error;
   operation_fixture_t *observer;
+  cmeta_plugin_registry resources;
+  cmeta_plugin_ref resource_ref;
+  turbo_flow_resource_resolver_v1_t resource_resolver;
+  int resources_live, resolve_status;
+  const char *resource_export, *reject_resource;
   const void *control_thread;
   atomic_uint lifecycle_wrong_thread, unloads;
 } runtime_test_t;
+static int runtime_resource_resolve(
+    void *ctx, const char *name, const turbo_flow_provider_resource_requirement_v1_t *requirement,
+    turbo_flow_resource_candidate_v1_t *out, turbo_flow_config_error_t *error) {
+  runtime_test_t *t = ctx;
+  (void)requirement;
+  (void)error;
+  if (t->resolve_status) return t->resolve_status;
+  if (t->reject_resource && strcmp(name, t->reject_resource) == 0) return SALTS_ENOENT;
+  if (strcmp(name, "db_main") && strcmp(name, "first") && strcmp(name, "second"))
+    return SALTS_ENOENT;
+  out->identity = name;
+  out->registry = &t->resources;
+  out->plugin = t->resource_ref;
+  out->export_id = t->resource_export;
+  return SALTS_OK;
+}
+
 static void runtime_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_event_t event, const char *id,
                               int status) {
   runtime_test_t *t = ctx;
@@ -202,6 +225,21 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   rc = turbo_flow_plugin_catalog_snapshot_operation_catalog(t->snapshot, &catalog);
   if (rc) return rc;
   t->observer = catalog.entries[0].operation.factory_ctx;
+  if (strcmp(path, FLOW_OPERATION_RESOURCE) == 0) {
+    cmeta_plugin_registry_config resource_config = {1u};
+    if (cmeta_plugin_registry_init(&t->resources, &resource_config) != CMETA_PLUGIN_OK)
+      return SALTS_EIO;
+    t->resources_live = 1;
+    if (cmeta_plugin_registry_load(&t->resources, FLOW_SALTS_RESOURCE_FIXTURE, &t->resource_ref) !=
+        CMETA_PLUGIN_OK)
+      return SALTS_EIO;
+    if (cmeta_plugin_registry_start(&t->resources, t->resource_ref) != CMETA_PLUGIN_OK)
+      return SALTS_EIO;
+    t->resource_export = "fixture.resource";
+    t->resource_resolver = (turbo_flow_resource_resolver_v1_t){sizeof(t->resource_resolver), t,
+                                                               runtime_resource_resolve};
+    t->config.resource_resolver = &t->resource_resolver;
+  }
   rc = turbo_flow_plugin_result_domain_create(t->snapshot, 2, &t->domain, &pe);
   if (rc) return rc;
   rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &t->resolved, &t->error);
@@ -323,6 +361,17 @@ static int runtime_close(runtime_test_t *t) {
     rc = turbo_flow_plugin_host_destroy(t->host, 0, &pe);
     if (rc) return rc;
     t->host = NULL;
+  }
+  if (t->resources_live) {
+    bool quiescent = false;
+    check_equal(cmeta_plugin_registry_request_stop(&t->resources, t->resource_ref),
+                CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(&t->resources, t->resource_ref, &quiescent),
+                CMETA_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(cmeta_plugin_registry_unload(&t->resources, t->resource_ref), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_destroy(&t->resources), CMETA_PLUGIN_OK);
+    t->resources_live = 0;
   }
   check_equal(atomic_load(&t->lifecycle_wrong_thread), 0u);
   return SALTS_OK;
@@ -524,7 +573,117 @@ static void runtime_worker(void *ctx) {
   }
 }
 
+static size_t runtime_resource_leases(runtime_test_t *t) {
+  cmeta_plugin_lifecycle_info info = {0};
+  check_equal(cmeta_plugin_registry_get_lifecycle(&t->resources, t->resource_ref, &info),
+              CMETA_PLUGIN_OK);
+  return info.active_leases;
+}
+
 spec("ABI3 generation operation runtime") {
+  it("requires an exact resource contract and resolves before any operation factory") {
+    char dsl[RUNTIME_TEXT_BYTES];
+    runtime_dsl(dsl, "operation fixture.double {", "operation fixture.double resource db_main {");
+    for (int fault = 0; fault < 6; ++fault) {
+      runtime_test_t t;
+      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml,
+                               fault == 0 ? operation_dsl : dsl),
+                  SALTS_OK);
+      int expected = SALTS_EINVAL;
+      if (fault == 1) t.config.resource_resolver = NULL;
+      if (fault == 2) {
+        t.resolve_status = SALTS_EIO;
+        expected = SALTS_EIO;
+      }
+      if (fault == 3) {
+        t.resource_export = "missing";
+        expected = SALTS_ENOENT;
+      }
+      if (fault == 4) {
+        ++t.observer->resource_requirement.contract_version;
+        expected = SALTS_EPROTO;
+      }
+      if (fault == 5) {
+        t.observer->mode = OP_FIXTURE_PREFLIGHT_FAIL;
+        expected = SALTS_EIO;
+      }
+      check_equal(runtime_create(&t), expected);
+      check_not_null(t.flow);
+      check_null(t.cleanup);
+      check_equal(atomic_load(&t.observer->preflights), fault == 5 ? 1u : 0u);
+      check_equal(atomic_load(&t.observer->context_creates), 0u);
+      check_equal(runtime_resource_leases(&t), (size_t)0u);
+      check_equal(runtime_close(&t), SALTS_OK);
+    }
+    runtime_test_t t;
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_create(&t), SALTS_EINVAL);
+    check_equal(t.error.path, "$.generation.operations[0].resource");
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
+  it("keeps the exact resource alive through retained results and context cleanup retry") {
+    runtime_test_t t;
+    char dsl[RUNTIME_TEXT_BYTES];
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    runtime_dsl(dsl, "operation fixture.double {", "operation fixture.double resource db_main {");
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_create(&t), SALTS_OK);
+    check_equal(runtime_resource_leases(&t), (size_t)1u);
+    runtime_bind(&t, 0);
+    check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(t.generation)), SALTS_OK);
+    check_equal(
+        turbo_flow_publish(turbo_flow_plugin_generation_flow(t.generation), "input", &t.input),
+        SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(t.generation, 0, &t.error), SALTS_OK);
+    t.generation = NULL;
+    check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &error), SALTS_EBUSY);
+    check_equal(runtime_resource_leases(&t), (size_t)1u);
+    turbo_flow_msg_cleanup(&t.result);
+    t.observer->fail_context_release = 1;
+    check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &error), SALTS_EIO);
+    check_equal(runtime_resource_leases(&t), (size_t)1u);
+    check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &error), SALTS_OK);
+    t.domain = NULL;
+    check_equal(runtime_resource_leases(&t), (size_t)0u);
+    check_equal(atomic_load(&t.observer->context_releases), 2u);
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
+  it("retains factory-failure resources until the caller retires the independent result domain") {
+    const int modes[] = {OP_FIXTURE_CONTEXT_FAIL, OP_FIXTURE_CONTEXT_FAIL_VALUE,
+                         OP_FIXTURE_SESSION_FAIL, OP_FIXTURE_SESSION_FAIL_VALUE};
+    char dsl[RUNTIME_TEXT_BYTES];
+    runtime_dsl(dsl, "operation fixture.double {", "operation fixture.double resource db_main {");
+    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+      runtime_test_t t;
+      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+      t.observer->mode = modes[i];
+      check_equal(runtime_create(&t), SALTS_EIO);
+      check_null(t.flow);
+      check_null(t.generation);
+      check_null(t.cleanup);
+      check_equal(runtime_resource_leases(&t), (size_t)1u);
+      check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &error), SALTS_OK);
+      t.domain = NULL;
+      check_equal(runtime_resource_leases(&t), (size_t)0u);
+      check_equal(runtime_close(&t), SALTS_OK);
+    }
+  }
+  it("unwinds previously resolved resources when a later resource is missing") {
+    static const char dsl[] =
+        "source input\nstage first operation fixture.double resource first {\n" RUNTIME_POLICY "}\n"
+        "stage second operation fixture.double resource second {\n" RUNTIME_POLICY "}\n"
+        "stage main {\n input -> first -> second\n}\n";
+    runtime_test_t t;
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+    t.reject_resource = "second";
+    check_equal(runtime_create(&t), SALTS_ENOENT);
+    check_not_null(t.flow);
+    check_equal(t.error.path, "$.generation.operations[1].resource");
+    check_equal(atomic_load(&t.observer->preflights), 0u);
+    check_equal(runtime_resource_leases(&t), (size_t)0u);
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
   it("rejects malformed returned preflight error headers before every factory") {
     const int modes[] = {OP_FIXTURE_OK};
     runtime_error_header_matrix(TURBO_FLOW_PLUGIN_OPERATION_PHASE_PREFLIGHT, modes,
@@ -1121,7 +1280,7 @@ spec("ABI3 generation operation runtime") {
         "stage second operation fixture.double resource second {\n" RUNTIME_POLICY "}\n"
         "stage main {\n input -> first -> second\n}\n";
     runtime_test_t t;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, resources, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, resources, dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_OK);
     check_equal(atomic_load(&t.observer->context_creates), 2u);
     check_equal(atomic_load(&t.observer->session_creates), 2u);

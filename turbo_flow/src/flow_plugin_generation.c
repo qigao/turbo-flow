@@ -383,9 +383,13 @@ int turbo_flow_plugin_generation_create(
       config->owner_capacity, &generation->providers, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
-  rc = flow_plugin_operations_prepare(
-      snapshot, resolved, *flow_io, domain,
-      config->operation_memory_budget_bytes, &generation->bindings, error);
+  rc = turbo_flow_plugin_catalog_snapshot_retain(snapshot);
+  if (rc != SALTS_OK) goto preflight_failed;
+  generation->snapshot = snapshot;
+
+  rc = flow_plugin_operations_prepare(snapshot, *flow_io, domain,
+                                      config->operation_memory_budget_bytes, &generation->bindings,
+                                      error);
   if (rc != SALTS_OK) goto preflight_failed;
 
   rc = flow_plugin_generation_prepare_materializers(snapshot, &generation->bindings,
@@ -396,12 +400,12 @@ int turbo_flow_plugin_generation_create(
       &generation->bindings, &generation->materializers, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
-  rc = flow_plugin_operations_preflight(&generation->bindings, error);
+  rc = flow_plugin_operations_resolve_resources(&generation->bindings, config->resource_resolver,
+                                                error);
   if (rc != SALTS_OK) goto preflight_failed;
 
-  rc = turbo_flow_plugin_catalog_snapshot_retain(snapshot);
+  rc = flow_plugin_operations_preflight(&generation->bindings, error);
   if (rc != SALTS_OK) goto preflight_failed;
-  generation->snapshot = snapshot;
 
   if (domain) {
     rc = flow_plugin_result_domain_attach(domain);
@@ -450,30 +454,11 @@ preflight_failed:
         error, rc, "$.generation.preflight",
         "generation preflight failed");
 
-  if (generation->snapshot) {
-    turbo_flow_plugin_catalog_snapshot_destroy(generation->snapshot);
-    generation->snapshot = NULL;
+  generation->failed = 1;
+  generation->state = TURBO_FLOW_PLUGIN_GENERATION_FAILED_CLEANUP;
+  if (turbo_flow_plugin_generation_destroy(generation, 0u, &cleanup_error) != SALTS_OK) {
+    *cleanup_out = generation;
   }
-  if (generation->domain) {
-    flow_plugin_result_domain_detach(generation->domain);
-    generation->domain = NULL;
-  }
-  (void)flow_plugin_materializers_discard(&generation->materializers);
-  flow_plugin_operations_free(&generation->bindings);
-
-  if (generation->providers) {
-    int cleanup = flow_provider_generation_release(
-        &generation->providers, &cleanup_error);
-    if (cleanup != SALTS_OK) {
-      generation->failed = 1;
-      generation->state = TURBO_FLOW_PLUGIN_GENERATION_FAILED_CLEANUP;
-      generation->cleanup_error = cleanup_error;
-      *cleanup_out = generation;
-      return rc;
-    }
-  }
-
-  free(generation);
   return rc;
 }
 
@@ -680,8 +665,9 @@ static int flow_plugin_generation_retire(
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
 
   /*
-   * A preflight cleanup handle owns only retained canonical provider/resource
-   * leases. No Graph ownership moved and no runtime owner was materialized.
+   * No Graph remains: either preflight failed before transfer, or a previous
+   * retirement destroyed the Graph and retained retryable provider cleanup.
+   * Keep operation/resource metadata pinned until all cleanup succeeds.
    */
   if (!generation->flow) {
     if (generation->leases != 0u)
@@ -689,7 +675,11 @@ static int flow_plugin_generation_retire(
           error, SALTS_EBUSY, "$.generation.leases",
           "Graph generation still has active leases");
 
+    rc = flow_plugin_operations_release(&generation->bindings, error);
+    if (rc != SALTS_OK) return rc;
     if (generation->providers) {
+      rc = flow_provider_generation_owner_destroy(generation->providers, error);
+      if (rc != SALTS_OK) return rc;
       rc = flow_provider_generation_release(
           &generation->providers, error);
       if (rc != SALTS_OK) return rc;

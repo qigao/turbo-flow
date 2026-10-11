@@ -844,6 +844,12 @@ static int flow_plugin_operation_valid(const turbo_flow_plugin_operation_v3_t *o
       op->permission_count > TURBO_FLOW_PLUGIN_OPERATION_MAX_PERMISSIONS ||
       (op->permission_count && !op->permissions))
     return SALTS_EINVAL;
+  if (op->resource_requirement) {
+    const turbo_flow_provider_resource_requirement_v1_t *r = op->resource_requirement;
+    if (r->size != sizeof(*r) || !flow_plugin_identity_valid(r->contract_id) ||
+        !r->contract_version || !cmeta_interface_desc_valid(r->expected_interface))
+      return SALTS_EINVAL;
+  }
   for (size_t i = 0; i < op->permission_count; ++i) {
     if (!flow_plugin_identity_valid(op->permissions[i])) return SALTS_EINVAL;
     for (size_t j = 0; j < i; ++j)

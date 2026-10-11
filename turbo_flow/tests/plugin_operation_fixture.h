@@ -2,6 +2,7 @@
 #define FLOW_PLUGIN_OPERATION_FIXTURE_H
 #include "operation_schema_fixture.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_provider.h"
 #include <salts/thread.h>
 #include <stdatomic.h>
 enum {
@@ -43,7 +44,10 @@ enum {
   OP_FIXTURE_OWNER_FAIL,
   OP_FIXTURE_TWO_NAMES,
   OP_FIXTURE_SECOND_SESSION_FAIL,
-  OP_FIXTURE_EXECUTE_FAIL_NULL
+  OP_FIXTURE_EXECUTE_FAIL_NULL,
+  OP_FIXTURE_RESOURCE,
+  OP_FIXTURE_BAD_RESOURCE,
+  OP_FIXTURE_OLD_MINOR
 };
 enum { OP_BARRIER_NONE, OP_BARRIER_EXECUTE, OP_BARRIER_CLONE, OP_BARRIER_DESTROY };
 enum {
@@ -67,5 +71,6 @@ typedef struct operation_fixture_s {
   cmeta_cond_t cond;
   int barrier, entered, proceed;
   turbo_flow_data_schema_t fault_schema;
+  turbo_flow_provider_resource_requirement_v1_t resource_requirement;
 } operation_fixture_t;
 #endif

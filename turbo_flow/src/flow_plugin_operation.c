@@ -394,9 +394,9 @@ static int operation_graph_validate(turbo_flow_t *flow,
   return found ? SALTS_OK : SALTS_EINVAL;
 }
 int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapshot,
-                                   const turbo_flow_resolved_config_t *resolved, turbo_flow_t *flow,
-                                   turbo_flow_plugin_result_domain_t *domain, size_t budget,
-                                   vec_t *bindings, turbo_flow_config_error_t *error) {
+                                   turbo_flow_t *flow, turbo_flow_plugin_result_domain_t *domain,
+                                   size_t budget, vec_t *bindings,
+                                   turbo_flow_config_error_t *error) {
   turbo_flow_plugin_operation_catalog_v3_t catalog;
   size_t count, required = 0;
   int rc = flow_plugin_operation_configure(flow, bindings, error);
@@ -441,11 +441,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
       return operation_error(error, i, "input_schema", SALTS_EPROTO);
     if (!cmeta_data_desc_equal(op->output.data, canonical_output))
       return operation_error(error, i, "output_schema", SALTS_EPROTO);
-    if (b->request.resource_name) {
-      turbo_flow_resolved_channel_view_t channel = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
-      rc = turbo_flow_resolved_config_channel(resolved, b->request.resource_name, &channel);
-      if (rc != SALTS_OK) return operation_error(error, i, "resource", SALTS_EINVAL);
-    }
+    if ((b->request.resource_name != NULL) != (op->resource_requirement != NULL))
+      return operation_error(error, i, "resource", SALTS_EINVAL);
     if (!limits->max_inflight || !limits->max_input_bytes || !limits->max_result_bytes ||
         !limits->max_retained_bytes || !limits->max_steps)
       return operation_error(error, i, "limits", SALTS_EINVAL);
@@ -472,7 +469,6 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     b->operation = *op;
     b->input_data = canonical_input;
     b->output_data = canonical_output;
-    b->request.resolved = resolved;
     b->request.operation_name = op->operation_name;
     b->request.resource_name = resource;
     turbo_flow_plugin_operation_error_v3_init(&b->error);
@@ -481,6 +477,23 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     if (!b->error_mutex) return operation_error(error, i, "allocation", SALTS_ENOMEM);
   }
   return required > budget ? operation_error(error, 0, "memory", SALTS_ENOSPC) : SALTS_OK;
+}
+int flow_plugin_operations_resolve_resources(vec_t *bindings,
+                                             const turbo_flow_resource_resolver_v1_t *resolver,
+                                             turbo_flow_config_error_t *error) {
+  for (size_t i = 0; i < vec_size(bindings); ++i) {
+    flow_plugin_operation_binding_t *b = vec_at(bindings, i);
+    if (!b->operation.resource_requirement) continue;
+    int rc = turbo_flow_resource_binding_acquire(
+        resolver, b->request.resource_name, b->operation.resource_requirement, &b->resource, error);
+    if (rc != SALTS_OK) return operation_error(error, i, "resource", rc);
+    b->resource_view =
+        (turbo_flow_provider_resource_view_v1_t)TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT;
+    rc = turbo_flow_resource_binding_view(b->resource, &b->resource_view);
+    if (rc != SALTS_OK) return operation_error(error, i, "resource", rc);
+    b->request.resource = &b->resource_view;
+  }
+  return SALTS_OK;
 }
 int flow_plugin_operations_preflight(vec_t *bindings, turbo_flow_config_error_t *error) {
   for (size_t i = 0; i < vec_size(bindings); ++i) {
@@ -598,8 +611,8 @@ int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result
     flow_plugin_operation_binding_t *b = vec_at(bindings, i);
     turbo_flow_operation_provider_registration_t provider =
         TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
-    int rc = flow_plugin_result_domain_materialize(domain, &b->operation, &b->request, &b->result,
-                                                   &b->error);
+    int rc = flow_plugin_result_domain_materialize(domain, &b->operation, &b->request, &b->resource,
+                                                   &b->result, &b->error);
     if (rc != SALTS_OK) return operation_error(error, i, "result_context", rc);
     rc = b->operation.create_session(b->operation.factory_ctx, &b->request, b->result->context,
                                      &b->session, &b->error);
@@ -612,7 +625,6 @@ int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result
     }
     if (rc != SALTS_OK || !b->session)
       return operation_error(error, i, "session", rc ? rc : SALTS_EPROTO);
-    b->request.resolved = NULL;
     provider.operation_name = b->operation.operation_name;
     provider.resource_name = b->request.resource_name;
     provider.fn = operation_invoke;
@@ -634,10 +646,17 @@ int flow_plugin_operations_close(vec_t *bindings) {
 int flow_plugin_operations_release(vec_t *bindings, turbo_flow_config_error_t *error) {
   for (size_t i = vec_size(bindings); i; --i) {
     flow_plugin_operation_binding_t *b = vec_at(bindings, i - 1);
-    if (!b->session) continue;
-    int rc = b->operation.vtable.release_session(b->session);
-    if (rc != SALTS_OK) return operation_error(error, i - 1, "release_session", rc);
-    b->session = NULL;
+    if (b->session) {
+      int rc = b->operation.vtable.release_session(b->session);
+      if (rc != SALTS_OK) return operation_error(error, i - 1, "release_session", rc);
+      b->session = NULL;
+    }
+    /* Only resources not transferred to the independent result domain remain here. */
+    if (b->resource) {
+      int rc = turbo_flow_resource_binding_release(&b->resource);
+      if (rc != SALTS_OK) return operation_error(error, i - 1, "release_resource", rc);
+      b->request.resource = NULL;
+    }
   }
   return SALTS_OK;
 }

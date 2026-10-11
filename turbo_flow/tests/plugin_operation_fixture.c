@@ -1,4 +1,5 @@
 #include "plugin_operation_fixture.h"
+#include "salts_resource_fixture.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,7 @@
 typedef struct operation_context_s {
   operation_fixture_t *factory;
   int releases;
+  const turbo_flow_provider_resource_view_v1_t *resource;
 } operation_context_t;
 static void fixture_barrier(operation_fixture_t *f, int point) {
   cmeta_mutex_lock(&f->mutex);
@@ -63,6 +65,7 @@ static int context_create_impl(void *ctx, const turbo_flow_plugin_operation_requ
   c = calloc(1, sizeof(*c));
   if (!c) return SALTS_ENOMEM;
   c->factory = ctx;
+  c->resource = r->resource;
   ++c->factory->contexts;
   *out = c;
   /* Deliberate serialized contract violation to exercise real owner_create rejection after
@@ -214,6 +217,8 @@ static int session_release(void *ctx) {
 }
 static int context_release(void *ctx) {
   operation_context_t *c = ctx;
+  if (c->resource && flow_test_resource_ping(c->resource->interface_value) != 7)
+    return SALTS_EPROTO;
   int mode = c->factory->mode;
   atomic_fetch_add(&c->factory->context_releases, 1);
   if ((mode == OP_FIXTURE_RELEASE_CONTEXT_ONCE || c->factory->fail_context_release) &&
@@ -275,6 +280,15 @@ static int fixture_register(void *ctx, const turbo_flow_plugin_registration_v1_t
   rc = r->add_adapter_provider(r->ctx, &adapter);
   if (rc != SALTS_OK && mode != OP_FIXTURE_SWALLOW) return rc;
   turbo_flow_plugin_operation_v3_init(&op);
+  if (mode == OP_FIXTURE_RESOURCE || mode == OP_FIXTURE_BAD_RESOURCE) {
+    operation_fixture_t *fixture = ctx;
+    fixture->resource_requirement = (turbo_flow_provider_resource_requirement_v1_t){
+        sizeof(fixture->resource_requirement), FLOW_TEST_RESOURCE_CONTRACT_ID,
+        FLOW_TEST_RESOURCE_CONTRACT_VERSION, FLOW_TEST_RESOURCE_CAP_READ,
+        flow_test_resource_interface()};
+    if (mode == OP_FIXTURE_BAD_RESOURCE) fixture->resource_requirement.expected_interface = NULL;
+    op.resource_requirement = &fixture->resource_requirement;
+  }
   op.operation_name = "fixture.double";
   op.operation_version = 1;
   op.input.schema_version = op.output.schema_version = 1;
@@ -308,6 +322,9 @@ static int fixture_register(void *ctx, const turbo_flow_plugin_registration_v1_t
   bad_data = cmeta_data_int;
   bad_data.shape = NULL;
   switch (mode) {
+  case OP_FIXTURE_OLD_MINOR:
+    op.abi_minor = 3u;
+    break;
   case OP_FIXTURE_BAD_SHAPE:
     op.input.data = &bad_data;
     break;

@@ -2,7 +2,8 @@
 
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_materializer.h"
-#include "turbo_flow_resolved_config.h"
+#include "turbo_flow_provider.h"
+#include "turbo_flow_rulesforge_resource.h"
 
 #include <data_bind_format_provider.h>
 #include <data_bind_json_provider.h>
@@ -19,7 +20,7 @@
 typedef struct rulesforge_plugin_s {
   atomic_size_t contexts;
   atomic_size_t sessions;
-  int initialized;
+  turbo_flow_provider_resource_requirement_v1_t resource_requirement;
 } rulesforge_plugin_t;
 
 typedef struct rulesforge_result_context_s {
@@ -150,82 +151,63 @@ static int rulesforge_error(turbo_flow_plugin_operation_error_v3_t *error, uint3
 }
 
 static int rulesforge_resource(const turbo_flow_plugin_operation_request_v3_t *request,
-                               const char **rfl_file, const char **base_dir,
-                               const char **fact_type) {
-  turbo_flow_resolved_channel_view_t channel = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
-  int rc;
-  if (rfl_file) *rfl_file = NULL;
-  if (base_dir) *base_dir = NULL;
-  if (fact_type) *fact_type = NULL;
+                               turbo_flow_rulesforge_resource_view_t *view) {
+  const turbo_flow_provider_resource_view_v1_t *resource;
+  turbo_flow_rulesforge_resource *handle;
   if (!request || request->size != sizeof(*request) ||
       request->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
-      request->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !request->resolved ||
-      !request->resource_name || !request->resource_name[0] || !rfl_file || !base_dir ||
-      !fact_type)
+      request->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR ||
+      !(resource = request->resource) || resource->size != sizeof(*resource) ||
+      !cmeta_interface_desc_equal(resource->interface_desc,
+                                  turbo_flow_rulesforge_resource_interface()) ||
+      !resource->interface_value || !view)
     return SALTS_EINVAL;
-
-  rc = turbo_flow_resolved_config_channel(request->resolved, request->resource_name, &channel);
+  handle = resource->interface_value;
+  if (!turbo_flow_rulesforge_resource_valid(handle) ||
+      !turbo_flow_rulesforge_resource_has(handle, TURBO_FLOW_RULESFORGE_RESOURCE_IMMUTABLE))
+    return SALTS_ENOTSUP;
+  int rc = turbo_flow_rulesforge_resource_snapshot(handle, view);
   if (rc != SALTS_OK) return rc;
-  if (!channel.kind || strcmp(channel.kind, TURBO_FLOW_RULESFORGE_RESOURCE_KIND) != 0)
-    return SALTS_EPROTO;
-  rc = turbo_flow_resolved_channel_get_string(&channel, "rfl_file", rfl_file);
-  if (rc != SALTS_OK || !*rfl_file || !(*rfl_file)[0]) return SALTS_EINVAL;
-  rc = turbo_flow_resolved_channel_get_string(&channel, "fact_type", fact_type);
-  if (rc != SALTS_OK || !*fact_type || !(*fact_type)[0] || strlen(*fact_type) >= 128u)
+  if (view->size != sizeof(*view) || !view->knowledge_base || !view->fact_type ||
+      !view->fact_type[0] || strlen(view->fact_type) >= 128u)
     return SALTS_EINVAL;
-  rc = turbo_flow_resolved_channel_get_string(&channel, "base_dir", base_dir);
-  if (rc == SALTS_ENOENT) {
-    *base_dir = NULL;
-    rc = SALTS_OK;
-  }
-  return rc;
+  int exists = 0;
+  ruleforge_status_t status =
+      ruleforge_kb_has_schema_type(view->knowledge_base, view->fact_type, &exists);
+  if (status != RULES_FORGE_OK) return rulesforge_status(status);
+  return exists ? SALTS_OK : SALTS_EPROTO;
 }
 
 static int rulesforge_preflight(void *factory_ctx,
                                 const turbo_flow_plugin_operation_request_v3_t *request,
                                 turbo_flow_plugin_operation_error_v3_t *error) {
-  const char *rfl_file = NULL, *base_dir = NULL, *fact_type = NULL;
+  turbo_flow_rulesforge_resource_view_t view = TURBO_FLOW_RULESFORGE_RESOURCE_VIEW_INIT;
   (void)error;
   if (!factory_ctx || !request || !request->operation_name ||
       strcmp(request->operation_name, TURBO_FLOW_RULESFORGE_OPERATION) != 0)
     return SALTS_EINVAL;
   if (request->limits.max_steps < 2u || request->limits.max_steps > (uint32_t)INT_MAX)
     return SALTS_ENOSPC;
-  return rulesforge_resource(request, &rfl_file, &base_dir, &fact_type);
+  return rulesforge_resource(request, &view);
 }
 
 static int rulesforge_result_context_create(
     void *factory_ctx, const turbo_flow_plugin_operation_request_v3_t *request, void **context_out,
     turbo_flow_plugin_operation_error_v3_t *error) {
-  rulesforge_plugin_t *plugin = (rulesforge_plugin_t *)factory_ctx;
-  rulesforge_result_context_t *context = NULL;
-  const char *rfl_file = NULL, *base_dir = NULL, *fact_type = NULL;
-  const char *dirs[1];
-  ruleforge_status_t status;
-  int rc;
+  rulesforge_plugin_t *plugin = factory_ctx;
+  rulesforge_result_context_t *context;
+  turbo_flow_rulesforge_resource_view_t view = TURBO_FLOW_RULESFORGE_RESOURCE_VIEW_INIT;
+  (void)error;
   if (context_out) *context_out = NULL;
   if (!plugin || !context_out) return SALTS_EINVAL;
-  rc = rulesforge_resource(request, &rfl_file, &base_dir, &fact_type);
+  int rc = rulesforge_resource(request, &view);
   if (rc != SALTS_OK) return rc;
-
-  context = (rulesforge_result_context_t *)calloc(1u, sizeof(*context));
+  context = calloc(1u, sizeof(*context));
   if (!context) return SALTS_ENOMEM;
   context->plugin = plugin;
+  context->knowledge_base = view.knowledge_base;
   context->max_rules = (int)request->limits.max_steps - 1;
-  (void)snprintf(context->fact_type, sizeof(context->fact_type), "%s", fact_type);
-
-  status = ruleforge_kb_create(&context->knowledge_base);
-  if (status == RULES_FORGE_OK) {
-    dirs[0] = base_dir;
-    status = ruleforge_kb_load_drl_file(context->knowledge_base, rfl_file,
-                                        base_dir ? dirs : NULL, base_dir ? 1 : 0);
-  }
-  if (status != RULES_FORGE_OK) {
-    if (context->knowledge_base) (void)ruleforge_kb_destroy(context->knowledge_base);
-    free(context);
-    return rulesforge_error(error, TURBO_FLOW_PLUGIN_OPERATION_PHASE_RESULT_CONTEXT, status,
-                            ruleforge_get_last_error_message());
-  }
+  memcpy(context->fact_type, view.fact_type, strlen(view.fact_type) + 1u);
   atomic_fetch_add_explicit(&plugin->contexts, (size_t)1u, memory_order_relaxed);
   *context_out = context;
   return SALTS_OK;
@@ -335,10 +317,7 @@ static int rulesforge_release_session(void *session_ptr) {
 
 static int rulesforge_release_result_context(void *context_ptr) {
   rulesforge_result_context_t *context = (rulesforge_result_context_t *)context_ptr;
-  ruleforge_status_t status;
   if (!context || !context->plugin || !context->knowledge_base) return SALTS_EINVAL;
-  status = ruleforge_kb_destroy(context->knowledge_base);
-  if (status != RULES_FORGE_OK) return rulesforge_status(status);
   atomic_fetch_sub_explicit(&context->plugin->contexts, (size_t)1u, memory_order_relaxed);
   free(context);
   return SALTS_OK;
@@ -346,22 +325,19 @@ static int rulesforge_release_result_context(void *context_ptr) {
 
 static int rulesforge_plugin_load(const turbo_flow_plugin_host_v1_t *host, void **plugin_out) {
   rulesforge_plugin_t *plugin;
-  ruleforge_status_t status;
   if (plugin_out) *plugin_out = NULL;
   if (!host || host->size != sizeof(*host) ||
       host->abi_major != TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR ||
       host->abi_minor != TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR || !plugin_out)
     return SALTS_EINVAL;
-  status = ruleforge_init();
-  if (status != RULES_FORGE_OK) return rulesforge_status(status);
   plugin = (rulesforge_plugin_t *)calloc(1u, sizeof(*plugin));
-  if (!plugin) {
-    (void)ruleforge_cleanup();
-    return SALTS_ENOMEM;
-  }
+  if (!plugin) return SALTS_ENOMEM;
   atomic_init(&plugin->contexts, 0u);
   atomic_init(&plugin->sessions, 0u);
-  plugin->initialized = 1;
+  plugin->resource_requirement = (turbo_flow_provider_resource_requirement_v1_t){
+      sizeof(turbo_flow_provider_resource_requirement_v1_t),
+      TURBO_FLOW_RULESFORGE_RESOURCE_CONTRACT_ID, TURBO_FLOW_RULESFORGE_RESOURCE_CONTRACT_VERSION,
+      TURBO_FLOW_RULESFORGE_RESOURCE_IMMUTABLE, turbo_flow_rulesforge_resource_interface()};
   *plugin_out = plugin;
   return SALTS_OK;
 }
@@ -403,6 +379,7 @@ static int rulesforge_plugin_register(
   if (rc != SALTS_OK) return rc;
 
   turbo_flow_plugin_operation_v3_init(&operation);
+  operation.resource_requirement = &plugin->resource_requirement;
   operation.operation_name = TURBO_FLOW_RULESFORGE_OPERATION;
   operation.operation_version = 1u;
   operation.input.schema_version = TURBO_FLOW_RULESFORGE_SCHEMA_VERSION;
@@ -453,7 +430,6 @@ static int rulesforge_plugin_shutdown(void *plugin_ptr) {
 static void rulesforge_plugin_destroy(void *plugin_ptr) {
   rulesforge_plugin_t *plugin = (rulesforge_plugin_t *)plugin_ptr;
   if (!plugin) return;
-  if (plugin->initialized) (void)ruleforge_cleanup();
   free(plugin);
 }
 

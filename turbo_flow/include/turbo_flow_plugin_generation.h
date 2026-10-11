@@ -186,7 +186,7 @@ typedef struct turbo_flow_plugin_generation_config_s {
   salts_component_plugin_runtime *component_runtime;
   /** Explicit deployment alias resolver for .flow provider identities. */
   const turbo_flow_provider_resolver_v2_t *provider_resolver;
-  /** Explicit deployment-resource resolver for provider resource requirements. */
+  /** Explicit deployment-resource resolver for provider and operation resource requirements. */
   const turbo_flow_resource_resolver_v1_t *resource_resolver;
 } turbo_flow_plugin_generation_config_t;
 
@@ -218,22 +218,23 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * max_result_bytes, max_retained_bytes, max_steps. Omitting policy creates no PluginHost binding.
  * Stages sharing an operation/resource must declare identical policies, including omission.
  * Execution/type semantics come from the Graph/CMeta contract, never duplicated policy fields.
- * A typed operation stage selects its exact plugin/version and bounded limits in a generated
- * `policy` record. Every field is required: plugin, version, max_inflight, max_input_bytes,
- * max_result_bytes, max_retained_bytes, max_steps. Omitting policy creates no PluginHost binding.
- * Stages sharing an operation/resource must declare identical policies, including omission.
- * Execution/type semantics come from the Graph/CMeta contract, never duplicated policy fields.
  * A typed operation stage may select `materializer { plugin "provider.id" }` in its .flow block.
  * Omission selects no materializer. The canonical operation input supplies schema/version/encoding;
  * these are not authored again. Stages sharing one operation/resource binding must agree on the
  * selection, including omission. Invalid stage fields fail before operation callbacks and provider
  * materialization. Nonempty legacy `materializer_bindings` are rejected with SALTS_ENOTSUP before
- * provider preparation. Nonempty legacy `operation_bindings` are likewise rejected. Resolved
- * deployment resource inputs remain required during migration. Bindings are ordered by first
+ * provider preparation. Nonempty legacy `operation_bindings` are likewise rejected. Operation
+ * resources use config->resource_resolver and the descriptor's exact resource requirement.
+ * A requirement needs a named stage resource; a resource-free descriptor rejects resource names.
+ * All operation resources resolve before operation preflight; no factory sees resolved config.
+ * The result domain takes each resource lease before context creation and keeps it until context
+ * cleanup succeeds, including factory failures and results outliving the generation.
+ * Bindings are ordered by first
  * Graph stage occurrence of each selected operation/resource; diagnostics use
  * $.generation.operations[i].field, while typed config errors use $.stages.<stage>[.<field>].
  * @param snapshot Live immutable provider snapshot; retained by the generation.
- * @param resolved Immutable resolved configuration borrowed for the duration of this call.
+ * @param resolved Migration-only document checked for rejected legacy bindings; never passed to
+ * operation callbacks. This parameter remains until the Config subsystem is removed.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
  * @param config Initialized size/versioned capacity plus explicit canonical
  * Component runtime plus provider/resource resolvers. The generation acquires

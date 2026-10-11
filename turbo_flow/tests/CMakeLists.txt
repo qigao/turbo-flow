@@ -131,7 +131,7 @@ set_target_properties(test_flow_plugin_result_domain PROPERTIES FOLDER "turbo_fl
 add_test(NAME test_flow_plugin_result_domain COMMAND test_flow_plugin_result_domain)
 foreach(_operation_mode IN ITEMS OK DUPLICATE DUPLICATE_CHANGED TWO_VERSIONS NO_SCHEMA SWALLOW
     EXECUTE_ALIAS EXECUTE_FAIL_ALIAS BAD_SHAPE BAD_ABI SHORT LONG BAD_VTABLE NO_GUARANTEE
-    BAD_EFFECT BAD_PERMISSION DUP_PERMISSION PERMISSION BAD_LIMIT MISSING_OUTPUT MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES)
+    BAD_EFFECT BAD_PERMISSION DUP_PERMISSION PERMISSION BAD_LIMIT MISSING_OUTPUT MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES RESOURCE BAD_RESOURCE OLD_MINOR)
   add_library(test_flow_operation_fixture_${_operation_mode} SHARED plugin_operation_fixture.c)
   target_link_libraries(test_flow_operation_fixture_${_operation_mode} PRIVATE TurboFlow::PluginHost)
   target_compile_definitions(test_flow_operation_fixture_${_operation_mode} PRIVATE
@@ -147,8 +147,10 @@ add_executable(test_flow_plugin_operation_runtime test_flow_plugin_operation_run
 target_link_libraries(test_flow_plugin_operation_runtime PRIVATE TurboFlow::PluginHost Salts::TinyTest)
 target_compile_definitions(test_flow_plugin_operation_runtime PRIVATE
   FLOW_OPERATION_OK="$<TARGET_FILE:test_flow_operation_fixture_OK>")
-add_dependencies(test_flow_plugin_operation_runtime test_flow_operation_fixture_OK)
-foreach(_operation_mode IN ITEMS EXECUTE_ALIAS EXECUTE_FAIL_ALIAS MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES)
+target_compile_definitions(test_flow_plugin_operation_runtime PRIVATE
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
+add_dependencies(test_flow_plugin_operation_runtime test_flow_operation_fixture_OK test_flow_salts_resource_fixture)
+foreach(_operation_mode IN ITEMS EXECUTE_ALIAS EXECUTE_FAIL_ALIAS MEMORY_OVERFLOW OWNER_FAIL TWO_NAMES RESOURCE)
   target_compile_definitions(test_flow_plugin_operation_runtime PRIVATE
     FLOW_OPERATION_${_operation_mode}="$<TARGET_FILE:test_flow_operation_fixture_${_operation_mode}>")
   add_dependencies(test_flow_plugin_operation_runtime test_flow_operation_fixture_${_operation_mode})

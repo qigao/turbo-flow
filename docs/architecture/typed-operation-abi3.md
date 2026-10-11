@@ -1,6 +1,6 @@
 # Typed-operation ABI 3.x 精确契约
 
-状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.3，generation 配置持有显式 Component runtime；materializer 注册面自 3.1 引入；operation v3 profile 的执行、结果和生命周期语义不变。
+状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.4，operation 使用显式资源 Interface，generation 配置继续持有 Component runtime；materializer 注册面自 3.1 引入；operation v3 profile 的执行、结果和生命周期语义不变。
 共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。当前 ABI 拒绝旧 3.0/3.1/3.2 DLL、旧 major、短布局和未来未支持 minor。
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
@@ -56,14 +56,58 @@ canonical semantic join，保留现有 session/result/domain 所有权和内存�
 
 迁移要求：删除非空 YAML `operation_bindings`，把 policy 复制到每个消费 stage；已有
 materializer stage 同时补上 policy。非空旧 operation/materializer 数组在 provider
-preparation 前返回 `SALTS_ENOTSUP`，即使同时提供有效新配置也拒绝。公开 callback 布局和
-PluginHost ABI 3.3 不变；`request.resolved` 暂时仅为未迁移的 RulesForge channel/resource
-保留，不能视为 #239/#241 完成。Config parser 的旧查询仅保留到物理移除，生产 generation
-不再消费旧 policy。回滚须同时回滚作者输入与实现，不提供运行时兼容或默认 policy。
+preparation 前返回 `SALTS_ENOTSUP`，即使同时提供有效新配置也拒绝。policy 迁移本身
+不改变布局；后续显式 operation resource 迁移统一升级到 ABI 3.4（见下节）。
+Config parser 的旧查询仅保留到物理移除，生产 generation 不再消费旧 policy。回滚须同时回滚作者输入与实现，不提供运行时兼容或默认 policy。
 
 正式验证由 `test_flow_plugin_operation_runtime` 覆盖 shared policy、旧配置拒绝、字段和
 边界、类型契约、session/result 生命周期及预算；materializer、真实 RulesForge 网络组合
 和安装消费者也使用同一 stage policy。
+
+## Operation deployment resources (ABI 3.4)
+
+本节落实 [#239](https://github.com/qigao/turbo-flow/issues/239) 的 operation 消费边界，
+是 [#241](https://github.com/qigao/turbo-flow/issues/241) 删除 Config 的前置工作。
+`resource_requirement` 指向模块拥有、不可变的 canonical resource requirement；注册时校验
+size、contract ID/version 和 CMeta Interface。`request.resource` 替换旧 `resolved` 指针。
+Host、operation DLL 和安装消费者必须一起重编译；3.3 或其他非精确布局直接拒绝，无兼容层。
+
+归属与顺序：
+
+1. 验证全部 stage policy、类型、quota 和 materializer，然后解析全部 operation resources。
+2. 复用 `turbo_flow_resource_binding_acquire()`；预检 binding 持有 lease，request 仅携带 view。
+   缺少 resolver/名称、错误契约、失效资源在 operation callbacks 前失败。
+3. 所有 preflight 成功后才转移 Graph。创建 result context **之前**将资源 binding 移交给
+   地址稳定、预分配的 result-domain entry，request.resource 指向该 entry 的 view。
+4. session 属于 generation；结果及 context 属于 caller-owned domain。generation 退休后，
+   live results/context 继续保持资源和 operation 模块，直到 domain 成功清理。
+5. context cleanup 失败保留全部义务；context 成功后才能释放 resource lease。若 lease release
+   失败，只重试该释放，不重复销毁 context/owner。预检失败时尚未移交的资源由 generation
+   逆序释放，失败通过 cleanup_out 保留 snapshot/metadata 供重试。
+
+控制线程负责 resolver、acquire、移交和退休，调用方必须先停止并 join worker；数据热路径不查询
+资源。每个最多 1024 个 operation/resource binding 持有一份资源 lease；不同名字不合并 session，
+共享同一解析身份是否允许并发仍由资源契约决定。借用 view 不授予卸载、销毁或修改资源的权限。
+
+RulesForge 发布 `turbo_flow.rulesforge.knowledge_base` v1 Interface，要求 IMMUTABLE capability。
+部署方先加载规则/schema/predicate，完成后冻结 KnowledgeBase，负责 engine 初始化及最终清理。
+operation 只借用 KB 和 fact type，预检确认该 type 存在；每次执行创建独立 native session。
+文件路径、base directory 和加载错误归部署方；operation 不再加载文件、不再销毁借用 KB。
+原有 max_steps 同步 profile 保持，不能据此声称已实现 #73 的全部引擎执行配额或取消能力。
+
+候选方案：只在 generation 中持有 lease 会提前释放独立结果的依赖；复制旧 channel 字典只会
+保留 Config 语义；让 operation 接管部署 KB 则破坏共享归属。因此采用已有 exact resource
+binding 加 result-domain 移交，不新增资源注册表或第二套类型模型。事务型 provider 的 Component
+scope 不变；operation 的 canonical 发布迁移仍属于 #93/#73，ABI 3.4 不是其完成声明。
+
+迁移：部署管理者提供已加载 KB 的 Salts Plugin Interface，并将 `.flow resource` 映射给
+`generation_config.resource_resolver`；删除 RulesForge YAML channel。独立调用 operation 工厂的
+宿主必须自行持有同一资源 binding 直至 session/context 全部清理。回滚要同时恢复宿主、DLL、
+作者输入及部署管理者；不能混用 ABI 3.3/3.4。
+
+正式测试：operation runtime 覆盖缺失/错误契约、部分解析回滚、工厂失败、结果跨 generation
+及 context 清理重试；真实 RulesForge 测试在部署加载后删除源文件仍可执行；真实 TCP/UDP
+组合验证 generation 退休后资源模块保持 BUSY，domain 清理后才卸载。
 
 ## Materializer stage config
 
@@ -113,8 +157,8 @@ materializer callback、projection 或 operation result 的所有权。
 迁移时删除 YAML 中非空的 `materializer_bindings`，把插件选择写入每个消费 stage。
 非空旧数组在 provider preparation 前返回 `SALTS_ENOTSUP`，即使 `.flow` 同时包含
 有效选择也不回退。Config parser 暂时仍可读取旧数组以给出明确迁移错误；RulesForge
-部署资源仍依赖 resolved config，完成 #239/#73 对应迁移后
-才能物理删除 Config。回滚必须同时回滚 `.flow` 和消费实现，不提供进程内双配置路径。
+部署资源已改为显式 KnowledgeBase Interface。generation 入口的旧参数、Product 及其余
+Config 消费者仍需在 #241 中一并移除，不能据本次迁移宣告 Config 已删除。回滚必须同时回滚 `.flow` 和消费实现，不提供进程内双配置路径。
 
 正式验证：`test_flow_plugin_materializer_generation` 覆盖选择、MessagePlan 错误、
 共享冲突、容量、真实 durable-buffer claim、projection 滞留与释放；
@@ -158,7 +202,7 @@ context/session/result 仍进入原有安全清理或重试路径，借用 alias
 error 头才适用保留原 callback 错误与 phase 的规则，不允许修补未知头伪装成合法输出。
 
 以下 C 声明放入 `turbo_flow_plugin_operation.h`，依赖该文件既有 Graph/CMeta 头，
-以及 `turbo_flow_resolved_config.h`。所有 enum 字段实际使用 uint32_t，避免 C enum
+以及独立诊断头；资源 requirement/view 采用 canonical provider 类型的前置声明。所有 enum 字段实际使用 uint32_t，避免 C enum
 宽度作为 DLL 布局；返回值采用既有 SALTS 错误码，不重编号。
 下列每个含 size/abi 的新结构提供静态 inline 初始化函数：先 `{0}`，再令 size=sizeof(T)、
 abi_major=TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR、abi_minor=TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR；这是 C11/C++ 兼容的逐字段初始化函数实现规则，不能 memcpy
@@ -196,7 +240,7 @@ typedef struct turbo_flow_plugin_operation_limits_v3_s {
 } turbo_flow_plugin_operation_limits_v3_t;
 typedef struct turbo_flow_plugin_operation_request_v3_s {
   size_t size; uint32_t abi_major; uint32_t abi_minor;
-  const turbo_flow_resolved_config_t *resolved;
+  const turbo_flow_provider_resource_view_v1_t *resource;
   const char *operation_name;
   const char *resource_name;
   turbo_flow_plugin_operation_limits_v3_t limits;
@@ -261,6 +305,7 @@ typedef struct turbo_flow_plugin_operation_v3_s {
   size_t permission_count;
   turbo_flow_plugin_operation_limits_v3_t limits;
   size_t max_session_bytes, max_result_context_bytes;
+  const turbo_flow_provider_resource_requirement_v1_t *resource_requirement;
   void *factory_ctx;
   turbo_flow_plugin_operation_preflight_fn preflight;
   turbo_flow_plugin_operation_result_context_create_fn create_result_context;
@@ -454,8 +499,9 @@ Graph operation metadata 由调用方在 parse/compile 前通过
 native 类型与效果的事实源。metadata.name/version 必须与 policy 选择一致，input/output
 DataDesc 必须与插件发布值语义相等；旧 string-typed metadata 明确拒绝。附加 result
 不替换主消息 projection。metadata 缺失 EINVAL，版本或类型契约不符 EPROTO。
-operation绑定的resource若非NULL，必须精确匹配DSL和resolved已有channel；request中
-resolved只借用到工厂调用返回，工厂复制需要的配置/加载有界artifact，禁止保留指针。
+operation descriptor 有 resource_requirement 时，stage 必须声明 resource；没有 requirement
+则不接受 resource 名字。资源由显式 resolver 按 exact Interface 解析，失败发生在 operation
+preflight/factory 之前。request.resource 由 host lease 保活，不包含 resolved dictionary。
 
 首profile无宿主I/O服务：descriptor permissions必须空数组/count0，非空注册返回
 ENOTSUP。policy不接受permissions字段；不得把列表忽略后执行。

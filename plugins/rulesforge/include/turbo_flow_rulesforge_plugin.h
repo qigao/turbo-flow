@@ -14,7 +14,6 @@ extern "C" {
 #define TURBO_FLOW_RULESFORGE_PLUGIN_ID "rulesforge.provider"
 #define TURBO_FLOW_RULESFORGE_PLUGIN_VERSION "1.1.0"
 #define TURBO_FLOW_RULESFORGE_OPERATION "rulesforge.apply"
-#define TURBO_FLOW_RULESFORGE_RESOURCE_KIND "rulesforge.knowledge-base"
 #define TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID "rulesforge.Applicant.data"
 #define TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID "rulesforge.Decision.data"
 #define TURBO_FLOW_RULESFORGE_SCHEMA_VERSION 1u

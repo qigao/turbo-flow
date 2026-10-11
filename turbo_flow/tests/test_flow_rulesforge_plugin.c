@@ -1,3 +1,4 @@
+#include "rulesforge_resource_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_materializer.h"
@@ -35,7 +36,6 @@ spec("RulesForge ABI3 provider") {
     char *schema_path = tt_make_temp_file("turbo_flow_rulesforge_plugin", ".schema");
     char *rfl_path = tt_make_temp_file("turbo_flow_rulesforge_plugin", ".rfl");
     char rfl[2048];
-    char yaml[4096];
     turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
     turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -46,7 +46,10 @@ spec("RulesForge ABI3 provider") {
         TURBO_FLOW_PLUGIN_MATERIALIZER_CATALOG_V1_INIT;
     turbo_flow_plugin_materializer_input_v1_t encoded =
         TURBO_FLOW_PLUGIN_MATERIALIZER_INPUT_V1_INIT;
-    turbo_flow_resolved_config_t *resolved = NULL;
+    rulesforge_resource_fixture_t deployment = {0};
+    turbo_flow_resource_binding_t *resource = NULL;
+    turbo_flow_provider_resource_view_v1_t resource_view =
+        TURBO_FLOW_PROVIDER_RESOURCE_VIEW_V1_INIT;
     turbo_flow_plugin_operation_request_v3_t request;
     turbo_flow_plugin_operation_error_v3_t operation_error;
     turbo_flow_plugin_operation_input_v3_t input;
@@ -77,17 +80,10 @@ spec("RulesForge ABI3 provider") {
     check_less(count, (int)sizeof(rfl));
     check_equal(tt_write_file(rfl_path, rfl, (size_t)count), 0);
 
-    count = snprintf(yaml, sizeof(yaml),
-                     "version: 1\n"
-                     "channels:\n"
-                     "  rules.adult:\n"
-                     "    kind: %s\n"
-                     "    config:\n"
-                     "      rfl_file: \"%s\"\n"
-                     "      fact_type: Applicant\n",
-                     TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path);
-    check_greater(count, 0);
-    check_less(count, (int)sizeof(yaml));
+    check_equal(rulesforge_resource_fixture_open(&deployment, rfl_path), SALTS_OK);
+    /* Deployment has frozen the KB: operation admission/execution must not reopen artifacts. */
+    check_equal(tt_remove_file(rfl_path), 0);
+    check_equal(tt_remove_file(schema_path), 0);
 
     const char *plugin_path = getenv("FLOW_RULESFORGE_PLUGIN_PATH");
     if (!plugin_path || !plugin_path[0]) plugin_path = FLOW_RULESFORGE_PLUGIN;
@@ -137,12 +133,16 @@ spec("RulesForge ABI3 provider") {
                 SALTS_EPROTO);
     check_equal(decoded.age, 0);
 
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &config_error),
+    check_not_null(catalog.entries[0].operation.resource_requirement);
+    check_equal(turbo_flow_resource_binding_acquire(
+                    &deployment.resolver, "rules_adult",
+                    catalog.entries[0].operation.resource_requirement, &resource, &config_error),
                 SALTS_OK);
+    check_equal(turbo_flow_resource_binding_view(resource, &resource_view), SALTS_OK);
     turbo_flow_plugin_operation_request_v3_init(&request);
-    request.resolved = resolved;
+    request.resource = &resource_view;
     request.operation_name = TURBO_FLOW_RULESFORGE_OPERATION;
-    request.resource_name = "rules.adult";
+    request.resource_name = "rules_adult";
     request.limits.max_inflight = 2u;
     request.limits.max_input_bytes = sizeof(applicant);
     request.limits.max_result_bytes = sizeof(*decision);
@@ -199,15 +199,13 @@ spec("RulesForge ABI3 provider") {
     check_equal(catalog.entries[0].operation.vtable.release_result_context(result_context),
                 SALTS_OK);
     result_context = NULL;
-    turbo_flow_resolved_config_destroy(resolved);
-    resolved = NULL;
+    check_equal(turbo_flow_resource_binding_release(&resource), SALTS_OK);
+    check_equal(rulesforge_resource_fixture_close(&deployment), SALTS_OK);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     snapshot = NULL;
     check_equal(turbo_flow_plugin_host_destroy(host, 0u, &plugin_error), SALTS_OK);
     host = NULL;
 
-    check_equal(tt_remove_file(rfl_path), 0);
-    check_equal(tt_remove_file(schema_path), 0);
     free(rfl_path);
     free(schema_path);
   }

@@ -289,12 +289,16 @@ endif()
 if(TARGET tf_rulesforge_provider AND TARGET tf_applicant_mapper_provider)
   cmake_add_test(test_flow_rulesforge_durable_network
     SOURCES ${PROJECT_SOURCE_DIR}/turbo_flow/tests/test_flow_rulesforge_durable_network.c
+            ${PROJECT_SOURCE_DIR}/turbo_flow/tests/rulesforge_resource_deployment.c
             protocol_network_deployment.c
     LIBS TurboFlow::ProtocolNetworkIntake TurboFlow::PluginHost Salts::CNet Salts::TinyTest
     INCLUDES ${PROJECT_SOURCE_DIR}/plugins/rulesforge/include
+             ${PROJECT_SOURCE_DIR}/turbo_flow/tests
+             $<TARGET_PROPERTY:test_rulesforge_resource_fixture,INTERFACE_INCLUDE_DIRECTORIES>
              ${PROJECT_SOURCE_DIR}/plugins/applicant_mapper/include
              ${CMAKE_CURRENT_SOURCE_DIR}
     DEFS FLOW_RULESFORGE_PLUGIN="$<TARGET_FILE:tf_rulesforge_provider>"
+         FLOW_RULESFORGE_RESOURCE_FIXTURE="$<TARGET_FILE:test_rulesforge_resource_fixture>"
          TURBO_FLOW_CNET_PLUGIN="$<TARGET_FILE:tf_cnet_plugin>"
          TURBO_FLOW_DURABLE_MEMORY_PLUGIN="$<TARGET_FILE:tf_durable_memory_plugin>"
          FLOW_PROTOCOL_JTT808_PLUGIN="$<TARGET_FILE:tf_protocol_jtt808>"
@@ -303,7 +307,7 @@ if(TARGET tf_rulesforge_provider AND TARGET tf_applicant_mapper_provider)
          FLOW_NETWORK_DEPLOYMENT_MODULE="$<TARGET_FILE:test_protocol_network_deployment>"
     FOLDER "ingress/protocol/tests")
   add_dependencies(test_flow_rulesforge_durable_network
-    tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin tf_protocol_jtt808
+    test_rulesforge_resource_fixture tf_rulesforge_provider tf_cnet_plugin tf_durable_memory_plugin tf_protocol_jtt808
     tf_protocol_coap tf_applicant_mapper_provider test_protocol_network_deployment)
   set_tests_properties(test_flow_rulesforge_durable_network PROPERTIES
     LABELS "graph;plugin;abi3;materializer;durable;cnet;network-intake" TIMEOUT 30)

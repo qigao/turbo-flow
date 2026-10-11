@@ -1,10 +1,10 @@
 #ifndef TURBO_FLOW_PLUGIN_OPERATION_H
 #define TURBO_FLOW_PLUGIN_OPERATION_H
 
+#include "turbo_flow_diagnostic.h"
 #include "turbo_flow_export.h"
 #include "turbo_flow_plugin_abi.h"
 #include "turbo_flow_projection.h"
-#include "turbo_flow_resolved_config.h"
 
 #include <cmeta/data.h>
 #include <stddef.h>
@@ -13,6 +13,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct turbo_flow_provider_resource_requirement_v1_s
+    turbo_flow_provider_resource_requirement_v1_t;
+typedef struct turbo_flow_provider_resource_view_v1_s turbo_flow_provider_resource_view_v1_t;
 
 typedef struct turbo_flow_plugin_catalog_snapshot_s turbo_flow_plugin_catalog_snapshot_t;
 
@@ -143,8 +147,10 @@ typedef struct turbo_flow_plugin_operation_request_v3_s {
   size_t size;
   uint32_t abi_major;
   uint32_t abi_minor;
-  /** Migration-only deployment resource view; operation policy comes from the typed stage. */
-  const turbo_flow_resolved_config_t *resolved;
+  /** Exact deployment Interface, or NULL for a resource-free operation.
+   * Preflight may borrow only for the call. Factories may retain its view through
+   * result-context cleanup; the result domain owns the resource lease. */
+  const turbo_flow_provider_resource_view_v1_t *resource;
   const char *operation_name;
   const char *resource_name;
   turbo_flow_plugin_operation_limits_v3_t limits;
@@ -184,7 +190,7 @@ enum {
   TURBO_FLOW_PLUGIN_OPERATION_PHASE_RELEASE = 6u
 };
 /**
- * All four operation callbacks must preserve the Host-initialized error size and ABI 3.0.
+ * All four operation callbacks must preserve the Host-initialized error size and exact shared ABI.
  * On return the Host validates size, then version, before reading diagnostics or continuing.
  * A malformed header takes SALTS_EINVAL precedence over callback status; a fresh Host diagnostic
  * reports the current boundary phase without copying the invalid tail. Independently returned
@@ -226,6 +232,8 @@ typedef struct turbo_flow_plugin_operation_v3_s {
   size_t permission_count;
   turbo_flow_plugin_operation_limits_v3_t limits;
   size_t max_session_bytes, max_result_context_bytes;
+  /** Immutable module-owned exact resource requirement; NULL forbids a resource reference. */
+  const turbo_flow_provider_resource_requirement_v1_t *resource_requirement;
   void *factory_ctx;
   turbo_flow_plugin_operation_preflight_fn preflight;
   turbo_flow_plugin_operation_result_context_create_fn create_result_context;

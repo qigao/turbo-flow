@@ -2,6 +2,7 @@
 #include "protocol_network_deployment.h"
 #include "protocol_network_e2e_fixture.h"
 #include "protocol_network_graphs.h"
+#include "rulesforge_resource_fixture.h"
 #include "tinytest.h"
 #include "turbo_flow_applicant_mapper_plugin.h"
 #include "turbo_flow_plugin_generation.h"
@@ -386,6 +387,21 @@ static int rulesforge_register_reflected_operation(turbo_flow_t *flow) {
   return turbo_flow_register_reflected_operation(flow, &registration);
 }
 
+typedef struct composition_resources_s {
+  const turbo_flow_resource_resolver_v1_t *network, *rules;
+} composition_resources_t;
+static int composition_resolve(void *ctx, const char *name,
+                               const turbo_flow_provider_resource_requirement_v1_t *requirement,
+                               turbo_flow_resource_candidate_v1_t *out,
+                               turbo_flow_config_error_t *error) {
+  composition_resources_t *resources = ctx;
+  const turbo_flow_resource_resolver_v1_t *resolver =
+      strcmp(requirement->contract_id, TURBO_FLOW_RULESFORGE_RESOURCE_CONTRACT_ID) == 0
+          ? resources->rules
+          : resources->network;
+  return resolver->resolve(resolver->ctx, name, requirement, out, error);
+}
+
 spec("RulesForge real network composition") {
   static protocol_network_e2e_fixture_t deployment = {0};
   static char schema_path[512];
@@ -397,6 +413,7 @@ spec("RulesForge real network composition") {
   static turbo_flow_plugin_generation_t *cleanup_generation = NULL;
   static turbo_flow_protocol_network_intake_t *jtt_intake = NULL;
   static turbo_flow_protocol_network_intake_t *coap_intake = NULL;
+  static rulesforge_resource_fixture_t rules_deployment = {0};
   static turbo_flow_resolved_config_t *resolved = NULL;
   static turbo_flow_t *flow = NULL;
   static decision_probe_t decisions = {0};
@@ -465,6 +482,7 @@ spec("RulesForge real network composition") {
                   SALTS_OK);
       host = NULL;
     }
+    check_equal(rulesforge_resource_fixture_close(&rules_deployment), SALTS_OK);
     check_equal(protocol_network_deployment_close(&deployment), SALTS_OK);
     if (tcp_initialized) {
       check_equal(cnet_client_stop(&tcp, COMPOSITION_TIMEOUT_MS), SALTS_OK);
@@ -528,7 +546,7 @@ spec("RulesForge real network composition") {
 #undef APPLICANT_MAPPER_FIELDS
     protocol_network_deployment_lifetime_t lifetime = {0};
     char rfl[2048];
-    char yaml[16384];
+    const char yaml[] = "version: 1\n";
     char tcp_uri[96];
     const char *cnet_plugin = getenv("FLOW_CNET_PLUGIN_PATH");
     const char *durable_plugin = getenv("TURBO_FLOW_DURABLE_MEMORY_PLUGIN_PATH");
@@ -600,17 +618,7 @@ spec("RulesForge real network composition") {
     check_true(output_port != 0u);
     check_equal(cnet_datagram_receive(&datagram, COMPOSITION_MESSAGE_CAPACITY), SALTS_OK);
 
-    count = snprintf(yaml, sizeof(yaml),
-                     "version: 1\n"
-                     "channels:\n"
-                     "  rules_adult:\n"
-                     "    kind: %s\n"
-                     "    config:\n"
-                     "      rfl_file: \"%s\"\n"
-                     "      fact_type: Applicant\n",
-                     TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path);
-    check_greater(count, 0);
-    check_less(count, (int)sizeof(yaml));
+    check_equal(rulesforge_resource_fixture_open(&rules_deployment, rfl_path), SALTS_OK);
 
     if (!cnet_plugin || !cnet_plugin[0]) cnet_plugin = TURBO_FLOW_CNET_PLUGIN;
     if (!durable_plugin || !durable_plugin[0]) durable_plugin = TURBO_FLOW_DURABLE_MEMORY_PLUGIN;
@@ -639,7 +647,8 @@ spec("RulesForge real network composition") {
     check_equal(turbo_flow_plugin_result_domain_create(snapshot, COMPOSITION_MESSAGE_CAPACITY,
                                                        &result_domain, &plugin_error),
                 SALTS_OK);
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &error), SALTS_OK);
+    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error),
+                SALTS_OK);
     char graph_text[4096];
     count =
         snprintf(graph_text, sizeof(graph_text), graph_template,
@@ -669,7 +678,10 @@ spec("RulesForge real network composition") {
                 SALTS_OK);
     generation_config.component_runtime = deployment.component_runtime;
     generation_config.provider_resolver = &deployment.provider_resolver;
-    generation_config.resource_resolver = &deployment.resource_resolver;
+    composition_resources_t resources = {&deployment.resource_resolver, &rules_deployment.resolver};
+    turbo_flow_resource_resolver_v1_t resource_resolver = {sizeof(resource_resolver), &resources,
+                                                           composition_resolve};
+    generation_config.resource_resolver = &resource_resolver;
     generation_config.owner_capacity = 4u;
     {
       const int generation_status = turbo_flow_plugin_generation_create(
@@ -840,6 +852,7 @@ spec("RulesForge real network composition") {
     check_equal(lifetime.component_scopes, (size_t)0u);
     check_equal(lifetime.cnet_leases, (size_t)3u);
     check_equal(lifetime.durable_leases, (size_t)1u);
+    check_equal(rulesforge_resource_fixture_close(&rules_deployment), SALTS_EBUSY);
     check_equal(protocol_network_deployment_close(&deployment), SALTS_OK);
     if (cleanup_generation) {
       check_equal(
@@ -849,6 +862,7 @@ spec("RulesForge real network composition") {
     }
     check_equal(turbo_flow_plugin_result_domain_destroy(result_domain, &plugin_error), SALTS_OK);
     result_domain = NULL;
+    check_equal(rulesforge_resource_fixture_close(&rules_deployment), SALTS_OK);
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     snapshot = NULL;
     check_equal(turbo_flow_plugin_host_destroy(host, COMPOSITION_TIMEOUT_MS, &plugin_error),

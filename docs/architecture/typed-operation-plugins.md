@@ -1,6 +1,6 @@
 # Typed-operation DLL 边界
 
-状态：首个同步 typed-operation profile 最初在 shared ABI 3.0 下实施；当前 shared ABI 3.3 纳入 Component runtime generation 配置，materializer 注册面自 3.1 引入，operation v3 语义保持不变；#93其余
+状态：首个同步 typed-operation profile 最初在 shared ABI 3.0 下实施；当前 shared ABI 3.4 使用显式 operation resource，保留 Component runtime generation 配置，materializer 注册面自 3.1 引入，operation v3 语义保持不变；#93其余
 线程/协程/取消profile与#73真实引擎仍在进行。本文件不是这些后续能力的完成声明。
 
 跟踪：[TurboFlow #73](https://github.com/qigao/turbo-flow/issues/73)，父任务
@@ -26,7 +26,7 @@
 Core 必需链接，改为显式 DLL 加载且无 fallback。既有 DSL 的 source/stage
 拓扑语法保持不变；引擎资源配置和直接调用消费者需要显式迁移。
 
-历史事实基线 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`：shared plugin ABI 3.0；当前实现为 shared plugin ABI 3.3，
+历史事实基线 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`：shared plugin ABI 3.0；当前实现为 shared plugin ABI 3.4，
 schema/operation catalog、独立result-domain、typed-result提交及同步generation装配已实现。
 精确结构、生命周期和实施边界见 [ABI 3.x 契约](typed-operation-abi3.md)。该首个 profile
 只接受inline、thread_safe、cancellation none、deadline 0；不覆盖#93全部取消/线程能力，
@@ -58,9 +58,11 @@ canonical CMeta，execution 来自 stage。一个 operation/resource 对应一�
 
 非空 YAML `operation_bindings` 和 `materializer_bindings` 在 provider preparation 前
 返回 `SALTS_ENOTSUP`，不再用于 generation 装配。旧 Config parser/query 仅暂存到
-#241 物理移除。RulesForge 的知识库路径、fact type/base directory 仍是待迁移的部署
-resource consumer，必须先完成 #239 的显式 resource contract；不能因为 policy 已迁移
-就删除 `request.resolved` 或 Config target。
+#241 物理移除。RulesForge 从部署方借用已冻结 KnowledgeBase 的 exact CMeta Interface，
+operation request 不再含 resolved config。资源 lease 在 context 工厂前转移给独立 result domain，
+直到结果 drain、context 成功清理后释放；失败保留重试。详见
+[ABI 3.4 resource 契约](typed-operation-abi3.md#operation-deployment-resources-abi-34)。
+Config target 和 generation 入口的旧参数仍待 #241 物理移除。
 
 1. **Schema 注册**：size/ABI-version 包装不可变 CMeta 元数据，携带稳定 schema
    identity、版本、storage type 及所有权说明。跨 DLL/TU 用 `cmeta_type_equal`
@@ -78,7 +80,7 @@ resource consumer，必须先完成 #239 的显式 resource contract；不能因
 Host、插件和安装消费者必须同步重编译到当前 shared ABI；旧 ABI 1.x/2.x、旧 3.0 以及未来不支持
 版本及短结构一律拒绝。没有旧布局 fallback、保留槽位或新旧双路；包版本与插件 ABI
 版本独立。结构的历史 `_v1_t` 名称不是兼容旧 ABI 的承诺，实际 size/major/minor 必须
-满足当前 shared ABI 3.3 的精确校验。
+满足当前 shared ABI 3.4 的精确校验。
 非 size-version 化的 CMeta 描述符布局不得修改。
 
 注册期间一旦出现非法 descriptor、重复 identity/version、容量不足或 capability

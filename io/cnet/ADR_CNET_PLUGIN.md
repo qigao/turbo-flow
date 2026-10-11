@@ -291,7 +291,7 @@ session/result-domain 计费。非空旧 YAML operation bindings 在 provider pr
 
 本片段同步 runtime、materializer、真实 RulesForge 网络组合及安装消费者的 `.flow`
 输入。RulesForge `rfl_file/fact_type/base_dir` 及其 channel 查找仍需迁到显式部署 resource，
-`request.resolved` 与 Config target 尚未移除；不据此关闭 #239/#241/#93/#73。
+该 policy 阶段保留了 `request.resolved`；后续 resource 迁移见下节。Config target 仍待删除，不据此关闭 #239/#241/#93/#73。
 
 本片段最终 Windows Release 相关回归 **22/22 CTest 套件通过**，使用上述相同的 Salts
 `2.3.0-rc.11` / TurboDB `2.3.4` 安装组合；manifest 已重新核对，TurboDB 的生产依赖仍记录
@@ -318,3 +318,45 @@ ctest --preset win-release-user -R "^test_turbo_flow_install_consumer$" --output
 `241-operation-policy-cflow-build.log`。更早的扩展构建还出现既有 RulesForge capability
 及生成 Vec lifecycle enum 的 C5287 警告。本轮未完成其他平台或 sanitizer qualification，
 既有 Windows Pipe 失败也未纳入这 22 个套件。
+
+
+### #241 operation deployment resource 迁移（2026-10-11）
+
+PluginHost 精确 ABI 从 3.3 升为 3.4：operation requirement 声明精确资源契约，
+request 不再包含 resolved config，改为已验证的 resource Interface view。旧 ABI 被拒绝。
+所有 operation resources 在 operation preflight/factory 前解析；资源名称是否必填由
+requirement 决定，没有 requirement 的 operation 拒绝资源引用。
+
+资源 lease 在 context factory 调用前转入地址稳定的 result-domain entry；factory 失败、
+结果跨 generation 存活和 context cleanup 失败时仍保留。关闭顺序为结果 drain、context/owner
+销毁、resource lease 释放、最后释放 domain snapshot；失败可显式重试。
+
+RulesForge 使用部署方已加载、不可变的 KnowledgeBase Interface。部署方负责 engine 初始化、
+规则/schema/predicate 加载及 KB/engine 销毁；operation 只借用 KB，不接触文件路径或加载策略。
+真实 fixture 在部署后删除规则和 schema 文件，再验证 operation；TCP/UDP durable 组合验证
+销毁 generation 后 resource 仍因 result domain 而 BUSY，domain 释放后才允许卸载。
+设计、候选方案、兼容代价和回滚见
+[operation deployment resources](../../docs/architecture/typed-operation-abi3.md#operation-deployment-resources-abi-34)。
+
+本片段 Windows Release 最终相关回归 **24/24 CTest 套件通过**，随后新增公开资源头 C++
+编译单元，重新构建并运行两个真实 RulesForge 套件 **2/2 通过**。使用正式
+`win-release-user` preset，vcpkg cache contract 8；安装 SDK 为 Salts `2.3.0-rc.11`
+（`40173f836d983225d14e87b1c98b78ffc7047174`）、TurboDB `2.3.4`
+（`a8f849e7cd7193b89a8ade596bf9ef072a0533fc`）、SaltsUtils `4.3.0-rc.8`、RulesForge
+`0.9.3-rc.2`。TurboDB manifest 的生产 Salts 仍为 rc.10；这里只证明其与 rc.11 的本地组合。
+
+复现命令（先进入 Windows VsDevCmd，父环境从 `.env` 注入 GitHub Packages token）：
+
+```powershell
+cmake --build --preset win-release-user --target test_flow_plugin_operation_runtime test_flow_plugin_materializer_generation test_flow_rulesforge_durable_network test_flow_plugin_materializer test_flow_plugin_generation test_flow_plugin_operation test_flow_rulesforge_plugin test_flow_plugin_result_domain test_flow_resource_binding test_flow_provider_config test_flow_provider_typed_config test_flow_provider_binding test_flow_provider_generation test_flow_component_generation test_flow_durable_buffer test_flow_inbox_source test_protocol_network_intake test_protocol_network_intake_config test_protocol_network_intake_core test_protocol_network_intake_edges test_protocol_network_jtt808 test_protocol_network_coap test_protocol_network_jtt808_turbodb test_protocol_network_coap_turbodb --parallel 8
+ctest --preset win-release-user -R "^test_(flow_(plugin_operation(_runtime)?|plugin_materializer(_generation)?|plugin_generation|rulesforge_plugin|rulesforge_durable_network|plugin_result_domain|resource_binding|provider_(config|typed_config|binding|generation)|component_generation|durable_buffer|inbox_source)|protocol_network_(intake(_config|_core|_edges)?|jtt808(_turbodb)?|coap(_turbodb)?))$" --output-on-failure
+cmake --build --preset win-release-user --target test_flow_rulesforge_plugin test_flow_rulesforge_durable_network --parallel 8
+ctest --preset win-release-user -R "^test_flow_rulesforge_(plugin|durable_network)$" --output-on-failure
+```
+
+日志为 `build/Msvc-Release/241-operation-resource-final-{build,tests}.log` 与
+`241-operation-resource-headers-{build,tests}.log`。本片段未重跑完整安装测试；上节记录的
+CFlow 私有函数链接失败仍需修复。其他平台、sanitizer 和既有 Windows Pipe 失败不在本次
+验收范围。Config target/公开 generation 迁移接口仍存在；canonical operation publication、
+完整 RulesForge 执行配额/取消、TurboScript 和 broker/cutover 资格验证仍未完成，
+不据此关闭 #239/#241/#93/#73。

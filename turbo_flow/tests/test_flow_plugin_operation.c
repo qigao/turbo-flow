@@ -42,16 +42,18 @@ spec("ABI3 operation catalog") {
                 SALTS_EPROTO);
   }
   it("rejects malformed ABI, shape, profile and permissions without any committed entries") {
-    const char *paths[] = {
-        FLOW_OPERATION_BAD_SHAPE,      FLOW_OPERATION_BAD_ABI,        FLOW_OPERATION_SHORT,
-        FLOW_OPERATION_LONG,           FLOW_OPERATION_BAD_VTABLE,     FLOW_OPERATION_NO_GUARANTEE,
-        FLOW_OPERATION_BAD_EFFECT,     FLOW_OPERATION_BAD_PERMISSION, FLOW_OPERATION_DUP_PERMISSION,
-        FLOW_OPERATION_PERMISSION,     FLOW_OPERATION_BAD_LIMIT,      FLOW_OPERATION_MISSING_OUTPUT,
-        FLOW_OPERATION_MEMORY_OVERFLOW};
+    const char *paths[] = {FLOW_OPERATION_BAD_SHAPE,       FLOW_OPERATION_BAD_ABI,
+                           FLOW_OPERATION_SHORT,           FLOW_OPERATION_LONG,
+                           FLOW_OPERATION_BAD_VTABLE,      FLOW_OPERATION_NO_GUARANTEE,
+                           FLOW_OPERATION_BAD_EFFECT,      FLOW_OPERATION_BAD_PERMISSION,
+                           FLOW_OPERATION_DUP_PERMISSION,  FLOW_OPERATION_PERMISSION,
+                           FLOW_OPERATION_BAD_LIMIT,       FLOW_OPERATION_MISSING_OUTPUT,
+                           FLOW_OPERATION_MEMORY_OVERFLOW, FLOW_OPERATION_BAD_RESOURCE,
+                           FLOW_OPERATION_OLD_MINOR};
     const int statuses[] = {SALTS_EINVAL,   SALTS_EINVAL,  SALTS_EINVAL,  SALTS_EINVAL,
                             SALTS_EINVAL,   SALTS_ENOTSUP, SALTS_ENOTSUP, SALTS_EINVAL,
                             SALTS_EALREADY, SALTS_ENOTSUP, SALTS_EINVAL,  SALTS_EPROTO,
-                            SALTS_EINVAL};
+                            SALTS_EINVAL,   SALTS_EINVAL,  SALTS_EINVAL};
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
       turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
       turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;

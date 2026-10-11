@@ -77,7 +77,8 @@ static int domain_release_context(void *ctx) {
 }
 int flow_plugin_result_domain_materialize(turbo_flow_plugin_result_domain_t *domain,
                                           const turbo_flow_plugin_operation_v3_t *op,
-                                          const turbo_flow_plugin_operation_request_v3_t *request,
+                                          turbo_flow_plugin_operation_request_v3_t *request,
+                                          turbo_flow_resource_binding_t **resource_io,
                                           flow_plugin_result_entry_t **out,
                                           turbo_flow_plugin_operation_error_v3_t *error) {
   turbo_flow_projection_owner_config_t config = TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
@@ -90,6 +91,14 @@ int flow_plugin_result_domain_materialize(turbo_flow_plugin_result_domain_t *dom
   entry = vec_at(&domain->entries, domain->count++);
   entry->vtable = op->vtable;
   *out = entry;
+  /* Transfer before invoking a factory: failed factories may still return an
+   * owned context whose cleanup needs this exact resource/module. */
+  entry->resource = *resource_io;
+  *resource_io = NULL;
+  if (entry->resource) {
+    entry->resource_view = *request->resource;
+    request->resource = &entry->resource_view;
+  }
   rc = op->create_result_context(op->factory_ctx, request, &entry->context, error);
   rc = flow_plugin_operation_callback_result(error,
                                              TURBO_FLOW_PLUGIN_OPERATION_PHASE_RESULT_CONTEXT, rc);
@@ -174,6 +183,11 @@ int turbo_flow_plugin_result_domain_destroy(turbo_flow_plugin_result_domain_t *d
          : entry->context ? domain_release_context(entry)
                           : SALTS_OK;
     if (rc != SALTS_OK) goto failed;
+    entry->owner = NULL;
+    if (entry->resource) {
+      rc = turbo_flow_resource_binding_release(&entry->resource);
+      if (rc != SALTS_OK) goto failed;
+    }
     memset(entry, 0, sizeof(*entry));
     --domain->count;
   }
