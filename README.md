@@ -91,6 +91,14 @@ Protocol decoders validate framing and normalize accepted data into the canonica
 
 NetworkIntake v4 selects its Source and decoder by exact `.flow` stage names and receives explicit Component/provider/resource resolvers. Both configurations use generated typed Messages; decoder schema 1 has an optional complete mapper record and no resolved-config input. CNet deployment resource Interfaces retain endpoint/TLS ownership. The compiled Source instance and generation scope survive stop until final destruction; failed cleanup returns an owner for explicit retry. See the [CNet migration and lifetime contract](io/cnet/ADR_CNET_PLUGIN.md#networkintake-v4-消费端迁移) and the real TCP/UDP integration tests.
 
+PluginHost ABI 3.5 removes the resolved-config argument from
+`turbo_flow_plugin_generation_create()`. Pass the parsed `.flow` Graph, explicit
+Component/provider/resource resolvers, catalog snapshot and result domain directly.
+Operation policy and materializer selection come from typed stage records; no
+empty YAML document is required. Rebuild hosts and plugins together. Config's
+remaining Product, host-loading and Security/Policy consumers are still being
+migrated under [#241](https://github.com/qigao/turbo-flow/issues/241).
+
 Connection listeners, HTTP endpoints, and network lifecycle remain owned by CNet/CHTTP-facing adapters. MQTT receive is a Source and MQTT send is a Sink; MQTT is not TurboFlow's internal message format.
 
 ## Authoring boundary

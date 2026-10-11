@@ -55,7 +55,6 @@ typedef struct protocol_network_e2e_fixture_s {
   char *turbodb_path;
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_protocol_network_intake_t *intake;
   turbo_flow_plugin_generation_t *business_generation;
   turbo_flow_plugin_generation_t *business_cleanup;

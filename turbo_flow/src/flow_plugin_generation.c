@@ -321,7 +321,6 @@ static int flow_plugin_generation_bind_operation_materializers(
 
 int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_catalog_snapshot_t *snapshot,
-    const turbo_flow_resolved_config_t *resolved,
     turbo_flow_t **flow_io,
     const turbo_flow_plugin_generation_config_t *config,
     turbo_flow_plugin_result_domain_t *domain,
@@ -329,14 +328,13 @@ int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_generation_t **cleanup_out,
     turbo_flow_config_error_t *error) {
   turbo_flow_plugin_generation_t *generation;
-  size_t legacy_bindings = 0u;
   turbo_flow_config_error_t cleanup_error =
       TURBO_FLOW_CONFIG_ERROR_INIT;
   int rc;
 
   if (generation_out) *generation_out = NULL;
   if (cleanup_out) *cleanup_out = NULL;
-  if (!snapshot || !resolved || !flow_io || !*flow_io || !config ||
+  if (!snapshot || !flow_io || !*flow_io || !config ||
       !generation_out || !cleanup_out || generation_out == cleanup_out ||
       !error || error->size != sizeof(*error) ||
       config->size != sizeof(*config) ||
@@ -351,18 +349,6 @@ int turbo_flow_plugin_generation_create(
   if (turbo_flow_state(*flow_io) != TURBO_FLOW_STATE_PARSED)
     return flow_plugin_generation_error(
         error, SALTS_EINVAL, "$.graph", "Graph must be parsed");
-
-  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &legacy_bindings);
-  if (rc != SALTS_OK || legacy_bindings != 0u)
-    return flow_plugin_generation_error(
-        error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.materializer_bindings",
-        "move materializer selection into the typed operation stage config");
-
-  rc = turbo_flow_resolved_config_operation_binding_count(resolved, &legacy_bindings);
-  if (rc != SALTS_OK || legacy_bindings != 0u)
-    return flow_plugin_generation_error(
-        error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.operation_bindings",
-        "move operation policy into the typed operation stage config");
 
   generation =
       (turbo_flow_plugin_generation_t *)calloc(1u, sizeof(*generation));

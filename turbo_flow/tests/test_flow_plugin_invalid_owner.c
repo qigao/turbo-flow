@@ -2,8 +2,6 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 
-static const char owner_yaml[] = "version: 1\nadapters:\n  input.adapter:\n"
-                                 "    kind: fixture.transactional.adapter\n    config: {}\n";
 static const char owner_dsl[] =
     "source input adapter input.adapter\n"
     "stage output operation debug.log\nstage main {\n input -> output\n}\n";
@@ -12,7 +10,6 @@ typedef struct invalid_owner_test_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_plugin_result_domain_t *domain;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
   turbo_flow_plugin_generation_t *generation, *cleanup;
   generation_owner_observer_t *observer;
@@ -33,9 +30,6 @@ static void owner_open(invalid_owner_test_t *t, int mode, const char *path) {
   t->observer = catalog.adapter_providers[0].ctx;
   t->observer->mode = mode;
   check_equal(turbo_flow_plugin_result_domain_create(t->snapshot, 1u, &t->domain, &pe), SALTS_OK);
-  check_equal(
-      turbo_flow_config_resolve_yaml(owner_yaml, sizeof(owner_yaml) - 1u, &t->resolved, &ce),
-      SALTS_OK);
   t->flow = turbo_flow_create();
   check_not_null(t->flow);
   check_equal(turbo_flow_parse_string(t->flow, owner_dsl, sizeof(owner_dsl) - 1u), SALTS_OK);
@@ -51,7 +45,7 @@ suite("invalid Product owner DLL boundary") {
       turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
       turbo_flow_config_error_t ce = TURBO_FLOW_CONFIG_ERROR_INIT;
       owner_open(&t, modes[i], FLOW_INVALID_OWNER_FIXTURE);
-      check_equal(turbo_flow_plugin_generation_create(t.snapshot, t.resolved, &t.flow, &gc,
+      check_equal(turbo_flow_plugin_generation_create(t.snapshot, &t.flow, &gc,
                                                       t.domain, &t.generation, &t.cleanup, &ce),
                   SALTS_EPROTO);
       check_null(t.flow);
@@ -62,7 +56,6 @@ suite("invalid Product owner DLL boundary") {
       check_equal(t.observer->graph_shutdowns, 1u);
       check_equal(t.observer->destroys_before_graph, 0u);
       check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &pe), SALTS_OK);
-      turbo_flow_resolved_config_destroy(t.resolved);
       turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
       check_equal(turbo_flow_plugin_host_destroy(t.host, 0u, &pe), SALTS_OK);
     }
@@ -90,14 +83,13 @@ suite("invalid Product owner DLL boundary") {
                          ? SALTS_EPROTO
                          : SALTS_EINVAL;
       owner_open(&t, modes[i], path);
-      check_equal(turbo_flow_plugin_generation_create(t.snapshot, t.resolved, &t.flow, &gc,
+      check_equal(turbo_flow_plugin_generation_create(t.snapshot, &t.flow, &gc,
                                                       t.domain, &t.generation, &t.cleanup, &ce),
                   expected);
       check_null(t.flow);
       check_null(t.generation);
       check_not_null(t.cleanup);
       check_equal(ce.status, expected);
-      turbo_flow_resolved_config_destroy(t.resolved);
       turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
       for (size_t retry = 0u; retry < 2u; ++retry) {
         check_equal(turbo_flow_plugin_generation_state(t.cleanup),

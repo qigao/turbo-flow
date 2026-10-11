@@ -412,8 +412,10 @@ cmake_add_test(test_flow_plugin_projection
   LIBS TurboFlow::PluginHost Salts::TinyTest FOLDER "turbo_flow/tests")
 target_compile_definitions(test_flow_plugin_projection PRIVATE
   FLOW_PROJECTION_FIXTURE="$<TARGET_FILE:test_flow_plugin_projection_fixture>"
-  FLOW_PROJECTION_GENERATION_FIXTURE="$<TARGET_FILE:test_flow_plugin_generation_success>")
-add_dependencies(test_flow_plugin_projection test_flow_plugin_projection_fixture test_flow_plugin_generation_success)
+  FLOW_SALTS_PROVIDER_FIXTURE="$<TARGET_FILE:test_flow_salts_provider_fixture>"
+  FLOW_SALTS_RESOURCE_FIXTURE="$<TARGET_FILE:test_flow_salts_resource_fixture>")
+add_dependencies(test_flow_plugin_projection test_flow_plugin_projection_fixture
+  test_flow_salts_provider_fixture test_flow_salts_resource_fixture)
 set_tests_properties(test_flow_plugin_projection PROPERTIES LABELS "plugin;graph" TIMEOUT 30)
 
 cmake_add_test(

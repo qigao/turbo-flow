@@ -26,13 +26,15 @@ static void abi_test_real_deallocate(void *ctx, void *memory) {
 }
 
 spec("production plugin ABI boundary") {
-  it("publishes ABI 3.0 and accepts only an exact ABI 3.0 host before allocation") {
+  it("publishes the current ABI and rejects older and newer hosts before allocation") {
     const turbo_flow_plugin_api_v1_t *api = turbo_flow_plugin_get_api();
     const uint32_t majors[] = {1u, 2u, 3u, 4u};
-    const uint32_t minors[] = {0u, 1u};
+    const uint32_t minors[] = {0u, TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR - 1u,
+                               TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR,
+                               TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR + 1u};
     check_not_null(api);
-    check_equal(api->abi_major, 3u);
-    check_equal(api->abi_minor, 0u);
+    check_equal(api->abi_major, TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR);
+    check_equal(api->abi_minor, TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR);
     for (size_t i = 0u; i < sizeof(majors) / sizeof(majors[0]); ++i) {
       for (size_t j = 0u; j < sizeof(minors) / sizeof(minors[0]); ++j) {
         turbo_flow_plugin_host_v1_t host = {0};
@@ -44,7 +46,8 @@ spec("production plugin ABI boundary") {
         host.ctx = &calls;
         host.allocate = abi_test_allocate;
         host.deallocate = abi_test_deallocate;
-        if (majors[i] == 3u && minors[j] == 0u) {
+        if (majors[i] == TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR &&
+            minors[j] == TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR) {
           check_equal(api->load(&host, &plugin), SALTS_ENOMEM);
           check_equal(calls, (size_t)1);
         } else {
@@ -114,8 +117,8 @@ spec("production plugin ABI boundary") {
     size_t allocation_calls = 0u;
     void *plugin = NULL;
     host.size = sizeof(host);
-    host.abi_major = 3u;
-    host.abi_minor = 0u;
+    host.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
+    host.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
     host.ctx = &allocation_calls;
     host.allocate = abi_test_real_allocate;
     host.deallocate = abi_test_real_deallocate;

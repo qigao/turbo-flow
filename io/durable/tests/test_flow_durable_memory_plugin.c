@@ -23,9 +23,6 @@ enum {
   GRAPH_BYTES = 4096
 };
 
-static const char resolved_yaml[] =
-    "version: 1\n"
-    "adapters: {}\n";
 
 static const char graph_generated[] =
     "source input\n"
@@ -54,7 +51,6 @@ typedef struct resolver_state_s {
 typedef struct fixture_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
   turbo_flow_t *execution_flow;
   turbo_flow_plugin_generation_t *generation;
@@ -192,10 +188,6 @@ static int open_fixture(
   rc = turbo_flow_plugin_catalog_snapshot_create(
       f->host, &f->snapshot, &plugin_error);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_config_resolve_yaml(
-      resolved_yaml, sizeof(resolved_yaml) - 1u,
-      &f->resolved, config_error);
-  if (rc != SALTS_OK) return rc;
 
   f->flow = turbo_flow_create();
   if (!f->flow) return SALTS_ENOMEM;
@@ -262,10 +254,6 @@ static void close_fixture(fixture_t *f) {
     turbo_flow_destroy(f->flow);
     f->flow = NULL;
   }
-  if (f->resolved) {
-    turbo_flow_resolved_config_destroy(f->resolved);
-    f->resolved = NULL;
-  }
   if (f->snapshot) {
     turbo_flow_plugin_catalog_snapshot_destroy(f->snapshot);
     f->snapshot = NULL;
@@ -292,7 +280,7 @@ static int create_generation(fixture_t *f) {
   config.provider_resolver = &f->provider_resolver;
   config.resource_resolver = &f->resource_resolver;
   rc = turbo_flow_plugin_generation_create(
-      f->snapshot, f->resolved, &f->flow, &config,
+      f->snapshot, &f->flow, &config,
       NULL, &f->generation, &f->cleanup, &error);
   info(
       "generation status=%d path=%s reason=%s",

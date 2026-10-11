@@ -105,3 +105,54 @@ DLL fixtures cover missing symbols, incompatible ABI, invalid root tables, parti
 duplicates, capacity boundaries, snapshot leases, and lifecycle order. Product preflight consumes a
 snapshot view. Installed C and C++ consumers compile the public ABI. Debug/ASan, Release, and
 install-tree test suites remain mandatory.
+
+
+## Generation Config removal — ABI 3.5 (2026-10-11)
+
+The replacement stage/resource paths now cover every input consumed by
+`turbo_flow_plugin_generation_create()`: provider instances use the explicit
+Component scope and typed config, while operation policy/materializer records
+come from `.flow` and deployment owners arrive through exact resource bindings.
+The remaining resolved-config argument only rejected legacy binding tables and
+forced callers to allocate an otherwise unused YAML document.
+
+The chosen change removes that argument, rather than keeping a nullable argument,
+a dummy document, or a compatibility wrapper. PluginHost exact ABI is 3.5;
+hosts and modules must be rebuilt together. This is a source/binary breaking
+change to the generation creation function. A rollback requires the complete
+previous host/plugin package, not mixing binaries across versions.
+
+Graph transfer, preflight-before-side-effects, cleanup retry handles, independent
+result domains and Component/resource release ordering keep their existing
+owners. The C/C++ signature contracts and installed operation consumer are
+updated. Operation and materializer runtime fixtures no longer parse YAML;
+legacy YAML-only rejection cases are removed from these generation suites.
+Typed-policy mismatch, capacity, preflight failures, result retention and
+cleanup-retry cases continue to exercise the canonical inputs. Generation config
+admission also rejects the previous and future minor ABI before Graph transfer.
+
+The retained-projection DLL integration now materializes two canonical provider
+owners with explicit resource leases, destroys that generation and unloads its
+provider/resource modules, then clones and reads the independently retained
+projection. Its own DLL remains pinned until the last projection is released.
+No legacy transactional provider is substituted for the canonical path.
+
+This closes only the generation-create consumer of #241. Product assembly,
+configured host loading, Security/Policy authoring and the Config target itself
+remain migration work; the subsystem is not yet removed.
+
+### Verification of this slice
+
+Windows `win-release-user` full graph build and `install-win-release-user` pass.
+The targeted generation/operation/materializer/durable/TCP/UDP/TurboDB/RulesForge
+selection passes 10/10 CTests; the subsequent `ctest --preset win-release-user
+-L plugin --output-on-failure` regression passes 25/25, including the migrated
+projection lifetime test and previous/current/future ABI admission checks.
+
+`test_turbo_flow_install_consumer` builds the installed full C++ consumer with
+the new generation signature. Schema-only and installed CNet plugin consumers
+run successfully. The parent installed-consumer test still fails at the existing
+CNet missing-transitive negative fixture (`tests/install_consumer/run.cmake`):
+copying only the plugin does not isolate dependency search from the inherited
+runtime paths. No gate is skipped and full installed runtime qualification is
+not claimed. Debug/sanitizers and other platforms were not rerun for this slice.

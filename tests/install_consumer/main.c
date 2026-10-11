@@ -376,8 +376,6 @@ static void install_operation_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_e
 }
 
 static int install_operation_runtime(const char *plugin_path) {
-  static const char yaml_template[] = "version: 1\nplugins:\n"
-                                      "  - {id: fixture.operation, version: 1.0.0, path: '%s'}\n";
   static const char dsl[] =
       "source input\nstage calculate operation fixture.double {\n"
       "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "
@@ -406,28 +404,20 @@ static int install_operation_runtime(const char *plugin_path) {
   turbo_flow_plugin_result_domain_t *domain = NULL;
   turbo_flow_plugin_generation_t *generation = NULL;
   turbo_flow_plugin_generation_t *cleanup = NULL;
-  turbo_flow_resolved_config_t *resolved = NULL;
   turbo_flow_t *flow = NULL;
   unsigned char *legacy_metadata = NULL;
-  char yaml[4096];
   turbo_flow_msg_t input, result, clone;
   size_t unloads = 0u;
   int *value = NULL;
-  int yaml_size;
   int rc;
   turbo_flow_msg_init(&input);
   turbo_flow_msg_init(&result);
   turbo_flow_msg_init(&clone);
   host_config.lifecycle_observer = install_operation_lifecycle;
   host_config.lifecycle_observer_ctx = &unloads;
-  yaml_size = snprintf(yaml, sizeof(yaml), yaml_template, plugin_path);
-  if (yaml_size <= 0 || (size_t)yaml_size >= sizeof(yaml)) {
-    rc = SALTS_ERANGE;
-    goto cleanup_all;
-  }
-  rc = turbo_flow_config_resolve_yaml(yaml, (size_t)yaml_size, &resolved, &config_error);
+  rc = turbo_flow_plugin_host_create(&host_config, &host, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
-  rc = turbo_flow_plugin_host_create_configured(&host_config, resolved, 0u, &host, &plugin_error);
+  rc = turbo_flow_plugin_host_load(host, plugin_path, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
   rc = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
@@ -485,7 +475,7 @@ static int install_operation_runtime(const char *plugin_path) {
   if (rc != SALTS_OK) goto cleanup_all;
   rc = turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u);
   if (rc != SALTS_OK) goto cleanup_all;
-  rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &generation_config, domain,
+  rc = turbo_flow_plugin_generation_create(snapshot, &flow, &generation_config, domain,
                                            &generation, &cleanup, &config_error);
   if (rc != SALTS_OK) goto cleanup_all;
   value = (int *)malloc(sizeof(*value));
@@ -545,7 +535,6 @@ cleanup_all:
     int cleanup_rc = turbo_flow_plugin_result_domain_destroy(domain, &plugin_error);
     if (rc == SALTS_OK) rc = cleanup_rc;
   }
-  turbo_flow_resolved_config_destroy(resolved);
   turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
   if (host) {
     int cleanup_rc = turbo_flow_plugin_host_destroy(host, 0u, &plugin_error);
@@ -696,7 +685,7 @@ int main(int argc, char **argv) {
                                            turbo_flow_plugin_transactional_product_catalog_v1_t *) =
       turbo_flow_plugin_catalog_snapshot_transactional_product_catalog;
   int (*plugin_generation_create)(
-      turbo_flow_plugin_catalog_snapshot_t *, const turbo_flow_resolved_config_t *, turbo_flow_t **,
+      turbo_flow_plugin_catalog_snapshot_t *, turbo_flow_t **,
       const turbo_flow_plugin_generation_config_t *, turbo_flow_plugin_result_domain_t *,
       turbo_flow_plugin_generation_t **, turbo_flow_plugin_generation_t **,
       turbo_flow_config_error_t *) = turbo_flow_plugin_generation_create;

@@ -89,15 +89,6 @@ static int runtime_register_reflected_operation(
   return turbo_flow_register_reflected_operation(flow, &registration);
 }
 
-static const char legacy_operation_yaml[] =
-    "version: 1\noperation_bindings:\n"
-    "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
-    "    input_schema: cmeta.int.data\n    input_schema_version: 1\n"
-    "    output_schema: cmeta.int.data\n    output_schema_version: 1\n"
-    "    execution: inline\n    threading: thread_safe\n    cancellation: none\n"
-    "    permissions: []\n    max_inflight: 1\n    max_input_bytes: 8\n"
-    "    max_result_bytes: 8\n    max_retained_bytes: 32\n    max_steps: 2\n    deadline_ms: 0\n";
-static const char operation_yaml[] = "version: 1\n";
 #define RUNTIME_POLICY                                                                             \
   "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "        \
   "max_result_bytes 8, max_retained_bytes 32, max_steps 2 }\n"
@@ -142,7 +133,6 @@ typedef struct runtime_test_s {
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_plugin_result_domain_t *domain;
   turbo_flow_plugin_generation_t *generation, *cleanup;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
   turbo_flow_msg_t input, result;
   turbo_flow_plugin_generation_config_t config;
@@ -192,7 +182,7 @@ static void runtime_dsl(char *out, const char *field, const char *replacement) {
   strcpy(out + prefix, replacement);
   strcpy(out + prefix + strlen(replacement), at + strlen(field));
 }
-static int runtime_open_contract(runtime_test_t *t, const char *path, const char *yaml,
+static int runtime_open_contract(runtime_test_t *t, const char *path,
                                  const char *dsl, int fault) {
   turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -241,8 +231,6 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
     t->config.resource_resolver = &t->resource_resolver;
   }
   rc = turbo_flow_plugin_result_domain_create(t->snapshot, 2, &t->domain, &pe);
-  if (rc) return rc;
-  rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &t->resolved, &t->error);
   if (rc) return rc;
   t->flow = turbo_flow_create();
   if (!t->flow) return SALTS_ENOMEM;
@@ -324,11 +312,11 @@ static int runtime_open_contract(runtime_test_t *t, const char *path, const char
   if (rc) return rc;
   return turbo_flow_parse_string(t->flow, dsl, strlen(dsl));
 }
-static int runtime_open(runtime_test_t *t, const char *path, const char *yaml, const char *dsl) {
-  return runtime_open_contract(t, path, yaml, dsl, 0);
+static int runtime_open(runtime_test_t *t, const char *path, const char *dsl) {
+  return runtime_open_contract(t, path, dsl, 0);
 }
 static int runtime_create(runtime_test_t *t) {
-  return turbo_flow_plugin_generation_create(t->snapshot, t->resolved, &t->flow, &t->config,
+  return turbo_flow_plugin_generation_create(t->snapshot, &t->flow, &t->config,
                                              t->domain, &t->generation, &t->cleanup, &t->error);
 }
 static int runtime_close(runtime_test_t *t) {
@@ -353,8 +341,6 @@ static int runtime_close(runtime_test_t *t) {
     if (rc) return rc;
     t->domain = NULL;
   }
-  turbo_flow_resolved_config_destroy(t->resolved);
-  t->resolved = NULL;
   turbo_flow_plugin_catalog_snapshot_destroy(t->snapshot);
   t->snapshot = NULL;
   if (t->host) {
@@ -420,7 +406,7 @@ static void runtime_reject_error_header(uint32_t phase, int mode, int fault, int
   turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   int alias = mode == OP_FIXTURE_EXECUTE_ALIAS;
   check_equal(runtime_open(&t, alias ? FLOW_OPERATION_EXECUTE_ALIAS : FLOW_OPERATION_OK,
-                           operation_yaml, operation_dsl),
+                           operation_dsl),
               SALTS_OK);
   t.observer->mode = mode;
   t.observer->error_phase = phase;
@@ -586,8 +572,7 @@ spec("ABI3 generation operation runtime") {
     runtime_dsl(dsl, "operation fixture.double {", "operation fixture.double resource db_main {");
     for (int fault = 0; fault < 6; ++fault) {
       runtime_test_t t;
-      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml,
-                               fault == 0 ? operation_dsl : dsl),
+      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, fault == 0 ? operation_dsl : dsl),
                   SALTS_OK);
       int expected = SALTS_EINVAL;
       if (fault == 1) t.config.resource_resolver = NULL;
@@ -616,7 +601,7 @@ spec("ABI3 generation operation runtime") {
       check_equal(runtime_close(&t), SALTS_OK);
     }
     runtime_test_t t;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_EINVAL);
     check_equal(t.error.path, "$.generation.operations[0].resource");
     check_equal(runtime_close(&t), SALTS_OK);
@@ -626,7 +611,7 @@ spec("ABI3 generation operation runtime") {
     char dsl[RUNTIME_TEXT_BYTES];
     turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     runtime_dsl(dsl, "operation fixture.double {", "operation fixture.double resource db_main {");
-    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_OK);
     check_equal(runtime_resource_leases(&t), (size_t)1u);
     runtime_bind(&t, 0);
@@ -656,7 +641,7 @@ spec("ABI3 generation operation runtime") {
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
       runtime_test_t t;
       turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, dsl), SALTS_OK);
       t.observer->mode = modes[i];
       check_equal(runtime_create(&t), SALTS_EIO);
       check_null(t.flow);
@@ -675,7 +660,7 @@ spec("ABI3 generation operation runtime") {
         "stage second operation fixture.double resource second {\n" RUNTIME_POLICY "}\n"
         "stage main {\n input -> first -> second\n}\n";
     runtime_test_t t;
-    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, dsl), SALTS_OK);
     t.reject_resource = "second";
     check_equal(runtime_create(&t), SALTS_ENOENT);
     check_not_null(t.flow);
@@ -705,22 +690,6 @@ spec("ABI3 generation operation runtime") {
     runtime_error_header_matrix(TURBO_FLOW_PLUGIN_OPERATION_PHASE_EXECUTE, modes,
                                 sizeof(modes) / sizeof(modes[0]));
   }
-  it("rejects duplicate binding YAML before producing a resolved document or calling factories") {
-    runtime_test_t t;
-    turbo_flow_resolved_config_t *duplicate = NULL;
-    char yaml[RUNTIME_TEXT_BYTES];
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
-    check_less(snprintf(yaml, sizeof(yaml), "%s%s", legacy_operation_yaml,
-                        strstr(legacy_operation_yaml, "  - operation:")),
-               (int)sizeof(yaml));
-    check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &duplicate, &t.error),
-                SALTS_EALREADY);
-    check_null(duplicate);
-    check_equal(atomic_load(&t.observer->context_creates), 0u);
-    check_equal(atomic_load(&t.observer->session_creates), 0u);
-    check_equal(turbo_flow_state(t.flow), TURBO_FLOW_STATE_PARSED);
-    check_equal(runtime_close(&t), SALTS_OK);
-  }
   it("preserves an operation compile failure through cleanup and rejects reuse of its consumed "
      "domain") {
     static const char invalid_dsl[] =
@@ -730,7 +699,7 @@ spec("ABI3 generation operation runtime") {
     runtime_test_t t;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
     turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, invalid_dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, invalid_dsl), SALTS_OK);
     turbo_flow_operation_descriptor_t metadata =
         *turbo_flow_find_operation(t.flow, "fixture.double");
     metadata.name = "fixture.double";
@@ -773,7 +742,7 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_catalog_snapshot_t *other = NULL;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(t.host, &other, &pe), SALTS_OK);
     turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
     t.snapshot = other;
@@ -794,7 +763,7 @@ spec("ABI3 generation operation runtime") {
       runtime_test_t t;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       turbo_flow_plugin_operation_error_v3_t error;
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
       check_equal(runtime_create(&t), SALTS_OK);
       if (kind == 1) {
         int *value = malloc(sizeof(int));
@@ -821,15 +790,17 @@ spec("ABI3 generation operation runtime") {
     }
   }
   it("validates Graph contracts and exact generation descriptors before transfer") {
-    for (int fault = 1; fault <= 15; ++fault) {
+    for (int fault = 1; fault <= 17; ++fault) {
       runtime_test_t t;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       int open_rc =
-          runtime_open_contract(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl, fault);
+          runtime_open_contract(&t, FLOW_OPERATION_OK, operation_dsl, fault);
       check_equal(open_rc, fault == 9 || fault == 13 || fault == 14 ? SALTS_EINVAL : SALTS_OK);
       if (fault == 10) --t.config.size;
       if (fault == 11) ++t.config.size;
       if (fault == 12) t.config.abi_major = 2;
+      if (fault == 16) --t.config.abi_minor;
+      if (fault == 17) ++t.config.abi_minor;
       turbo_flow_t *original = t.flow;
       int rc = open_rc == SALTS_OK ? runtime_create(&t) : open_rc;
       info("Graph/config fault %d: %d %s", fault, rc, t.error.path);
@@ -859,7 +830,7 @@ spec("ABI3 generation operation runtime") {
       runtime_test_t t;
       turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
-      check_equal(runtime_open(&t, FLOW_OPERATION_TWO_NAMES, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_TWO_NAMES, dsl), SALTS_OK);
       turbo_flow_operation_descriptor_t metadata =
           *turbo_flow_find_operation(t.flow, "fixture.double");
       metadata.name = "fixture.other";
@@ -911,7 +882,7 @@ spec("ABI3 generation operation runtime") {
     runtime_test_t t;
     turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OWNER_FAIL, operation_yaml, operation_dsl),
+    check_equal(runtime_open(&t, FLOW_OPERATION_OWNER_FAIL, operation_dsl),
                 SALTS_OK);
     check_equal(runtime_create(&t), SALTS_EINVAL);
     check_null(t.flow);
@@ -940,9 +911,9 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_result_memory_requirements_init(&cost);
     check_equal(turbo_flow_result_memory_requirements(SIZE_MAX, 8, &cost), SALTS_EINVAL);
     check_equal(turbo_flow_result_memory_requirements(2, SIZE_MAX, &cost), SALTS_EINVAL);
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
     turbo_flow_t *original = t.flow;
-    check_equal(turbo_flow_plugin_generation_create(t.snapshot, t.resolved, &t.flow, &t.config,
+    check_equal(turbo_flow_plugin_generation_create(t.snapshot, &t.flow, &t.config,
                                                     t.domain, &t.generation, &t.generation,
                                                     &t.error),
                 SALTS_EINVAL);
@@ -963,7 +934,7 @@ spec("ABI3 generation operation runtime") {
       int second_started = 0, admission_status = SALTS_OK;
       int second_create = 0, generation_destroy = SALTS_OK;
       unsigned session_releases = 0;
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
       check_equal(runtime_create(&t), SALTS_OK);
       runtime_bind(&t, 0);
       /* Borrowed context selects Graph's existing direct inline path, not its serialized broadcast
@@ -977,8 +948,6 @@ spec("ABI3 generation operation runtime") {
         check_equal(turbo_flow_plugin_generation_destroy(t.generation, 0, &t.error), SALTS_OK);
         t.generation = NULL;
       } else check_equal(turbo_flow_plugin_generation_lease_acquire(t.generation), SALTS_OK);
-      turbo_flow_resolved_config_destroy(t.resolved);
-      t.resolved = NULL;
       /* Snapshot mutation is control-owned; worker bodies only invoke Graph message operations. */
       check(t.control_thread == &runtime_thread_identity);
       turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
@@ -1063,7 +1032,7 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_msg_t clone;
     turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_OK);
     runtime_bind(&t, 0);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(t.generation)), SALTS_OK);
@@ -1088,8 +1057,6 @@ spec("ABI3 generation operation runtime") {
     check(t.flow == unconsumed);
     check_null(t.generation);
     check_null(t.cleanup);
-    turbo_flow_resolved_config_destroy(t.resolved);
-    t.resolved = NULL;
     turbo_flow_plugin_catalog_snapshot_destroy(t.snapshot);
     t.snapshot = NULL;
     check_equal(turbo_flow_plugin_result_domain_destroy(t.domain, &pe), SALTS_EBUSY);
@@ -1136,10 +1103,10 @@ spec("ABI3 generation operation runtime") {
         {"max_inflight 1", "max_inflight 5", SALTS_ENOSPC}};
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
       runtime_test_t t;
-      char yaml[RUNTIME_TEXT_BYTES];
+      char source[RUNTIME_TEXT_BYTES];
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
-      runtime_dsl(yaml, cases[i].before, cases[i].after);
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, yaml), SALTS_OK);
+      runtime_dsl(source, cases[i].before, cases[i].after);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, source), SALTS_OK);
       turbo_flow_t *original = t.flow;
       int rc = runtime_create(&t);
       info("case %zu: %d %s", i, rc, t.error.path);
@@ -1156,21 +1123,6 @@ spec("ABI3 generation operation runtime") {
       check_equal(state.state, (uint32_t)TURBO_FLOW_PLUGIN_RESULT_DOMAIN_READY);
       check_equal(runtime_close(&t), SALTS_OK);
     }
-  }
-  it("rejects legacy operation bindings even when a typed policy is present") {
-    runtime_test_t t;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, legacy_operation_yaml, operation_dsl),
-                SALTS_OK);
-    turbo_flow_t *original = t.flow;
-    check_equal(runtime_create(&t), SALTS_ENOTSUP);
-    check_equal(t.error.path, "$.operation_bindings");
-    check(t.flow == original);
-    check_null(t.generation);
-    check_null(t.cleanup);
-    check_equal(atomic_load(&t.observer->preflights), 0u);
-    check_equal(atomic_load(&t.observer->context_creates), 0u);
-    check_equal(atomic_load(&t.observer->session_creates), 0u);
-    check_equal(runtime_close(&t), SALTS_OK);
   }
   it("rejects missing or mistyped policy fields and numeric bounds through MessagePlan") {
     static const struct {
@@ -1198,7 +1150,7 @@ spec("ABI3 generation operation runtime") {
       runtime_test_t t;
       char dsl[RUNTIME_TEXT_BYTES];
       runtime_dsl(dsl, cases[i].before, cases[i].after);
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, dsl), SALTS_OK);
       check_equal(runtime_create(&t), SALTS_EPROTO);
       check_contains(t.error.path, "$.stages.calculate");
       check_not_null(t.flow);
@@ -1256,7 +1208,7 @@ spec("ABI3 generation operation runtime") {
         char *second_name = strstr(dsl + (first_end - first), "calculate");
         check_not_null(second_name);
         memcpy(second_name, "secondary", strlen("secondary"));
-        check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+        check_equal(runtime_open(&t, FLOW_OPERATION_OK, dsl), SALTS_OK);
         int rc = runtime_create(&t);
         check_equal(rc, i ? SALTS_EPROTO : SALTS_OK);
         check_equal(atomic_load(&t.observer->session_creates), i ? 0u : 1u);
@@ -1272,15 +1224,12 @@ spec("ABI3 generation operation runtime") {
     }
   }
   it("keeps separate sessions for distinct explicit resources of one operation") {
-    static const char resources[] =
-        "version: 1\nchannels:\n  first: {kind: fixture.resource, config: {}}\n"
-        "  second: {kind: fixture.resource, config: {}}\n";
     static const char dsl[] =
         "source input\nstage first operation fixture.double resource first {\n" RUNTIME_POLICY "}\n"
         "stage second operation fixture.double resource second {\n" RUNTIME_POLICY "}\n"
         "stage main {\n input -> first -> second\n}\n";
     runtime_test_t t;
-    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, resources, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_RESOURCE, dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_OK);
     check_equal(atomic_load(&t.observer->context_creates), 2u);
     check_equal(atomic_load(&t.observer->session_creates), 2u);
@@ -1305,7 +1254,7 @@ spec("ABI3 generation operation runtime") {
         check_not_null(next);
         source = next;
       }
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, source), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, source), SALTS_OK);
       tstr_free(source);
       check_equal(runtime_create(&t), SALTS_ENOSPC);
       check_equal(t.error.path, count == FLOW_PLUGIN_OPERATION_MAX_BINDINGS
@@ -1326,7 +1275,7 @@ spec("ABI3 generation operation runtime") {
       memset(name, 'a', n);
       name[n] = '\0';
       runtime_dsl(dsl, "fixture.operation", name);
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, dsl), SALTS_OK);
       check_equal(runtime_create(&t), n == TURBO_FLOW_PLUGIN_ID_MAX ? SALTS_EINVAL : SALTS_EPROTO);
       check_equal(atomic_load(&t.observer->preflights), 0u);
       check_equal(atomic_load(&t.observer->session_creates), 0u);
@@ -1340,10 +1289,10 @@ spec("ABI3 generation operation runtime") {
         turbo_flow_plugin_operation_catalog_v3_t catalog;
         turbo_flow_result_memory_requirements_t cost;
         turbo_flow_plugin_result_domain_snapshot_v3_t state;
-        char yaml[RUNTIME_TEXT_BYTES];
-        runtime_dsl(yaml, "max_retained_bytes 32",
+        char source[RUNTIME_TEXT_BYTES];
+        runtime_dsl(source, "max_retained_bytes 32",
                     doubled ? "max_retained_bytes 64" : "max_retained_bytes 32");
-        check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, yaml), SALTS_OK);
+        check_equal(runtime_open(&t, FLOW_OPERATION_OK, source), SALTS_OK);
         turbo_flow_plugin_operation_catalog_v3_init(&catalog);
         check_equal(turbo_flow_plugin_catalog_snapshot_operation_catalog(t.snapshot, &catalog),
                     SALTS_OK);
@@ -1384,7 +1333,7 @@ spec("ABI3 generation operation runtime") {
         "}\nstage main {\n input -> first -> second\n}\n";
     runtime_test_t t;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, dsl), SALTS_OK);
     check_equal(runtime_create(&t), SALTS_OK);
     runtime_bind(&t, 0);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(t.generation)), SALTS_OK);
@@ -1406,7 +1355,7 @@ spec("ABI3 generation operation runtime") {
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
       runtime_test_t t;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
       t.observer->mode = modes[i];
       turbo_flow_t *original = t.flow;
       check_equal(runtime_create(&t), i < 5 ? SALTS_EIO : SALTS_EPROTO);
@@ -1429,7 +1378,7 @@ spec("ABI3 generation operation runtime") {
         TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
     turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_dsl), SALTS_OK);
     provider.operation_name = "fixture.double";
     provider.fn = capture_result;
     provider.ctx = &t.result;
@@ -1474,15 +1423,15 @@ spec("ABI3 generation operation runtime") {
     uint32_t phases[sizeof(modes) / sizeof(modes[0])] = {0};
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
       runtime_test_t t;
-      char yaml[RUNTIME_TEXT_BYTES];
+      char source[RUNTIME_TEXT_BYTES];
       turbo_flow_plugin_operation_error_v3_t error;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       int alias = i == 2 || i == 3;
       const char *path = i == 2   ? FLOW_OPERATION_EXECUTE_ALIAS
                          : i == 3 ? FLOW_OPERATION_EXECUTE_FAIL_ALIAS
                                   : FLOW_OPERATION_OK;
-      runtime_dsl(yaml, "max_steps 2", i == 4 || i == 6 ? "max_steps 1" : "max_steps 2");
-      check_equal(runtime_open(&t, path, operation_yaml, yaml), SALTS_OK);
+      runtime_dsl(source, "max_steps 2", i == 4 || i == 6 ? "max_steps 1" : "max_steps 2");
+      check_equal(runtime_open(&t, path, source), SALTS_OK);
       t.observer->mode = modes[i];
       {
         const int create_rc = runtime_create(&t);
@@ -1543,7 +1492,6 @@ spec("ABI3 generation operation runtime") {
     turbo_flow_plugin_catalog_snapshot_t *snapshot = NULL;
     turbo_flow_plugin_result_domain_t *domain = NULL;
     turbo_flow_plugin_generation_t *generation = NULL, *cleanup = NULL;
-    turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow = turbo_flow_create();
     turbo_flow_msg_t input, result, clone;
     turbo_flow_operation_descriptor_t metadata = {0};
@@ -1589,10 +1537,7 @@ spec("ABI3 generation operation runtime") {
     check_equal(turbo_flow_plugin_host_load(host, FLOW_OPERATION_OK, &pe), SALTS_OK);
     check_equal(turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &pe), SALTS_OK);
     check_equal(turbo_flow_plugin_result_domain_create(snapshot, 1, &domain, &pe), SALTS_OK);
-    check_equal(
-        turbo_flow_config_resolve_yaml(operation_yaml, sizeof(operation_yaml) - 1, &resolved, &ce),
-        SALTS_OK);
-    int create_rc = turbo_flow_plugin_generation_create(snapshot, resolved, &flow, &gc, domain,
+    int create_rc = turbo_flow_plugin_generation_create(snapshot, &flow, &gc, domain,
                                                         &generation, &cleanup, &ce);
     info("generation create: %d %s %s", create_rc, ce.path, ce.message);
     check_equal(create_rc, SALTS_OK);
@@ -1612,8 +1557,6 @@ spec("ABI3 generation operation runtime") {
     check_equal(*(const int *)turbo_flow_msg_projection(&result, NULL), 7);
     check_equal(turbo_flow_plugin_generation_destroy(generation, 0, &ce), SALTS_OK);
     generation = NULL;
-    turbo_flow_resolved_config_destroy(resolved);
-    resolved = NULL;
     turbo_flow_plugin_catalog_snapshot_destroy(snapshot);
     snapshot = NULL;
     check_equal(turbo_flow_msg_clone(&clone, &result), SALTS_OK);

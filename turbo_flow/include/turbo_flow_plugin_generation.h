@@ -222,9 +222,8 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * Omission selects no materializer. The canonical operation input supplies schema/version/encoding;
  * these are not authored again. Stages sharing one operation/resource binding must agree on the
  * selection, including omission. Invalid stage fields fail before operation callbacks and provider
- * materialization. Nonempty legacy `materializer_bindings` are rejected with SALTS_ENOTSUP before
- * provider preparation. Nonempty legacy `operation_bindings` are likewise rejected. Operation
- * resources use config->resource_resolver and the descriptor's exact resource requirement.
+ * materialization. Operation resources use config->resource_resolver and the descriptor's exact
+ * resource requirement. Generation creation accepts no legacy resolved-config document.
  * A requirement needs a named stage resource; a resource-free descriptor rejects resource names.
  * All operation resources resolve before operation preflight; no factory sees resolved config.
  * The result domain takes each resource lease before context creation and keeps it until context
@@ -233,8 +232,6 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * Graph stage occurrence of each selected operation/resource; diagnostics use
  * $.generation.operations[i].field, while typed config errors use $.stages.<stage>[.<field>].
  * @param snapshot Live immutable provider snapshot; retained by the generation.
- * @param resolved Migration-only document checked for rejected legacy bindings; never passed to
- * operation callbacks. This parameter remains until the Config subsystem is removed.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
  * @param config Initialized size/versioned capacity plus explicit canonical
  * Component runtime plus provider/resource resolvers. The generation acquires
@@ -251,7 +248,7 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * @return SALTS_OK, or the exact validation, capacity, provider, allocation, or compile error.
  */
 TURBO_FLOW_C_API int turbo_flow_plugin_generation_create(
-    turbo_flow_plugin_catalog_snapshot_t *snapshot, const turbo_flow_resolved_config_t *resolved,
+    turbo_flow_plugin_catalog_snapshot_t *snapshot,
     turbo_flow_t **flow_io, const turbo_flow_plugin_generation_config_t *config,
     turbo_flow_plugin_result_domain_t *result_domain,
     turbo_flow_plugin_generation_t **generation_out, turbo_flow_plugin_generation_t **cleanup_out,

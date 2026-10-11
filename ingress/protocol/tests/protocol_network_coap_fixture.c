@@ -130,7 +130,6 @@ static int protocol_network_e2e_coap_init_mode(protocol_network_e2e_fixture_t *f
                                                char *turbodb_path, int reply_enabled,
                                                protocol_network_e2e_fixture_t *peer) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-  static const char empty_business_config[] = "version: 1\n";
   int rc;
   if (!fixture || !cnet_module || !cnet_module[0] || !coap_module || !coap_module[0] ||
       !durable_module || !durable_module[0])
@@ -144,9 +143,6 @@ static int protocol_network_e2e_coap_init_mode(protocol_network_e2e_fixture_t *f
     if (peer) fixture->deployment = peer->deployment;
     rc = protocol_network_deployment_open(fixture, cnet_module, durable_module, 1);
   }
-  if (rc == SALTS_OK)
-    rc = turbo_flow_config_resolve_yaml(empty_business_config, sizeof(empty_business_config) - 1u,
-                                        &fixture->resolved, &error);
   if (rc == SALTS_OK) rc = protocol_network_e2e_business_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
   if (rc != SALTS_OK) {

@@ -3,7 +3,6 @@
 #include "tinytest.h"
 #include "turbo_flow_plugin_generation.h"
 #include "turbo_flow_provider_binding.h"
-#include "turbo_flow_resolved_config.h"
 #include "turbo_flow_resource.h"
 
 #include <salts/component_plugin.h>
@@ -34,7 +33,6 @@ typedef struct generation_resolver_fixture_s {
 typedef struct generation_test_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_t *flow;
 
   cmeta_plugin_registry registry;
@@ -176,11 +174,7 @@ static int component_generation_close(generation_test_t *test) {
 
 static int test_open(
     generation_test_t *test, const char *graph,
-    turbo_flow_plugin_error_t *plugin_error,
-    turbo_flow_config_error_t *config_error) {
-  static const char yaml[] =
-      "version: 1\n"
-      "adapters: {}\n";
+    turbo_flow_plugin_error_t *plugin_error) {
   turbo_flow_plugin_host_config_t host_config =
       TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   const cmeta_plugin_registry_config registry_config = {3u};
@@ -193,10 +187,6 @@ static int test_open(
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_catalog_snapshot_create(
       test->host, &test->snapshot, plugin_error);
-  if (rc != SALTS_OK) return rc;
-
-  rc = turbo_flow_config_resolve_yaml(
-      yaml, sizeof(yaml) - 1u, &test->resolved, config_error);
   if (rc != SALTS_OK) return rc;
 
   test->flow = turbo_flow_create();
@@ -265,8 +255,6 @@ static void test_close(
     generation_test_t *test,
     turbo_flow_plugin_error_t *plugin_error) {
   if (test->flow) turbo_flow_destroy(test->flow);
-  if (test->resolved)
-    turbo_flow_resolved_config_destroy(test->resolved);
   if (test->snapshot)
     turbo_flow_plugin_catalog_snapshot_destroy(test->snapshot);
   if (test->host)
@@ -340,7 +328,7 @@ spec("Component-backed Graph generation") {
     const fixture_provider_state_t *old_state, *new_state;
 
     check_equal(
-        test_open(&test, graph, &plugin_error, &error),
+        test_open(&test, graph, &plugin_error),
         SALTS_OK);
 
     config.owner_capacity = 1u;
@@ -350,7 +338,7 @@ spec("Component-backed Graph generation") {
 
     check_equal(
         turbo_flow_plugin_generation_create(
-            test.snapshot, test.resolved, &test.flow, &config,
+            test.snapshot, &test.flow, &config,
             NULL, &generation, &cleanup, &error),
         SALTS_OK);
     check_not_null(generation);
@@ -413,8 +401,7 @@ spec("Component-backed Graph generation") {
     test.flow = turbo_flow_create();
     check_not_null(test.flow);
     check_equal(turbo_flow_parse_string(test.flow, graph, strlen(graph)), SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_create(test.snapshot, test.resolved,
-        &test.flow, &config, NULL, &second_graph, &cleanup, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_create(test.snapshot, &test.flow, &config, NULL, &second_graph, &cleanup, &error), SALTS_OK);
     check_null(cleanup);
     check_equal(turbo_flow_plugin_generation_component_generation_id(second_graph), UINT64_C(92));
     check_equal(salts_component_plugin_scope_acquire(&test.component_runtime,
@@ -540,7 +527,7 @@ spec("Component-backed Graph generation") {
     turbo_flow_t *original_flow;
 
     check_equal(
-        test_open(&test, graph, &plugin_error, &error),
+        test_open(&test, graph, &plugin_error),
         SALTS_OK);
     original_flow = test.flow;
 
@@ -551,7 +538,7 @@ spec("Component-backed Graph generation") {
 
     check_equal(
         turbo_flow_plugin_generation_create(
-            test.snapshot, test.resolved, &test.flow, &config,
+            test.snapshot, &test.flow, &config,
             NULL, &generation, &cleanup, &error),
         SALTS_ENOSPC);
     check_null(generation);

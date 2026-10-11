@@ -143,7 +143,6 @@ static int protocol_network_e2e_client_open(protocol_network_e2e_fixture_t *fixt
   return SALTS_OK;
 }
 
-
 static int protocol_network_e2e_host_open(protocol_network_e2e_fixture_t *fixture,
                                           const char *jtt808_module) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
@@ -222,7 +221,7 @@ int protocol_network_e2e_business_open(protocol_network_e2e_fixture_t *fixture) 
   generation_config.component_runtime = fixture->component_runtime;
   generation_config.provider_resolver = &fixture->provider_resolver;
   generation_config.resource_resolver = &fixture->resource_resolver;
-  rc = turbo_flow_plugin_generation_create(fixture->catalog, fixture->resolved, &flow,
+  rc = turbo_flow_plugin_generation_create(fixture->catalog, &flow,
                                            &generation_config, NULL, &fixture->business_generation,
                                            &fixture->business_cleanup, &error);
   if (rc != SALTS_OK) {
@@ -244,8 +243,7 @@ static int protocol_network_e2e_jtt808_init_mode(protocol_network_e2e_fixture_t 
                                                  const char *durable_module,
                                                  protocol_network_e2e_storage_kind_t storage,
                                                  char *turbodb_path, int reply_enabled) {
-  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-  static const char empty_business_config[] = "version: 1\n";
+
   int rc;
   if (!fixture || !cnet_module || !cnet_module[0] || !jtt808_module || !jtt808_module[0] ||
       !durable_module || !durable_module[0])
@@ -258,9 +256,6 @@ static int protocol_network_e2e_jtt808_init_mode(protocol_network_e2e_fixture_t 
   if (rc == SALTS_OK) rc = protocol_network_e2e_host_open(fixture, jtt808_module);
   if (rc == SALTS_OK)
     rc = protocol_network_deployment_open(fixture, cnet_module, durable_module, 0);
-  if (rc == SALTS_OK)
-    rc = turbo_flow_config_resolve_yaml(empty_business_config, sizeof(empty_business_config) - 1u,
-                                        &fixture->resolved, &error);
   if (rc == SALTS_OK) rc = protocol_network_e2e_business_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_e2e_intake_open(fixture);
   if (rc != SALTS_OK) {
@@ -443,8 +438,6 @@ int protocol_network_e2e_destroy(protocol_network_e2e_fixture_t *fixture) {
     turbo_flow_plugin_catalog_snapshot_destroy(fixture->catalog);
     fixture->catalog = NULL;
   }
-  turbo_flow_resolved_config_destroy(fixture->resolved);
-  fixture->resolved = NULL;
   if (fixture->receiver_initialized) {
     rc = cnet_datagram_stop(&fixture->receiver, 1000u);
     if (rc != SALTS_OK && rc != SALTS_EALREADY) return rc;

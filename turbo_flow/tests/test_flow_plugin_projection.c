@@ -1,5 +1,9 @@
 #include "plugin_projection_fixture.h"
+#include "component_scope_fixture.h"
+#include "salts_resource_fixture.h"
 #include "turbo_flow_plugin_generation.h"
+#include "turbo_flow_provider_binding.h"
+#include "turbo_flow_resource.h"
 #include <tinytest.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +37,7 @@ typedef struct projection_test_s {
   turbo_flow_projection_owner_config_t config;
   void *value;
 } projection_test_t;
-static int test_open(projection_test_t *test, int generation) {
+static int test_open(projection_test_t *test) {
   turbo_flow_plugin_host_config_t config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_product_provider_registry_t registry = TURBO_FLOW_PRODUCT_PROVIDER_REGISTRY_INIT;
@@ -49,10 +53,6 @@ static int test_open(projection_test_t *test, int generation) {
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_host_load(test->host, FLOW_PROJECTION_FIXTURE, &error);
   if (rc != SALTS_OK) return rc;
-  if (generation) {
-    rc = turbo_flow_plugin_host_load(test->host, FLOW_PROJECTION_GENERATION_FIXTURE, &error);
-    if (rc != SALTS_OK) return rc;
-  }
   rc = turbo_flow_plugin_catalog_snapshot_create(test->host, &test->snapshot, &error);
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_catalog_snapshot_product_registry(test->snapshot, &registry);
@@ -80,6 +80,65 @@ static int create_stack_owner(projection_test_t *test, turbo_flow_projection_own
   turbo_flow_data_schema_t schema = *config.schema;
   config.schema = &schema;
   return turbo_flow_plugin_projection_owner_create(test->snapshot, &config, owner);
+}
+
+typedef struct projection_resources_s {
+  cmeta_plugin_registry registry;
+  cmeta_plugin_ref provider;
+  cmeta_plugin_ref resource;
+  component_fixture_t component;
+} projection_resources_t;
+
+static int projection_resolve_provider(void *ctx, const char *identity,
+    turbo_flow_provider_candidate_v2_t *out, turbo_flow_config_error_t *error) {
+  (void)ctx;
+  (void)error;
+  if (!identity || strcmp(identity, "fixture.provider") != 0) return SALTS_ENOENT;
+  out->module_identity = "test.turboflow.provider";
+  out->component_identity = "TurboFlowFixtureProvider";
+  return SALTS_OK;
+}
+
+static int projection_resolve_resource(void *ctx, const char *name,
+    const turbo_flow_provider_resource_requirement_v1_t *requirement,
+    turbo_flow_resource_candidate_v1_t *out, turbo_flow_config_error_t *error) {
+  projection_resources_t *resources = ctx;
+  (void)error;
+  if (!name || strcmp(name, FLOW_TEST_RESOURCE_IDENTITY) != 0 ||
+      !requirement || strcmp(requirement->contract_id, FLOW_TEST_RESOURCE_CONTRACT_ID) != 0)
+    return SALTS_ENOENT;
+  out->identity = "deployment.db_main";
+  out->registry = &resources->registry;
+  out->plugin = resources->resource;
+  out->export_id = "fixture.resource";
+  return SALTS_OK;
+}
+
+static void projection_resources_open(projection_resources_t *resources) {
+  const cmeta_plugin_registry_config config = {2u};
+  check_equal(cmeta_plugin_registry_init(&resources->registry, &config), CMETA_PLUGIN_OK);
+  check_equal(cmeta_plugin_registry_load(&resources->registry, FLOW_SALTS_PROVIDER_FIXTURE,
+                                         &resources->provider), CMETA_PLUGIN_OK);
+  check_equal(cmeta_plugin_registry_load(&resources->registry, FLOW_SALTS_RESOURCE_FIXTURE,
+                                         &resources->resource), CMETA_PLUGIN_OK);
+  check_equal(cmeta_plugin_registry_start(&resources->registry, resources->provider), CMETA_PLUGIN_OK);
+  check_equal(cmeta_plugin_registry_start(&resources->registry, resources->resource), CMETA_PLUGIN_OK);
+  check_equal(component_fixture_open(&resources->component, &resources->registry,
+                                     resources->provider), SALTS_OK);
+}
+
+static void projection_resources_close(projection_resources_t *resources) {
+  const cmeta_plugin_ref refs[] = {resources->provider, resources->resource};
+  check_equal(component_fixture_close(&resources->component), SALTS_OK);
+  for (size_t i = 0u; i < sizeof(refs) / sizeof(refs[0]); ++i) {
+    bool quiescent = false;
+    check_equal(cmeta_plugin_registry_request_stop(&resources->registry, refs[i]), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(&resources->registry, refs[i], &quiescent),
+                CMETA_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(cmeta_plugin_registry_unload(&resources->registry, refs[i]), CMETA_PLUGIN_OK);
+  }
+  check_equal(cmeta_plugin_registry_destroy(&resources->registry), CMETA_PLUGIN_OK);
 }
 typedef struct projection_worker_s {
   turbo_flow_msg_t *source;
@@ -135,7 +194,7 @@ spec("PluginHost retained projection DLL leases") {
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_msg_t source, clone;
     const turbo_flow_data_schema_t *schema = NULL;
-    check_equal(test_open(&test, 0), SALTS_OK);
+    check_equal(test_open(&test), SALTS_OK);
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     memset(&test.config, 0, sizeof(test.config));
     turbo_flow_msg_init(&source);
@@ -167,7 +226,7 @@ spec("PluginHost retained projection DLL leases") {
       projection_test_t test;
       turbo_flow_projection_owner_t *owner = NULL;
       turbo_flow_projection_owner_config_t config;
-      check_equal(test_open(&test, 0), SALTS_OK);
+      check_equal(test_open(&test), SALTS_OK);
       config = test.config;
       switch (mode) {
         case BAD_DESTROY: config.destroy = NULL; break;
@@ -196,7 +255,7 @@ spec("PluginHost retained projection DLL leases") {
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
     turbo_flow_msg_t source, clone;
-    check_equal(test_open(&test, 0), SALTS_OK);
+    check_equal(test_open(&test), SALTS_OK);
     test.config.clone = NULL;
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     turbo_flow_msg_init(&source);
@@ -232,7 +291,7 @@ spec("PluginHost retained projection DLL leases") {
     turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
     turbo_flow_content_descriptor_t descriptor;
     turbo_flow_msg_t source, first, second, moved, view;
-    check_equal(test_open(&test, 0), SALTS_OK);
+    check_equal(test_open(&test), SALTS_OK);
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     turbo_flow_msg_init(&source);
     check_equal(turbo_flow_content_descriptor_init(&descriptor, TURBO_FLOW_DOMAIN_PROTOCOL_PATTERN,
@@ -277,7 +336,7 @@ spec("PluginHost retained projection DLL leases") {
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_projection_owner_snapshot_t state = TURBO_FLOW_PROJECTION_OWNER_SNAPSHOT_INIT;
     turbo_flow_msg_t source, clone;
-    check_equal(test_open(&test, 0), SALTS_OK);
+    check_equal(test_open(&test), SALTS_OK);
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     turbo_flow_msg_init(&source);
     check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, test.value), SALTS_OK);
@@ -316,7 +375,7 @@ spec("PluginHost retained projection DLL leases") {
       turbo_flow_msg_t source, rejected;
       cmeta_thread_t thread;
       projection_worker_t worker = {&source, destroying, SALTS_EIO, 0};
-      check_equal(test_open(&test, 0), SALTS_OK);
+      check_equal(test_open(&test), SALTS_OK);
       check_equal(create_stack_owner(&test, &owner), SALTS_OK);
       turbo_flow_msg_init(&source);
       check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, test.value), SALTS_OK);
@@ -358,37 +417,45 @@ spec("PluginHost retained projection DLL leases") {
     }
   }
 
-  it("keeps independent results usable after a real transactional generation is destroyed") {
-    static const char yaml[] = "version: 1\nadapters:\n"
-        "  input.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n"
-        "  output.adapter:\n    kind: fixture.transactional.adapter\n    config: {}\n";
-    static const char graph[] = "source input adapter input.adapter\n"
-        "stage output adapter output.adapter\nstage main {\n  input -> output\n}\n";
+  it("keeps independent results usable after a canonical provider generation is destroyed") {
+    static const char graph[] = "source input\n"
+        "stage first adapter fixture.provider resource " FLOW_TEST_RESOURCE_IDENTITY " {\n"
+        " batch 7\n concurrency 2\n}\n"
+        "stage second adapter fixture.provider resource " FLOW_TEST_RESOURCE_IDENTITY " {\n"
+        " batch 7\n concurrency 2\n}\nstage main {\n input -> [first, second]\n}\n";
+    projection_resources_t resources = {0};
+    turbo_flow_provider_resolver_v2_t provider_resolver = {
+        sizeof(provider_resolver), &resources, projection_resolve_provider};
+    turbo_flow_resource_resolver_v1_t resource_resolver = {
+        sizeof(resource_resolver), &resources, projection_resolve_resource};
     projection_test_t test;
     turbo_flow_projection_owner_t *owner = NULL;
     turbo_flow_plugin_generation_t *generation = NULL;
     turbo_flow_plugin_generation_config_t config = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_resolved_config_t *resolved = NULL;
     turbo_flow_t *flow;
     turbo_flow_msg_t source, clone;
     const turbo_flow_data_schema_t *schema = NULL;
-    check_equal(test_open(&test, 1), SALTS_OK);
-    check_equal(turbo_flow_config_resolve_yaml(yaml, sizeof(yaml) - 1u, &resolved, &error), SALTS_OK);
+    check_equal(test_open(&test), SALTS_OK);
+    projection_resources_open(&resources);
+    config.component_runtime = &resources.component.runtime;
+    config.provider_resolver = &provider_resolver;
+    config.resource_resolver = &resource_resolver;
     flow = turbo_flow_create();
     check_not_null(flow);
     check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
-    check_equal(turbo_flow_plugin_generation_create(test.snapshot, resolved, &flow, &config, NULL,
-                                                    &generation, &test.cleanup, &error),
-                SALTS_OK);
+    int rc = turbo_flow_plugin_generation_create(test.snapshot, &flow, &config, NULL,
+                                                 &generation, &test.cleanup, &error);
+    info("generation status=%d path=%s reason=%s", rc, error.path, error.message);
+    check_equal(rc, SALTS_OK);
     check_null(flow);
     check_equal(turbo_flow_plugin_generation_owner_count(generation), (size_t)2);
     check_equal(create_stack_owner(&test, &owner), SALTS_OK);
     turbo_flow_msg_init(&source);
     check_equal(turbo_flow_msg_bind_retained_projection(&source, owner, test.value), SALTS_OK);
     turbo_flow_plugin_catalog_snapshot_destroy(test.snapshot);
-    turbo_flow_resolved_config_destroy(resolved);
-    check_equal(turbo_flow_plugin_generation_destroy(generation, 0u, &error), SALTS_OK);
+    check_equal(turbo_flow_plugin_generation_destroy(generation, 1000u, &error), SALTS_OK);
+    projection_resources_close(&resources);
     check_equal(host_destroy(&test), SALTS_EBUSY);
     check_equal(turbo_flow_msg_clone(&clone, &source), SALTS_OK);
     turbo_flow_msg_cleanup(&source);

@@ -16,7 +16,7 @@ static_assert(std::is_standard_layout_v<turbo_flow_plugin_operation_v3_t>);
 static_assert(std::is_standard_layout_v<turbo_flow_plugin_result_domain_snapshot_v3_t>);
 static_assert(std::is_same_v<
               decltype(&turbo_flow_plugin_generation_create),
-              int (*)(turbo_flow_plugin_catalog_snapshot_t *, const turbo_flow_resolved_config_t *,
+              int (*)(turbo_flow_plugin_catalog_snapshot_t *,
                       turbo_flow_t **, const turbo_flow_plugin_generation_config_t *,
                       turbo_flow_plugin_result_domain_t *, turbo_flow_plugin_generation_t **,
                       turbo_flow_plugin_generation_t **, turbo_flow_config_error_t *)>);

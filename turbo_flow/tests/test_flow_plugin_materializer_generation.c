@@ -75,8 +75,6 @@ static int materializer_publish_claim(void *ctx, turbo_flow_t *flow,
   return turbo_flow_publish((turbo_flow_t *)ctx, "input", message);
 }
 
-static const char yaml_good[] = "version: 1\nadapters: {}\n";
-
 #define OPERATION_POLICY                                                                           \
   "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "        \
   "max_result_bytes 8, max_retained_bytes 32, max_steps 2 }\n"
@@ -88,8 +86,6 @@ static const char graph_text[] = "source input\n"
                                  "stage main {\n"
                                  "  input -> calculate\n"
                                  "}\n";
-
-static const char yaml_two_consumers[] = "version: 1\nadapters: {}\n";
 
 static const char graph_two_consumers[] =
     "source input\n"
@@ -108,7 +104,6 @@ typedef struct materializer_generation_test_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *snapshot;
   turbo_flow_plugin_result_domain_t *domain;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_plugin_generation_t *generation;
   turbo_flow_plugin_generation_t *cleanup;
   turbo_flow_t *flow;
@@ -118,7 +113,7 @@ typedef struct materializer_generation_test_s {
 static int open_test_with_operation(materializer_generation_test_t *t,
                                     const char *operation_path,
                                     const char *materializer_path,
-                                    const char *yaml, const char *graph,
+                                    const char *graph,
                                     size_t result_capacity, int register_other) {
   turbo_flow_plugin_host_config_t hc = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
@@ -139,8 +134,6 @@ static int open_test_with_operation(materializer_generation_test_t *t,
   if (rc != SALTS_OK) return rc;
   rc = turbo_flow_plugin_result_domain_create(t->snapshot, result_capacity, &t->domain, &pe);
   if (rc != SALTS_OK) return rc;
-  rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &t->resolved, &t->error);
-  if (rc != SALTS_OK) return rc;
   t->flow = turbo_flow_create();
   if (!t->flow) return SALTS_ENOMEM;
   rc = materializer_register_reflected_operation(t->flow, "fixture.double");
@@ -152,15 +145,14 @@ static int open_test_with_operation(materializer_generation_test_t *t,
   return turbo_flow_parse_string(t->flow, graph, strlen(graph));
 }
 
-static int open_test(materializer_generation_test_t *t, const char *materializer_path,
-                     const char *yaml) {
-  return open_test_with_operation(t, FLOW_OPERATION_OK, materializer_path, yaml,
+static int open_test(materializer_generation_test_t *t, const char *materializer_path) {
+  return open_test_with_operation(t, FLOW_OPERATION_OK, materializer_path,
                                   graph_text, 1u, 0);
 }
 
 static int create_generation(materializer_generation_test_t *t) {
   turbo_flow_plugin_generation_config_t gc = TURBO_FLOW_PLUGIN_GENERATION_CONFIG_INIT;
-  return turbo_flow_plugin_generation_create(t->snapshot, t->resolved, &t->flow, &gc, t->domain,
+  return turbo_flow_plugin_generation_create(t->snapshot, &t->flow, &gc, t->domain,
                                              &t->generation, &t->cleanup, &t->error);
 }
 
@@ -177,7 +169,6 @@ static void close_test(materializer_generation_test_t *t) {
   }
   if (t->flow) turbo_flow_destroy(t->flow);
   if (t->domain) (void)turbo_flow_plugin_result_domain_destroy(t->domain, &pe);
-  if (t->resolved) turbo_flow_resolved_config_destroy(t->resolved);
   if (t->snapshot) turbo_flow_plugin_catalog_snapshot_destroy(t->snapshot);
   if (t->host) (void)turbo_flow_plugin_host_destroy(t->host, 0u, &pe);
   memset(t, 0, sizeof(*t));
@@ -263,7 +254,7 @@ spec("generation materializer preflight") {
 
   it("compiles one exact materializer binding before Graph start") {
     materializer_generation_test_t t;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_not_null(t.generation);
     check_null(t.cleanup);
@@ -275,8 +266,7 @@ spec("generation materializer preflight") {
     char graph[4096];
     replace_once(graph, sizeof(graph), graph_text, "fixture.materializer.operation",
                  "fixture.materializer.missing");
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                         yaml_good, graph, 1u, 0),
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_ENOENT);
     check_equal(t.error.path, "$.generation.materializers[0].plugin");
@@ -287,7 +277,7 @@ spec("generation materializer preflight") {
 
   it("rejects a materializer whose schema wrapper does not match operation input") {
     materializer_generation_test_t t;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_MISMATCH, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_MISMATCH), SALTS_OK);
     check_equal(create_generation(&t), SALTS_EPROTO);
     check_equal(strcmp(t.error.path, "$.generation.materializers[0].schema"), 0);
     check_null(t.generation);
@@ -299,7 +289,7 @@ spec("generation materializer preflight") {
     char graph[4096];
     replace_once(graph, sizeof(graph), graph_text, "fixture.materializer.operation",
                  "fixture.materializer.unused");
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_UNUSED, yaml_good,
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_UNUSED,
                                          graph, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_ENOENT);
@@ -312,8 +302,7 @@ spec("generation materializer preflight") {
   it("shares one schema-level materializer across multiple operation consumers") {
     materializer_generation_test_t t;
     check_equal(open_test_with_operation(&t, FLOW_OPERATION_TWO_NAMES,
-                                         FLOW_MATERIALIZER_OPERATION,
-                                         yaml_two_consumers, graph_two_consumers,
+                                         FLOW_MATERIALIZER_OPERATION, graph_two_consumers,
                                          2u, 1), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_not_null(t.generation);
@@ -341,7 +330,7 @@ spec("generation materializer preflight") {
     turbo_flow_durable_buffer_binding_t *binding = NULL;
     turbo_flow_adapter_ops_t forwarding = {0};
     check_not_null(intake);
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     flow = turbo_flow_plugin_generation_flow(t.generation);
     check_not_null(flow);
@@ -383,7 +372,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     turbo_flow_t *flow;
     turbo_flow_msg_t msg;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     flow = turbo_flow_plugin_generation_flow(t.generation);
     check_not_null(flow);
@@ -403,7 +392,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     turbo_flow_t *flow;
     turbo_flow_msg_t msg;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     flow = turbo_flow_plugin_generation_flow(t.generation);
     check_not_null(flow);
@@ -425,7 +414,7 @@ spec("generation materializer preflight") {
     const turbo_flow_data_schema_t *schema = NULL;
     const cmeta_data_desc *data = NULL;
     const void *value;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_count(t.generation), (size_t)1);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 0u, &binding), SALTS_OK);
@@ -451,10 +440,9 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     turbo_flow_msg_t msg, clone, second;
     const turbo_flow_plugin_materializer_binding_t *binding = NULL;
-    char yaml[4096];
-    graph_max_inflight(yaml, sizeof(yaml), 2u);
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                         yaml_good, yaml, 1u, 0),
+    char source[4096];
+    graph_max_inflight(source, sizeof(source), 2u);
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, source, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 0u, &binding), SALTS_OK);
@@ -477,7 +465,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     turbo_flow_msg_t msg;
     const turbo_flow_plugin_materializer_binding_t *binding = NULL;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 0u, &binding), SALTS_OK);
 
@@ -506,7 +494,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     turbo_flow_msg_t msg;
     const turbo_flow_plugin_materializer_binding_t *binding = NULL;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 0u, &binding), SALTS_OK);
     materializer_message(&msg, "ABCD", "cmeta.int.data", 1u);
@@ -524,7 +512,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     const turbo_flow_plugin_materializer_binding_t *binding =
         (const turbo_flow_plugin_materializer_binding_t *)(uintptr_t)1u;
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml_good), SALTS_OK);
+    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION), SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 1u, &binding),
                 SALTS_EINVAL);
@@ -539,30 +527,11 @@ spec("generation materializer preflight") {
     char graph[4096];
     replace_once(graph, sizeof(graph), graph_text,
                  "  materializer { plugin \"fixture.materializer.operation\" }\n", "");
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                         yaml_good, graph, 1u, 0),
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_not_null(t.generation);
     check_equal(turbo_flow_plugin_generation_materializer_count(t.generation), (size_t)0u);
-    close_test(&t);
-  }
-
-  it("rejects obsolete YAML materializer selection instead of falling back") {
-    materializer_generation_test_t t;
-    char yaml[4096];
-    (void)fmt(yaml, sizeof(yaml), "{}{}", yaml_good,
-              "materializer_bindings:\n"
-              "  - plugin: fixture.materializer.operation\n"
-              "    schema: cmeta.int.data\n"
-              "    schema_version: 1\n"
-              "    encoding: opaque\n");
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml), SALTS_OK);
-    check_equal(create_generation(&t), SALTS_ENOTSUP);
-    check_equal(t.error.path, "$.materializer_bindings");
-    check_not_null(t.flow);
-    check_null(t.generation);
-    check_null(t.cleanup);
     close_test(&t);
   }
 
@@ -576,8 +545,7 @@ spec("generation materializer preflight") {
       char graph[4096];
       replace_once(graph, sizeof(graph), graph_text,
                    "  materializer { plugin \"fixture.materializer.operation\" }\n", invalid[i]);
-      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                           yaml_good, graph, 1u, 0),
+      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                   SALTS_OK);
       check_equal(create_generation(&t), SALTS_EPROTO);
       check_contains(t.error.path, "$.stages.calculate");
@@ -596,8 +564,7 @@ spec("generation materializer preflight") {
     materializer_generation_test_t t;
     char graph[4096];
     replace_once(graph, sizeof(graph), graph_text, "stage main {\n", orphan);
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                         yaml_good, graph, 1u, 0),
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_ENOTSUP);
     check_equal(t.error.path, "$.stages.orphan.materializer");
@@ -615,8 +582,7 @@ spec("generation materializer preflight") {
       memset(plugin, 'a', length);
       plugin[length] = '\0';
       replace_once(graph, sizeof(graph), graph_text, "fixture.materializer.operation", plugin);
-      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                           yaml_good, graph, 1u, 0),
+      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                   SALTS_OK);
       check_equal(create_generation(&t),
                   length == TURBO_FLOW_PLUGIN_ID_MAX ? SALTS_ENOENT : SALTS_EPROTO);
@@ -655,8 +621,7 @@ spec("generation materializer preflight") {
         replace_once(graph, sizeof(graph), shared_graph, "fixture.materializer.operation",
                      "fixture.materializer.other");
       else (void)fmt(graph, sizeof(graph), "{}", shared_graph);
-      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
-                                           yaml_good, graph, 1u, 0),
+      check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION, graph, 1u, 0),
                   SALTS_OK);
       check_equal(create_generation(&t), conflict ? SALTS_EPROTO : SALTS_OK);
       if (conflict) {
@@ -679,8 +644,7 @@ spec("generation materializer preflight") {
                  "stage decide operation fixture.other {\n" OPERATION_POLICY
                  "  materializer { plugin \"fixture.materializer.operation\" }\n",
                  "stage decide operation fixture.other {\n" OPERATION_POLICY);
-    check_equal(open_test_with_operation(&t, FLOW_OPERATION_TWO_NAMES, FLOW_MATERIALIZER_OPERATION,
-                                         yaml_two_consumers, graph, 2u, 1),
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_TWO_NAMES, FLOW_MATERIALIZER_OPERATION, graph, 2u, 1),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_count(t.generation), (size_t)1u);

@@ -36,7 +36,8 @@ spec("plugin fixture shared ABI boundary") {
     check_equal(api->load(&host, &plugin), SALTS_EINVAL);
     check_null(plugin);
     check_equal(probe.allocations, (size_t)0);
-    host.abi_major = 3u;
+    host.abi_major = TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR;
+    host.abi_minor = TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR;
     check_equal(api->load(&host, &plugin), SALTS_OK);
     check_not_null(plugin);
     registration.size = sizeof(registration); registration.abi_major = 2u;
