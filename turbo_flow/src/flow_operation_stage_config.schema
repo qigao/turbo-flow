@@ -1,0 +1,9 @@
+schema FlowOperationStageConfig [version(1)];
+
+message OperationMaterializerSelection {
+  @Size(min = 1, max = 127) string plugin;
+}
+
+message OperationStageConfig {
+  optional OperationMaterializerSelection materializer;
+}

@@ -212,6 +212,13 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * `*flow_io` remains caller-owned on preflight failure and becomes NULL before the first factory
  * side effect. The generation owns the Graph and one retained catalog snapshot on success. Create,
  * lease mutation, and destroy are caller-serialized on the Gateway control thread.
+ *
+ * A typed operation stage may select `materializer { plugin "provider.id" }` in its .flow block.
+ * Omission selects no materializer. The canonical operation input supplies schema/version/encoding;
+ * these are not authored again. Stages sharing one operation/resource binding must agree on the
+ * selection, including omission. Invalid stage fields fail before operation callbacks and provider
+ * materialization. Nonempty legacy `materializer_bindings` are rejected with SALTS_ENOTSUP before
+ * provider preparation; operation/resource resolved-config inputs remain required during migration.
  * @param snapshot Live immutable provider snapshot; retained by the generation.
  * @param resolved Immutable resolved configuration borrowed for the duration of this call.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
@@ -260,8 +267,9 @@ TURBO_FLOW_C_API uint64_t turbo_flow_plugin_generation_component_generation_id(
     const turbo_flow_plugin_generation_t *generation);
 
 /**
- * Return the number of compiled schema-level materializer bindings.
- * Binding order is the canonical resolved `materializer_bindings` order.
+ * Return the number of compiled materializer bindings explicitly selected by operation stages.
+ * Bindings are shared only by exact plugin and canonical input contract. Order follows the first
+ * selecting operation binding; stages sharing an operation/resource session consume one budget.
  */
 TURBO_FLOW_C_API size_t turbo_flow_plugin_generation_materializer_count(
     const turbo_flow_plugin_generation_t *generation);

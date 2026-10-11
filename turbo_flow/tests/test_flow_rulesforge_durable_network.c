@@ -500,7 +500,9 @@ spec("RulesForge real network composition") {
     static const char graph_text[] =
         "source jtt_decoded\n"
         "source coap_decoded\n" FLOW_E2E_MEMORY_STAGE
-        "stage rules operation rulesforge.apply resource rules_adult\n"
+        "stage rules operation rulesforge.apply resource rules_adult {\n"
+        "  materializer { plugin \"" TURBO_FLOW_RULESFORGE_PLUGIN_ID "\" }\n"
+        "}\n"
         "stage verify operation test.verify_decision\n" FLOW_E2E_OUTPUT_STAGE "stage main {\n"
         "  jtt_decoded -> intake\n"
         "  coap_decoded -> intake\n"
@@ -623,17 +625,11 @@ spec("RulesForge real network composition") {
                  "    max_result_bytes: %zu\n"
                  "    max_retained_bytes: 64\n"
                  "    max_steps: 16\n"
-                 "    deadline_ms: 0\n"
-                 "materializer_bindings:\n"
-                 "  - plugin: %s\n"
-                 "    schema: %s\n"
-                 "    schema_version: 1\n"
-                 "    encoding: json\n",
+                 "    deadline_ms: 0\n",
                  TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path, TURBO_FLOW_RULESFORGE_OPERATION,
                  TURBO_FLOW_RULESFORGE_PLUGIN_ID, TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID,
                  TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID, sizeof(turbo_flow_rulesforge_applicant),
-                 sizeof(turbo_flow_rulesforge_decision), TURBO_FLOW_RULESFORGE_PLUGIN_ID,
-                 TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID);
+                 sizeof(turbo_flow_rulesforge_decision));
     check_greater(count, 0);
     check_less(count, (int)sizeof(yaml));
 

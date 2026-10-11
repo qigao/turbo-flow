@@ -45,6 +45,8 @@ typedef struct flow_plugin_operation_binding_s {
   flow_plugin_result_entry_t *result;
   void *session;
   const turbo_flow_plugin_materializer_binding_t *materializer;
+  char materializer_plugin[TURBO_FLOW_PLUGIN_ID_MAX + 1u];
+  int materializer_selection_seen;
   atomic_uint admission;
   cmeta_mutex_t error_mutex;
   turbo_flow_plugin_operation_error_v3_t error;
@@ -54,6 +56,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
                                    turbo_flow_plugin_result_domain_t *domain, size_t budget,
                                    vec_t *bindings, turbo_flow_config_error_t *error);
 int flow_plugin_operations_preflight(vec_t *bindings, turbo_flow_config_error_t *error);
+int flow_plugin_materializer_configure(const turbo_flow_t *flow, vec_t *operations,
+                                       turbo_flow_config_error_t *error);
 int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result_domain_t *domain,
                                        turbo_flow_t *flow, turbo_flow_config_error_t *error);
 int flow_plugin_operations_close(vec_t *bindings);

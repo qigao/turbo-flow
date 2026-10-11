@@ -231,8 +231,45 @@ Windows 命令在 `VsDevCmd.bat` 环境执行，GitHub Packages token 由父环�
 本地 `build/Msvc-Release/241-decoder-final-{build,tests}.log` 和
 `241-decoder-rc11-adjacent-{build,tests}.log`；本轮未执行安装态、其他平台或 sanitizer 验收。
 
-#241 的生产消费者清单尚包含
+上述 decoder 迁移完成时，#241 的生产消费者清单尚包含
 [`flow_plugin_operation.c`](../../turbo_flow/src/flow_plugin_operation.c) 的 operation/resource
 绑定，以及 [`flow_plugin_generation.c`](../../turbo_flow/src/flow_plugin_generation.c) 的
 materializer 绑定。两者仍读取 resolved config，需与 #93/#73 的 typed binding 契约协调迁移，
 再删除 Config target/API 和剩余 YAML 测试；本轮只移除了 NetworkIntake decoder 消费端。
+
+
+### #241 materializer stage 配置迁移（2026-10-11）
+
+Materializer 选择现由 operation stage 的 `materializer { plugin "provider.id" }`
+声明，复用生成的 MessagePlan；schema/version/encoding 从 canonical operation input
+导出。共享 `(operation, resource)` session 的 stages 必须选择一致，仅显式选择的
+bindings 贡献 projection capacity。非空旧 YAML materializer 数组在 provider preparation
+前拒绝，完整决策与迁移方式见 [typed-operation 契约](../../docs/architecture/typed-operation-abi3.md#materializer-stage-config)。
+
+真实 RulesForge 双 Source fixture 已同步改用 `.flow` materializer 选择；其 operation
+policy 与 `rfl_file/fact_type/base_dir` 部署资源仍是 resolved-config 消费者。后续先迁移
+这两类，最后删除 Config target/API/parser；不能将本次 materializer 迁移计为 #241 完成。
+
+
+本片段 Windows Release 验证使用 `win-release-user`、Salts `2.3.0-rc.11`
+（`40173f836d983225d14e87b1c98b78ffc7047174`）和 TurboDB `2.3.4`
+（`a8f849e7cd7193b89a8ade596bf9ef072a0533fc`）。TurboDB manifest 仍记录其生产依赖
+为 Salts rc.10；这是安装包与 rc.11 的本地组合结果。
+
+19/19 CTest 套件通过：materializer catalog/generation、operation runtime、Plugin
+generation、provider config/binding/generation、Component generation、durable buffer、
+Inbox Source，加上 decoder 迁移记录中的全部 9 个 network/RulesForge 套件。materializer
+正向路径通过真实 durable buffer 获取 claim，再同步送入 generation；不调用私有 provenance
+标记入口。非法配置、127/128 字节边界、共享 stages 选择/省略冲突、未选择消费者不贡献
+容量、projection 滞留与释放均有正式用例。
+
+先构建下列过滤器对应的同名 targets，再运行：
+
+```powershell
+cmake --build --preset win-release-user --target test_flow_plugin_materializer_generation test_flow_rulesforge_durable_network test_flow_plugin_materializer test_flow_plugin_operation_runtime test_flow_plugin_generation test_flow_provider_config test_flow_provider_binding test_flow_provider_generation test_flow_component_generation test_flow_durable_buffer test_flow_inbox_source test_protocol_network_intake test_protocol_network_intake_config test_protocol_network_intake_core test_protocol_network_intake_edges test_protocol_network_jtt808 test_protocol_network_coap test_protocol_network_jtt808_turbodb test_protocol_network_coap_turbodb --parallel 8
+ctest --preset win-release-user -R "^test_(flow_(plugin_materializer(_generation)?|rulesforge_durable_network|plugin_operation_runtime|plugin_generation|provider_config|provider_binding|provider_generation|component_generation|durable_buffer|inbox_source)|protocol_network_(intake(_config|_core|_edges)?|jtt808(_turbodb)?|coap(_turbodb)?))$" --output-on-failure
+```
+
+构建与测试日志为 `build/Msvc-Release/241-materializer-regression-{build,tests}.log`。
+本片段未执行安装态、其他平台或 sanitizer 验收；之前记录的 Windows Pipe 三个失败用例
+不在本次过滤器内，仍未解决。

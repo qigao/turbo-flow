@@ -6,6 +6,7 @@
 
 #include "turbo_flow_stl_error_internal.h"
 
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@ static int flow_plugin_generation_materializer_error(
 
 struct turbo_flow_plugin_materializer_binding_s {
   turbo_flow_plugin_materializer_v1_t materializer;
+  const char *plugin_id; /* Borrowed from the retained catalog snapshot. */
   turbo_flow_projection_owner_t *owner;
   size_t config_index;
 };
@@ -130,52 +132,32 @@ static int flow_plugin_generation_materializer_error(
     turbo_flow_config_error_t *error, int status, size_t index,
     const char *field, const char *message) {
   char path[TURBO_FLOW_DIAGNOSTIC_PATH_MAX + 1u];
-  (void)snprintf(path, sizeof(path), "$.materializer_bindings[%zu]%s%s", index,
-                 field ? "." : "", field ? field : "");
+  (void)fmt(path, sizeof(path), "$.generation.materializers[{}]{}{}", index, field ? "." : "",
+            field ? field : "");
   return flow_plugin_generation_error(error, status, path, message);
 }
 
-static int flow_plugin_generation_materializer_encoding(
-    turbo_flow_config_materializer_encoding_t configured,
-    turbo_flow_data_encoding_t *out) {
-  if (!out) return SALTS_EINVAL;
-  switch (configured) {
-  case TURBO_FLOW_CONFIG_MATERIALIZER_TBE:
-    *out = TURBO_FLOW_DATA_ENCODING_TBE;
-    return SALTS_OK;
-  case TURBO_FLOW_CONFIG_MATERIALIZER_JSON:
-    *out = TURBO_FLOW_DATA_ENCODING_JSON;
-    return SALTS_OK;
-  case TURBO_FLOW_CONFIG_MATERIALIZER_CSV:
-    *out = TURBO_FLOW_DATA_ENCODING_CSV;
-    return SALTS_OK;
-  case TURBO_FLOW_CONFIG_MATERIALIZER_XML:
-    *out = TURBO_FLOW_DATA_ENCODING_XML;
-    return SALTS_OK;
-  case TURBO_FLOW_CONFIG_MATERIALIZER_UTF8:
-    *out = TURBO_FLOW_DATA_ENCODING_UTF8;
-    return SALTS_OK;
-  case TURBO_FLOW_CONFIG_MATERIALIZER_OPAQUE:
-    *out = TURBO_FLOW_DATA_ENCODING_OPAQUE;
-    return SALTS_OK;
-  default:
-    return SALTS_EINVAL;
-  }
+static int materializer_input_matches(const turbo_flow_plugin_materializer_v1_t *materializer,
+                                      const flow_plugin_operation_binding_t *operation) {
+  return operation->operation.input.data && operation->operation.input.projection &&
+         strcmp(materializer->schema.schema_name, operation->operation.input.data->stable_id) ==
+             0 &&
+         materializer->schema.schema_version == operation->operation.input.schema_version &&
+         materializer->schema.encoding == operation->operation.input.projection->encoding;
 }
 
 static int flow_plugin_generation_prepare_materializers(
     turbo_flow_plugin_catalog_snapshot_t *snapshot,
-    const turbo_flow_resolved_config_t *resolved,
     const vec_t *operations, vec_t *out,
     turbo_flow_config_error_t *error) {
   turbo_flow_plugin_materializer_catalog_v1_t catalog =
       TURBO_FLOW_PLUGIN_MATERIALIZER_CATALOG_V1_INIT;
   size_t count = 0u;
   int rc;
-  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &count);
-  if (rc != SALTS_OK)
-    return flow_plugin_generation_materializer_error(
-        error, rc, 0u, NULL, "materializer binding config is unavailable");
+  for (size_t i = 0u; i < vec_size(operations); ++i) {
+    const flow_plugin_operation_binding_t *operation = vec_at_const(operations, i);
+    if (operation->materializer_plugin[0]) ++count;
+  }
   rc = turbo_flow_stl_error(
       vec_init_bytes(out, sizeof(turbo_flow_plugin_materializer_binding_t),
                      _Alignof(turbo_flow_max_align_t), count));
@@ -192,52 +174,44 @@ static int flow_plugin_generation_prepare_materializers(
     return flow_plugin_generation_materializer_error(
         error, rc, 0u, NULL, "materializer catalog is unavailable");
 
-  for (size_t i = 0u; i < count; ++i) {
-    turbo_flow_resolved_materializer_binding_view_t wanted =
-        TURBO_FLOW_RESOLVED_MATERIALIZER_BINDING_VIEW_INIT;
+  for (size_t operation_index = 0u; operation_index < vec_size(operations); ++operation_index) {
+    const flow_plugin_operation_binding_t *consumer = vec_at_const(operations, operation_index);
     const turbo_flow_plugin_materializer_catalog_entry_v1_t *selected = NULL;
     turbo_flow_plugin_materializer_binding_t compiled;
     turbo_flow_projection_owner_config_t owner_config =
         TURBO_FLOW_PROJECTION_OWNER_CONFIG_INIT;
     flow_plugin_materializer_projection_context_t *projection_ctx = NULL;
-    turbo_flow_data_encoding_t encoding = TURBO_FLOW_DATA_ENCODING_OPAQUE;
-    size_t consumer_count = 0u;
     size_t projection_capacity = 0u;
     size_t max_retained_bytes = 0u;
-    rc = turbo_flow_resolved_config_materializer_binding_at(resolved, i, &wanted);
-    if (rc != SALTS_OK)
-      return flow_plugin_generation_materializer_error(
-          error, rc, i, NULL, "materializer binding projection failed");
-    rc = flow_plugin_generation_materializer_encoding(wanted.encoding, &encoding);
-    if (rc != SALTS_OK)
-      return flow_plugin_generation_materializer_error(
-          error, rc, i, "encoding", "materializer encoding is invalid");
-
+    size_t i = vec_size(out);
+    int already_compiled = 0;
+    if (!consumer->materializer_plugin[0]) continue;
+    for (size_t j = 0u; j < vec_size(out); ++j) {
+      const turbo_flow_plugin_materializer_binding_t *existing = vec_at_const(out, j);
+      if (strcmp(existing->plugin_id, consumer->materializer_plugin) == 0 &&
+          materializer_input_matches(&existing->materializer, consumer)) {
+        already_compiled = 1;
+        break;
+      }
+    }
+    if (already_compiled) continue;
     for (size_t j = 0u; j < catalog.count; ++j) {
       const turbo_flow_plugin_materializer_catalog_entry_v1_t *entry = &catalog.entries[j];
-      if (!entry->plugin_id || strcmp(entry->plugin_id, wanted.plugin) != 0)
-        continue;
-      if (strcmp(entry->materializer.schema.schema_name, wanted.schema) != 0 ||
-          entry->materializer.schema.schema_version != wanted.schema_version ||
-          entry->materializer.schema.encoding != encoding)
-        continue;
-      selected = entry;
-      break;
+      if (entry->plugin_id && strcmp(entry->plugin_id, consumer->materializer_plugin) == 0 &&
+          materializer_input_matches(&entry->materializer, consumer)) {
+        selected = entry;
+        break;
+      }
     }
     if (!selected)
       return flow_plugin_generation_materializer_error(
           error, SALTS_ENOENT, i, "plugin",
-          "configured materializer provider/schema/version/encoding was not registered");
+          "selected materializer does not publish the canonical operation input schema");
 
     for (size_t j = 0u; j < vec_size(operations); ++j) {
-      const flow_plugin_operation_binding_t *operation =
-          (const flow_plugin_operation_binding_t *)vec_at_const(operations, j);
-      if (!operation || !operation->operation.input.data ||
-          !operation->operation.input.projection)
-        continue;
-      if (strcmp(operation->operation.input.data->stable_id, wanted.schema) != 0 ||
-          operation->operation.input.schema_version != wanted.schema_version ||
-          operation->operation.input.projection->encoding != encoding)
+      const flow_plugin_operation_binding_t *operation = vec_at_const(operations, j);
+      if (strcmp(operation->materializer_plugin, consumer->materializer_plugin) != 0 ||
+          !materializer_input_matches(&selected->materializer, operation))
         continue;
       rc = turbo_flow_data_schema_match(
           &selected->materializer.schema, selected->materializer.data,
@@ -245,19 +219,12 @@ static int flow_plugin_generation_prepare_materializers(
       if (rc != SALTS_OK)
         return flow_plugin_generation_materializer_error(
             error, SALTS_EPROTO, i, "schema",
-            "materializer schema/CMeta does not exactly match every operation input consumer");
+            "materializer schema/CMeta does not exactly match every selected operation input");
       if (operation->request.limits.max_inflight > SIZE_MAX - projection_capacity)
         return flow_plugin_generation_materializer_error(
-            error, SALTS_EINVAL, i, "schema",
-            "materializer projection capacity overflow");
+            error, SALTS_EINVAL, i, "schema", "materializer projection capacity overflow");
       projection_capacity += operation->request.limits.max_inflight;
-      ++consumer_count;
     }
-    if (consumer_count == 0u)
-      return flow_plugin_generation_materializer_error(
-          error, SALTS_EPROTO, i, "schema",
-          "materializer binding has no exact typed-operation input consumer");
-
     if (!projection_capacity ||
         selected->materializer.native_bytes > SIZE_MAX / projection_capacity)
       return flow_plugin_generation_materializer_error(
@@ -289,6 +256,7 @@ static int flow_plugin_generation_prepare_materializers(
 
     memset(&compiled, 0, sizeof(compiled));
     compiled.materializer = selected->materializer;
+    compiled.plugin_id = selected->plugin_id;
     compiled.config_index = i;
     rc = turbo_flow_plugin_projection_owner_create(snapshot, &owner_config, &compiled.owner);
     if (rc != SALTS_OK) {
@@ -313,14 +281,15 @@ static int flow_plugin_generation_bind_operation_materializers(
     flow_plugin_operation_binding_t *operation =
         (flow_plugin_operation_binding_t *)vec_at(operations, i);
     const turbo_flow_plugin_materializer_binding_t *selected = NULL;
-    if (!operation || !operation->operation.input.data ||
+    if (!operation || !operation->materializer_plugin[0] || !operation->operation.input.data ||
         !operation->operation.input.projection)
       continue;
     for (size_t j = 0u; j < vec_size(materializers); ++j) {
       const turbo_flow_plugin_materializer_binding_t *candidate =
           (const turbo_flow_plugin_materializer_binding_t *)vec_at_const(materializers, j);
       int rc;
-      if (!candidate || !candidate->owner || !candidate->materializer.data)
+      if (!candidate || !candidate->owner || !candidate->materializer.data ||
+          strcmp(candidate->plugin_id, operation->materializer_plugin) != 0)
         continue;
       if (strcmp(candidate->materializer.schema.schema_name,
                  operation->operation.input.data->stable_id) != 0 ||
@@ -334,14 +303,17 @@ static int flow_plugin_generation_bind_operation_materializers(
           operation->operation.input.projection, operation->operation.input.data);
       if (rc != SALTS_OK)
         return flow_plugin_generation_error(
-            error, SALTS_EPROTO, "$.materializer_bindings",
+            error, SALTS_EPROTO, "$.generation.materializers",
             "materializer schema does not exactly match typed-operation input");
       if (selected)
         return flow_plugin_generation_error(
-            error, SALTS_EPROTO, "$.materializer_bindings",
+            error, SALTS_EPROTO, "$.generation.materializers",
             "multiple compiled materializers match one typed-operation input");
       selected = candidate;
     }
+    if (!selected)
+      return flow_plugin_generation_error(error, SALTS_ENOENT, "$.generation.materializers",
+                                          "selected operation materializer was not compiled");
     operation->materializer = selected;
   }
   return SALTS_OK;
@@ -357,6 +329,7 @@ int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_generation_t **cleanup_out,
     turbo_flow_config_error_t *error) {
   turbo_flow_plugin_generation_t *generation;
+  size_t legacy_materializers = 0u;
   turbo_flow_config_error_t cleanup_error =
       TURBO_FLOW_CONFIG_ERROR_INIT;
   int rc;
@@ -378,6 +351,12 @@ int turbo_flow_plugin_generation_create(
   if (turbo_flow_state(*flow_io) != TURBO_FLOW_STATE_PARSED)
     return flow_plugin_generation_error(
         error, SALTS_EINVAL, "$.graph", "Graph must be parsed");
+
+  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &legacy_materializers);
+  if (rc != SALTS_OK || legacy_materializers != 0u)
+    return flow_plugin_generation_error(
+        error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.materializer_bindings",
+        "move materializer selection into the typed operation stage config");
 
   generation =
       (turbo_flow_plugin_generation_t *)calloc(1u, sizeof(*generation));
@@ -403,9 +382,11 @@ int turbo_flow_plugin_generation_create(
       config->operation_memory_budget_bytes, &generation->bindings, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
-  rc = flow_plugin_generation_prepare_materializers(
-      snapshot, resolved, &generation->bindings,
-      &generation->materializers, error);
+  rc = flow_plugin_materializer_configure(*flow_io, &generation->bindings, error);
+  if (rc != SALTS_OK) goto preflight_failed;
+
+  rc = flow_plugin_generation_prepare_materializers(snapshot, &generation->bindings,
+                                                    &generation->materializers, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
   rc = flow_plugin_generation_bind_operation_materializers(

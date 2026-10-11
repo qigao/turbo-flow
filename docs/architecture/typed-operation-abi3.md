@@ -1,9 +1,63 @@
 # Typed-operation ABI 3.x 精确契约
 
-状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.1，新增 materializer 注册面；operation v3 profile 的执行、结果和生命周期语义不变。
-共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。ABI 3.1 明确拒绝旧 3.0 DLL、旧 major、短布局和未来未支持 minor。
+状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.3，generation 配置持有显式 Component runtime；materializer 注册面自 3.1 引入；operation v3 profile 的执行、结果和生命周期语义不变。
+共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。当前 ABI 拒绝旧 3.0/3.1/3.2 DLL、旧 major、短布局和未来未支持 minor。
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
+
+## Materializer stage config
+
+#241 将 materializer 选择迁入 operation 的 `.flow` block；输入 schema/version/encoding
+继续来自已准入的 canonical operation input，用户只选择已加载的插件身份：
+
+```flow
+source input
+stage calculate operation fixture.double {
+  materializer { plugin "fixture.materializer.operation" }
+}
+stage main {
+  input -> calculate
+}
+```
+
+`flow_operation_stage_config.schema` 生成可选 `materializer` record，内含必填的非空
+`plugin`（最多 127 字节；Host 同时检查字节长度及内嵌 NUL）。已有 provider literal
+CSerde reader 和 DataBind MessagePlan 负责 unknown/missing/type/constraint 错误，
+PluginHost 负责精确插件和 operation input 契约匹配。省略 record 表示不选择 materializer。
+错误定位为 `$.stages.<stage>[.<field>]`，均发生在 operation callback 和 provider
+materialize 之前；stage config 无绑定的 typed operation 消费者时返回 `SALTS_ENOTSUP`。
+
+状态与容量沿用现有 owner：
+
+- `(operation, resource)` 唯一绑定继续拥有一个 session 和预算。共享该绑定的 stages
+  必须选择相同插件，包括一致省略；冲突返回 `SALTS_EPROTO`。本次不引入逐 stage session。
+- 不同 operation bindings 仅在显式选择同一插件且 canonical input 完全匹配时共享
+  compiled materializer。catalog 原有的 schema/version/encoding 唯一性仍然有效。
+- 投影容量为选择该 materializer 的 operation bindings 的 `max_inflight` 之和，
+  共享同一 binding 的 stages 只计一次；未选择它的同类型消费者不贡献额度。
+  容量与 retained bytes 运算检查溢出，完整 CMeta/schema 不匹配返回 `SALTS_EPROTO`，
+  没有匹配插件返回 `SALTS_ENOENT`。
+- typed stage config 的临时 native value/MessagePlan 完成 stage 绑定后即释放；插件身份复制到
+  有界 operation binding。compiled handle 借用 snapshot 的插件 metadata，projection
+  owner 保留模块生命周期。运行时只使用已绑定的 handle，不重新读取 stage config/catalog。
+- compiled materializer 索引按首次选择它的 operation binding 顺序生成，诊断路径为
+  `$.generation.materializers[i]`。活跃 projection 继续阻止 generation retirement，
+  正常释放及失败重试沿用现有 owner 协议。
+
+候选方案包括继续读取 YAML 选择表、重复编写 schema 字段、逐 stage 新建 session。
+前两者会保留第二份配置/语义事实源，后者改变共享预算和引擎状态；因此选择上述显式
+stage plugin identity + canonical input join。改变的是选择来源及诊断索引，未改变
+materializer callback、projection 或 operation result 的所有权。
+
+迁移时删除 YAML 中非空的 `materializer_bindings`，把插件选择写入每个消费 stage。
+非空旧数组在 provider preparation 前返回 `SALTS_ENOTSUP`，即使 `.flow` 同时包含
+有效选择也不回退。Config parser 暂时仍可读取旧数组以给出明确迁移错误；operation
+policy 和 RulesForge 部署资源仍依赖 resolved config，完成 #238/#239/#93/#73 对应迁移后
+才能物理删除 Config。回滚必须同时回滚 `.flow` 和消费实现，不提供进程内双配置路径。
+
+正式验证：`test_flow_plugin_materializer_generation` 覆盖选择、MessagePlan 错误、
+共享冲突、容量、真实 durable-buffer claim、projection 滞留与释放；
+`test_flow_rulesforge_durable_network` 覆盖两类真实 Source 到 RulesForge 的同一选择路径。
 
 ## 证据、候选与决策
 
@@ -23,8 +77,8 @@ Graph 不依赖 PluginHost；新增 Graph API 只接受 Graph owner 和 CMeta �
 
 ## ABI 基本规则
 
-`TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR=3u`，minor `0u`。所有 shared size/version
-结构必须 `size == sizeof(T)`、major 3、minor 0；旧版本、未来 minor/major、短结构、
+`TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR=3u`，minor `3u`。所有 shared size/version
+结构必须 `size == sizeof(T)`、major 3、minor 3；旧版本、未来 minor/major、短结构、
 过长未知布局均 EINVAL，读取尾字段或调用 callback 之前检查。root、host services、
 registration、provider wrappers、owner、catalog、配置和错误输出逐一校验。
 只允许先读取合法内存中的 size；size 小于版本头前不得读取版本。无自动布局转换。
@@ -46,7 +100,7 @@ error 头才适用保留原 callback 错误与 phase 的规则，不允许修补
 以及 `turbo_flow_resolved_config.h`。所有 enum 字段实际使用 uint32_t，避免 C enum
 宽度作为 DLL 布局；返回值采用既有 SALTS 错误码，不重编号。
 下列每个含 size/abi 的新结构提供静态 inline 初始化函数：先 `{0}`，再令 size=sizeof(T)、
-abi_major=3、abi_minor=0；这是 C11/C++ 兼容的逐字段初始化函数实现规则，不能 memcpy
+abi_major=TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR、abi_minor=TURBO_FLOW_PLUGIN_ABI_VERSION_MINOR；这是 C11/C++ 兼容的逐字段初始化函数实现规则，不能 memcpy
 短前缀。具体初始化函数名为类型去掉 `_t` 后加 `_init(T *out)`，返回 void，out 必须非 NULL。
 含嵌套wrapper的operation/request初始化函数还调用每个嵌套类型的init；其余字段为零。
 例如 `turbo_flow_plugin_operation_v3_init(turbo_flow_plugin_operation_v3_t *out)`。

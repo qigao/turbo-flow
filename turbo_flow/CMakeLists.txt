@@ -37,6 +37,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_materializer_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_rulesforge.c)
@@ -172,9 +173,20 @@ target_link_libraries(turbo_flow_product
          Salts::ComponentPlugin Salts::Plugin
   PRIVATE Salts::JsonParser)
 
+salts_idl_target(
+  TARGET turbo_flow_operation_stage_config
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/flow_operation_stage_config.schema"
+  ARTIFACT_NAME "operation_stage_config"
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
+set_target_properties(${turbo_flow_operation_stage_config_NATIVE_TARGET} PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_materializer_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
@@ -197,10 +209,13 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/ingress/protocol/common/include>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+          "${turbo_flow_operation_stage_config_GENERATED_DIR}")
 target_link_libraries(turbo_flow_plugin_host
                       PUBLIC TurboFlow::Product TurboFlow::ProtocolIngress Salts::CMeta
-                      PRIVATE Salts::CSTL Salts::Plugin ${CMAKE_DL_LIBS})
+                      PRIVATE Salts::CSTL Salts::Plugin
+                              ${turbo_flow_operation_stage_config_NATIVE_TARGET} ${CMAKE_DL_LIBS})
+add_dependencies(turbo_flow_plugin_host turbo_flow_operation_stage_config_idl_codegen)
 
 install(FILES ${TURBO_FLOW_HEADERS} DESTINATION include)
 

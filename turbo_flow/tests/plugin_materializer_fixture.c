@@ -1,5 +1,6 @@
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_plugin_materializer.h"
+#include "turbo_flow_stl_error_internal.h"
 
 #include <cmeta/type_select.h>
 #include <string.h>
@@ -77,7 +78,7 @@ static int fixture_load(const turbo_flow_plugin_host_v1_t *host, void **out) {
   *out = NULL;
   fixture_int_type = *CMETA_TYPEOF(int);
   if (FLOW_MATERIALIZER_MODE == FLOW_MATERIALIZER_OVERALIGNED)
-    fixture_int_type.align = _Alignof(max_align_t) * 2u;
+    fixture_int_type.align = _Alignof(turbo_flow_max_align_t) * 2u;
   fixture_int_data = cmeta_data_int;
   fixture_int_data.stable_id = FLOW_MATERIALIZER_SCHEMA_ID;
   fixture_int_data.display_name = "Fixture materialized int";

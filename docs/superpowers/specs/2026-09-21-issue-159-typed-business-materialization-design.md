@@ -2,6 +2,8 @@
 
 Status: proposed design for #159. This document does not change the public ABI by itself.
 
+Current selection update (2026-10-11, #241): materializer selection now belongs to the operation .flow stage. The resolved materializer configuration below is historical; see [the current contract](../../architecture/typed-operation-abi3.md#materializer-stage-config).
+
 Related: #73, #76, #116, #117, #118, #127.
 
 ## 1. Problem statement
