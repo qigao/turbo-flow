@@ -936,6 +936,20 @@ int turbo_flow_provider_adapter_source_transport_query(
   return SALTS_OK;
 }
 
+int turbo_flow_provider_adapter_source_connection_snapshot(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_connection_snapshot_t *out) {
+  turbo_flow_connection_snapshot_t snapshot;
+  int index;
+  int rc;
+  if (!out) return SALTS_EINVAL;
+  index = flow_source_transport_adapter_index(flow, stage_name);
+  if (index < 0) return index;
+  rc = turbo_flow_adapter_connection_snapshot_at(flow, (size_t)index, &snapshot);
+  if (rc == SALTS_OK) *out = snapshot;
+  return rc;
+}
+
 static const flow_adapter_registration_t *flow_transport_reply_adapter(
     const turbo_flow_t *flow, const char *adapter_name) {
   int index;

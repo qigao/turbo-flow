@@ -132,6 +132,18 @@ TURBO_FLOW_C_API int turbo_flow_provider_adapter_source_transport_query(
     const turbo_flow_t *flow, const char *stage_name,
     turbo_flow_source_transport_contract_t *out);
 
+/**
+ * Read the connection snapshot of an exact provider-bound Source stage.
+ * No global adapter-name fallback is used. Returns ENOENT for an unbound stage,
+ * EINVAL for a non-Source/invalid argument, ENOTSUP without a snapshot callback,
+ * or the provider's error. Failure leaves out unchanged. adapter_name borrows
+ * the Graph-owned provider identity, not the stage identity. Call on the owner
+ * control thread, excluding registration, reset and destruction.
+ */
+TURBO_FLOW_C_API int turbo_flow_provider_adapter_source_connection_snapshot(
+    const turbo_flow_t *flow, const char *stage_name,
+    turbo_flow_connection_snapshot_t *out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -245,7 +245,7 @@ static int register_scoped(
     const char *const *stages, size_t stage_count,
     const turbo_flow_adapter_ops_t *ops,
     const turbo_flow_adapter_schema_t *schema,
-    scoped_probe_t *probe) {
+    void *probe) {
   turbo_flow_provider_adapter_registration_v1_t registration =
       TURBO_FLOW_PROVIDER_ADAPTER_REGISTRATION_V1_INIT;
   registration.provider_identity = identity;
@@ -298,6 +298,75 @@ static void scoped_source_stop(
   (void)flow;
   (void)stage;
   ++source->stops;
+}
+
+static int scoped_connection_snapshot(void *ctx, turbo_flow_connection_snapshot_t *out) {
+  const turbo_flow_connection_snapshot_t *snapshot = ctx;
+  *out = *snapshot;
+  return snapshot->last_status;
+}
+
+spec("provider Source connection snapshots") {
+  static turbo_flow_t *flow;
+  static scoped_probe_t sink;
+  static turbo_flow_connection_snapshot_t first;
+  static turbo_flow_connection_snapshot_t second;
+  static const char graph[] =
+      "source a adapter fixture.source\nsource b adapter fixture.source\n"
+      "source legacy adapter fixture.source\nstage sink adapter fixture.sink\n"
+      "stage main {\n  a -> sink\n  b -> sink\n  legacy -> sink\n}\n";
+
+  before_each() {
+    const char *a[] = {"a"};
+    const char *b[] = {"b"};
+    const char *sink_stages[] = {"sink"};
+    turbo_flow_adapter_ops_t ops = {0};
+    turbo_flow_adapter_ops_t sink_adapter = sink_ops();
+    turbo_flow_adapter_schema_t schema = source_schema();
+    turbo_flow_adapter_schema_t sink_type = sink_schema();
+    memset(&sink, 0, sizeof(sink));
+    memset(&first, 0, sizeof(first));
+    memset(&second, 0, sizeof(second));
+    memcpy(first.endpoint, "tcp://127.0.0.1:1001", sizeof("tcp://127.0.0.1:1001"));
+    memcpy(second.endpoint, "tcp://127.0.0.1:1002", sizeof("tcp://127.0.0.1:1002"));
+    ops.connection_snapshot = scoped_connection_snapshot;
+    flow = turbo_flow_create();
+    check_not_null(flow);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.source", a, 1u, &ops, &schema, &first), SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.source", b, 1u, &ops, &schema, &second), SALTS_OK);
+    check_equal(turbo_flow_register_adapter_ex(flow, "fixture.source", &ops, &first, &schema), SALTS_OK);
+    check_equal(register_scoped(flow, "fixture.sink", sink_stages, 1u,
+                               &sink_adapter, &sink_type, &sink), SALTS_OK);
+  }
+  after_each() { turbo_flow_destroy(flow); flow = NULL; }
+
+  it("selects independent endpoints by stage before and after compile") {
+    turbo_flow_connection_snapshot_t result;
+    for (unsigned phase = 0u; phase < 2u; ++phase) {
+      if (phase) check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "a", &result), SALTS_OK);
+      check_equal(result.endpoint, first.endpoint);
+      check_equal(result.adapter_name, "fixture.source");
+      check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "b", &result), SALTS_OK);
+      check_equal(result.endpoint, second.endpoint);
+    }
+  }
+
+  it("preserves output on rejection and never selects the global alias") {
+    turbo_flow_connection_snapshot_t result = {0};
+    memcpy(result.endpoint, "unchanged", sizeof("unchanged"));
+    check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "legacy", &result), SALTS_ENOENT);
+    check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "fixture.source", &result), SALTS_ENOENT);
+    check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "sink", &result), SALTS_EINVAL);
+    second.last_status = SALTS_EIO;
+    check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "b", &result), SALTS_EIO);
+    check_equal(result.endpoint, "unchanged");
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_provider_adapter_source_connection_snapshot(flow, "a", &result), SALTS_ENOENT);
+    check_equal(result.endpoint, "unchanged");
+  }
 }
 
 spec("provider Source transport admission contract") {
