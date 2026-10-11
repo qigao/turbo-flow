@@ -75,81 +75,28 @@ static int materializer_publish_claim(void *ctx, turbo_flow_t *flow,
   return turbo_flow_publish((turbo_flow_t *)ctx, "input", message);
 }
 
-static const char yaml_good[] =
-    "version: 1\n"
-    "operation_bindings:\n"
-    "  - operation: fixture.double\n"
-    "    plugin: fixture.operation\n"
-    "    version: 1\n"
-    "    input_schema: cmeta.int.data\n"
-    "    input_schema_version: 1\n"
-    "    output_schema: cmeta.int.data\n"
-    "    output_schema_version: 1\n"
-    "    execution: inline\n"
-    "    threading: thread_safe\n"
-    "    cancellation: none\n"
-    "    permissions: []\n"
-    "    max_inflight: 1\n"
-    "    max_input_bytes: 8\n"
-    "    max_result_bytes: 8\n"
-    "    max_retained_bytes: 32\n"
-    "    max_steps: 2\n"
-    "    deadline_ms: 0\n"
-    "adapters: {}\n";
+static const char yaml_good[] = "version: 1\nadapters: {}\n";
+
+#define OPERATION_POLICY                                                                           \
+  "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "        \
+  "max_result_bytes 8, max_retained_bytes 32, max_steps 2 }\n"
 
 static const char graph_text[] = "source input\n"
-                                 "stage calculate operation fixture.double {\n"
+                                 "stage calculate operation fixture.double {\n" OPERATION_POLICY
                                  "  materializer { plugin \"fixture.materializer.operation\" }\n"
                                  "}\n"
                                  "stage main {\n"
                                  "  input -> calculate\n"
                                  "}\n";
 
-static const char yaml_two_consumers[] =
-    "version: 1\n"
-    "operation_bindings:\n"
-    "  - operation: fixture.double\n"
-    "    plugin: fixture.operation\n"
-    "    version: 1\n"
-    "    input_schema: cmeta.int.data\n"
-    "    input_schema_version: 1\n"
-    "    output_schema: cmeta.int.data\n"
-    "    output_schema_version: 1\n"
-    "    execution: inline\n"
-    "    threading: thread_safe\n"
-    "    cancellation: none\n"
-    "    permissions: []\n"
-    "    max_inflight: 1\n"
-    "    max_input_bytes: 8\n"
-    "    max_result_bytes: 8\n"
-    "    max_retained_bytes: 32\n"
-    "    max_steps: 2\n"
-    "    deadline_ms: 0\n"
-    "  - operation: fixture.other\n"
-    "    plugin: fixture.operation\n"
-    "    version: 1\n"
-    "    input_schema: cmeta.int.data\n"
-    "    input_schema_version: 1\n"
-    "    output_schema: cmeta.int.data\n"
-    "    output_schema_version: 1\n"
-    "    execution: inline\n"
-    "    threading: thread_safe\n"
-    "    cancellation: none\n"
-    "    permissions: []\n"
-    "    max_inflight: 1\n"
-    "    max_input_bytes: 8\n"
-    "    max_result_bytes: 8\n"
-    "    max_retained_bytes: 32\n"
-    "    max_steps: 2\n"
-    "    deadline_ms: 0\n"
-    "adapters: {}\n";
+static const char yaml_two_consumers[] = "version: 1\nadapters: {}\n";
 
 static const char graph_two_consumers[] =
     "source input\n"
-    "stage calculate operation fixture.double {\n"
+    "stage calculate operation fixture.double {\n" OPERATION_POLICY
     "  materializer { plugin \"fixture.materializer.operation\" }\n"
     "}\n"
-    "stage decide operation fixture.other {\n"
+    "stage decide operation fixture.other {\n" OPERATION_POLICY
     "  materializer { plugin \"fixture.materializer.operation\" }\n"
     "}\n"
     "stage main {\n"
@@ -277,11 +224,11 @@ static void materializer_durable_identity(turbo_flow_msg_t *msg) {
   check_equal(turbo_flow_msg_set_durable_identity(msg, &identity), SALTS_OK);
 }
 
-static void yaml_max_inflight(char *out, size_t capacity, uint32_t max_inflight) {
+static void graph_max_inflight(char *out, size_t capacity, uint32_t max_inflight) {
   char replacement[64];
-  int n = snprintf(replacement, sizeof(replacement), "max_inflight: %u", max_inflight);
+  int n = snprintf(replacement, sizeof(replacement), "max_inflight %u", max_inflight);
   check_true(n > 0 && (size_t)n < sizeof(replacement));
-  replace_once(out, capacity, yaml_good, "max_inflight: 1", replacement);
+  replace_once(out, capacity, graph_text, "max_inflight 1", replacement);
 }
 
 spec("generation materializer preflight") {
@@ -505,8 +452,10 @@ spec("generation materializer preflight") {
     turbo_flow_msg_t msg, clone, second;
     const turbo_flow_plugin_materializer_binding_t *binding = NULL;
     char yaml[4096];
-    yaml_max_inflight(yaml, sizeof(yaml), 2u);
-    check_equal(open_test(&t, FLOW_MATERIALIZER_OPERATION, yaml), SALTS_OK);
+    graph_max_inflight(yaml, sizeof(yaml), 2u);
+    check_equal(open_test_with_operation(&t, FLOW_OPERATION_OK, FLOW_MATERIALIZER_OPERATION,
+                                         yaml_good, yaml, 1u, 0),
+                SALTS_OK);
     check_equal(create_generation(&t), SALTS_OK);
     check_equal(turbo_flow_plugin_generation_materializer_at(t.generation, 0u, &binding), SALTS_OK);
 
@@ -651,7 +600,7 @@ spec("generation materializer preflight") {
                                          yaml_good, graph, 1u, 0),
                 SALTS_OK);
     check_equal(create_generation(&t), SALTS_ENOTSUP);
-    check_equal(t.error.path, "$.stages.orphan");
+    check_equal(t.error.path, "$.stages.orphan.materializer");
     check_not_null(t.flow);
     check_null(t.generation);
     close_test(&t);
@@ -681,27 +630,27 @@ spec("generation materializer preflight") {
   it("requires consistent selection for stages sharing one operation session") {
     static const char shared_graph[] =
         "source input\n"
-        "stage first operation fixture.double {\n"
+        "stage first operation fixture.double {\n" OPERATION_POLICY
         "  materializer { plugin \"fixture.materializer.operation\" }\n"
         "}\n"
-        "stage second operation fixture.double {\n"
+        "stage second operation fixture.double {\n" OPERATION_POLICY
         "  materializer { plugin \"fixture.materializer.operation\" }\n"
         "}\n"
         "stage main {\n  input -> first -> second\n}\n";
-    static const char conflicting[] = "stage first operation fixture.double {\n";
+    static const char conflicting[] = "stage first operation fixture.double {\n" OPERATION_POLICY;
     for (unsigned conflict = 0u; conflict < 4u; ++conflict) {
       materializer_generation_test_t t;
       char graph[4096];
       if (conflict == 1u)
         replace_once(graph, sizeof(graph), shared_graph,
-                     "stage first operation fixture.double {\n"
+                     "stage first operation fixture.double {\n" OPERATION_POLICY
                      "  materializer { plugin \"fixture.materializer.operation\" }\n",
                      conflicting);
       else if (conflict == 2u)
         replace_once(graph, sizeof(graph), shared_graph,
-                     "stage second operation fixture.double {\n"
+                     "stage second operation fixture.double {\n" OPERATION_POLICY
                      "  materializer { plugin \"fixture.materializer.operation\" }\n",
-                     "stage second operation fixture.double {\n");
+                     "stage second operation fixture.double {\n" OPERATION_POLICY);
       else if (conflict == 3u)
         replace_once(graph, sizeof(graph), shared_graph, "fixture.materializer.operation",
                      "fixture.materializer.other");
@@ -727,9 +676,9 @@ spec("generation materializer preflight") {
     turbo_flow_msg_t first, second;
     char graph[4096];
     replace_once(graph, sizeof(graph), graph_two_consumers,
-                 "stage decide operation fixture.other {\n"
+                 "stage decide operation fixture.other {\n" OPERATION_POLICY
                  "  materializer { plugin \"fixture.materializer.operation\" }\n",
-                 "stage decide operation fixture.other {\n");
+                 "stage decide operation fixture.other {\n" OPERATION_POLICY);
     check_equal(open_test_with_operation(&t, FLOW_OPERATION_TWO_NAMES, FLOW_MATERIALIZER_OPERATION,
                                          yaml_two_consumers, graph, 2u, 1),
                 SALTS_OK);

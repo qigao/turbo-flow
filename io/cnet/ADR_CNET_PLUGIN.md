@@ -247,8 +247,9 @@ bindings 贡献 projection capacity。非空旧 YAML materializer 数组在 prov
 前拒绝，完整决策与迁移方式见 [typed-operation 契约](../../docs/architecture/typed-operation-abi3.md#materializer-stage-config)。
 
 真实 RulesForge 双 Source fixture 已同步改用 `.flow` materializer 选择；其 operation
-policy 与 `rfl_file/fact_type/base_dir` 部署资源仍是 resolved-config 消费者。后续先迁移
-这两类，最后删除 Config target/API/parser；不能将本次 materializer 迁移计为 #241 完成。
+在该片段完成时，policy 与 `rfl_file/fact_type/base_dir` 部署资源仍是 resolved-config
+消费者。下述 operation policy 片段继续迁移前者；Config target/API/parser 仍需等待
+部署资源消费者迁移后删除。
 
 
 本片段 Windows Release 验证使用 `win-release-user`、Salts `2.3.0-rc.11`
@@ -273,3 +274,47 @@ ctest --preset win-release-user -R "^test_(flow_(plugin_materializer(_generation
 构建与测试日志为 `build/Msvc-Release/241-materializer-regression-{build,tests}.log`。
 本片段未执行安装态、其他平台或 sanitizer 验收；之前记录的 Windows Pipe 三个失败用例
 不在本次过滤器内，仍未解决。
+
+
+### #241 operation stage policy 迁移（2026-10-11）
+
+Operation selection/quotas 与 materializer 合并进一个生成的 `OperationStageConfig`
+MessagePlan。每个消费 stage 显式声明 `policy { plugin, version, max_inflight,
+max_input_bytes, max_result_bytes, max_retained_bytes, max_steps }`；实际 `.flow` 语法、
+范围、错误码、生命周期、候选方案及迁移/回滚见
+[operation stage policy](../../docs/architecture/typed-operation-abi3.md#operation-stage-policy)。
+
+共享 `(operation, resource)` 的 stages 必须声明相同 policy/materializer，包括一致省略；
+不同 resources 各自创建 session。最多 1024 个唯一 operation bindings，编译后按首次 stage
+出现顺序排列。Graph execution/CMeta native 类型继续是语义事实源，配额继续由既有
+session/result-domain 计费。非空旧 YAML operation bindings 在 provider preparation 前拒绝。
+
+本片段同步 runtime、materializer、真实 RulesForge 网络组合及安装消费者的 `.flow`
+输入。RulesForge `rfl_file/fact_type/base_dir` 及其 channel 查找仍需迁到显式部署 resource，
+`request.resolved` 与 Config target 尚未移除；不据此关闭 #239/#241/#93/#73。
+
+本片段最终 Windows Release 相关回归 **22/22 CTest 套件通过**，使用上述相同的 Salts
+`2.3.0-rc.11` / TurboDB `2.3.4` 安装组合；manifest 已重新核对，TurboDB 的生产依赖仍记录
+Salts rc.10。新增用例验证全部 policy 必填字段、类型/数值边界、127/128 字节插件名、
+共享 policy 双向省略及差异、独立 resource session、1024/1025 个唯一绑定和零工厂副作用。
+
+复现命令（Windows 先进入 `VsDevCmd.bat`，父环境从 `.env` 提供 GitHub Packages token）：
+
+```powershell
+cmake --build --preset win-release-user --target test_flow_plugin_operation_runtime test_flow_plugin_materializer_generation test_flow_rulesforge_durable_network test_flow_plugin_materializer test_flow_plugin_generation test_flow_plugin_operation test_flow_rulesforge_plugin test_flow_provider_config test_flow_provider_typed_config test_flow_provider_binding test_flow_provider_generation test_flow_component_generation test_flow_durable_buffer test_flow_inbox_source test_protocol_network_intake test_protocol_network_intake_config test_protocol_network_intake_core test_protocol_network_intake_edges test_protocol_network_jtt808 test_protocol_network_coap test_protocol_network_jtt808_turbodb test_protocol_network_coap_turbodb --parallel 8
+ctest --preset win-release-user -R "^test_(flow_(plugin_operation(_runtime)?|plugin_materializer(_generation)?|plugin_generation|rulesforge_plugin|rulesforge_durable_network|provider_(config|typed_config|binding|generation)|component_generation|durable_buffer|inbox_source)|protocol_network_(intake(_config|_core|_edges)?|jtt808(_turbodb)?|coap(_turbodb)?))$" --output-on-failure
+ctest --preset win-release-user -R "^test_turbo_flow_install_consumer$" --output-on-failure
+```
+
+最后一个安装测试**未通过**：先发现 runner 错误要求独立 `DATABIND_ROOT`，已移除该要求，
+继续使用正式 `SALTS_UTILS_ROOT`；随后完整 SDK 构建发现 CFlow function fixture 调用
+`cmeta_once` 却只链接 PluginABI，已补齐 `Salts::Core` 并验证该 DLL 能链接。后续正式
+`test_flow_plugin_cflow_plan` target 构建仍因既有测试直接调用未导出的
+`flow_cflow_region_execute` 报 LNK2019；该缺口需要通过公开执行路径修复测试，未新增私有
+函数导出、跳过测试或宣称安装消费者通过。已修改的安装消费者输入尚未得到安装态执行验证。
+
+最终相关回归日志为 `build/Msvc-Release/241-operation-policy-regression-{build,tests}.log`；
+安装尝试和 CFlow 构建日志分别为 `241-operation-policy-install-tests.log` 与
+`241-operation-policy-cflow-build.log`。更早的扩展构建还出现既有 RulesForge capability
+及生成 Vec lifecycle enum 的 C5287 警告。本轮未完成其他平台或 sanitizer qualification，
+既有 Windows Pipe 失败也未纳入这 22 个套件。

@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 enum {
   FLOW_PLUGIN_OPERATION_MAX_INFLIGHT = 1048576u,
+  FLOW_PLUGIN_OPERATION_MAX_BINDINGS = 1024u,
   FLOW_PLUGIN_OPERATION_MAX_BYTES = 1073741824u
 };
 int flow_plugin_operation_callback_result(turbo_flow_plugin_operation_error_v3_t *error,
@@ -37,6 +38,8 @@ int flow_plugin_result_domain_materialize(turbo_flow_plugin_result_domain_t *dom
                                           turbo_flow_plugin_operation_error_v3_t *error);
 
 typedef struct flow_plugin_operation_binding_s {
+  char plugin[TURBO_FLOW_PLUGIN_ID_MAX + 1u];
+  uint32_t version;
   turbo_flow_plugin_operation_v3_t operation;
   /** Canonical reflected graph value semantics; ABI3 schema wrappers are subordinate. */
   const cmeta_data_desc *input_data;
@@ -46,7 +49,6 @@ typedef struct flow_plugin_operation_binding_s {
   void *session;
   const turbo_flow_plugin_materializer_binding_t *materializer;
   char materializer_plugin[TURBO_FLOW_PLUGIN_ID_MAX + 1u];
-  int materializer_selection_seen;
   atomic_uint admission;
   cmeta_mutex_t error_mutex;
   turbo_flow_plugin_operation_error_v3_t error;
@@ -56,8 +58,8 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
                                    turbo_flow_plugin_result_domain_t *domain, size_t budget,
                                    vec_t *bindings, turbo_flow_config_error_t *error);
 int flow_plugin_operations_preflight(vec_t *bindings, turbo_flow_config_error_t *error);
-int flow_plugin_materializer_configure(const turbo_flow_t *flow, vec_t *operations,
-                                       turbo_flow_config_error_t *error);
+int flow_plugin_operation_configure(const turbo_flow_t *flow, vec_t *operations,
+                                    turbo_flow_config_error_t *error);
 int flow_plugin_operations_materialize(vec_t *bindings, turbo_flow_plugin_result_domain_t *domain,
                                        turbo_flow_t *flow, turbo_flow_config_error_t *error);
 int flow_plugin_operations_close(vec_t *bindings);

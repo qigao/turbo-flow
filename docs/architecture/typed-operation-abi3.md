@@ -5,6 +5,66 @@
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
 
+## Operation stage policy
+
+#241 的 operation selection/quotas 与 materializer 共用一个生成的
+`OperationStageConfig` MessagePlan。`.flow` 直接声明所需插件版本和有界预算：
+
+```flow
+source input
+stage calculate operation fixture.double {
+  policy { plugin "fixture.operation", version 1, max_inflight 1, max_input_bytes 8, max_result_bytes 8, max_retained_bytes 32, max_steps 2 }
+}
+stage main {
+  input -> calculate
+}
+```
+
+`policy` 可省略：省略时不从 PluginHost catalog 创建 operation binding，已有 canonical
+reflected/native Graph provider 路径继续自行完成准入；不能从另一个 stage 或旧 YAML
+隐式继承 policy。声明 record 时，上述七个字段全部必填。`version` 与 `max_steps`
+范围为 1..UINT32_MAX，`max_inflight` 为 1..1048576，三个 bytes 字段为 1..1073741824，
+`plugin` 为 1..127 字节且禁止内嵌 NUL。DataBind 负责字段、类型和范围验证；Host 再验证
+精确 catalog identity/version、canonical FunctionDesc/FunctionAbi/DataDesc、provider
+额度上限、固定输入/输出大小以及结果容量关系。缺字段、未知字段、类型和 schema 约束
+失败为 `SALTS_EPROTO`；不存在的 plugin/operation/version 为 `SALTS_EINVAL`；超出
+provider/结果域/内存预算为 `SALTS_ENOSPC`，均在 operation callbacks/工厂前失败。
+
+执行方式由 stage `exec` 和 canonical operation metadata 决定；当前 profile 仍只接受
+inline、thread-safe、无取消、无 deadline、无权限请求。不支持的 Graph execution/effects
+返回 `SALTS_ENOTSUP`。policy 不再复制 input/output schema 名称与版本、native signature、
+threading、cancellation 或 permissions；尝试写入这些未知字段会被 MessagePlan 拒绝。
+provider 注册继续校验其同步 profile，并将 projection schema 与 canonical DataDesc 精确
+关联，未放松任何执行或类型准入条件。
+
+一个 `(operation, resource)` 继续只拥有一个 session/result owner/预算。引用同一组的
+所有 stages 必须声明完全相同的 policy 和 materializer，包括一致省略；不同 plugin、
+version、任一 quota 或一方省略均返回 `SALTS_EPROTO`。不同 resource 保持独立绑定。
+同组 policy 冲突按 stage 顺序报告到后出现的 stage，且不会先调用任一 operation preflight。
+最多选择 1024 个唯一 operation/resource bindings。临时选择表受已解析 Graph stage 数量
+限制；生成的 typed value/MessagePlan 在提取后销毁。只有固定大小的选择与限额进入 binding，
+运行时不读取 literal、MessagePlan 或 catalog。
+
+绑定按 Graph stage 首次出现的 operation/resource 顺序生成，完成选取后一次预留绑定存储，
+初始化 mutex/atomic 后不再移动。`turbo_flow_plugin_generation_operation_error` 的
+`binding_index` 对应这个编译顺序。配置诊断为 `$.stages.<stage>[.<field>]`，编译 binding、
+callback 和退役诊断为 `$.generation.operations[i].<field>`。
+
+候选方案：继续读取旧 YAML、在 stage 重复 schema/profile 表、改为逐 stage session。
+前两者保留重复语义事实源，后者改变引擎状态与共享预算；采用 stage typed policy 加
+canonical semantic join，保留现有 session/result/domain 所有权和内存收费规则。
+
+迁移要求：删除非空 YAML `operation_bindings`，把 policy 复制到每个消费 stage；已有
+materializer stage 同时补上 policy。非空旧 operation/materializer 数组在 provider
+preparation 前返回 `SALTS_ENOTSUP`，即使同时提供有效新配置也拒绝。公开 callback 布局和
+PluginHost ABI 3.3 不变；`request.resolved` 暂时仅为未迁移的 RulesForge channel/resource
+保留，不能视为 #239/#241 完成。Config parser 的旧查询仅保留到物理移除，生产 generation
+不再消费旧 policy。回滚须同时回滚作者输入与实现，不提供运行时兼容或默认 policy。
+
+正式验证由 `test_flow_plugin_operation_runtime` 覆盖 shared policy、旧配置拒绝、字段和
+边界、类型契约、session/result 生命周期及预算；materializer、真实 RulesForge 网络组合
+和安装消费者也使用同一 stage policy。
+
 ## Materializer stage config
 
 #241 将 materializer 选择迁入 operation 的 `.flow` block；输入 schema/version/encoding
@@ -13,6 +73,7 @@
 ```flow
 source input
 stage calculate operation fixture.double {
+  policy { plugin "fixture.operation", version 1, max_inflight 1, max_input_bytes 8, max_result_bytes 8, max_retained_bytes 32, max_steps 2 }
   materializer { plugin "fixture.materializer.operation" }
 }
 stage main {
@@ -25,7 +86,7 @@ stage main {
 CSerde reader 和 DataBind MessagePlan 负责 unknown/missing/type/constraint 错误，
 PluginHost 负责精确插件和 operation input 契约匹配。省略 record 表示不选择 materializer。
 错误定位为 `$.stages.<stage>[.<field>]`，均发生在 operation callback 和 provider
-materialize 之前；stage config 无绑定的 typed operation 消费者时返回 `SALTS_ENOTSUP`。
+materialize 之前；materializer 无显式 policy 的 typed operation 消费者时返回 `SALTS_ENOTSUP`。
 
 状态与容量沿用现有 owner：
 
@@ -51,8 +112,8 @@ materializer callback、projection 或 operation result 的所有权。
 
 迁移时删除 YAML 中非空的 `materializer_bindings`，把插件选择写入每个消费 stage。
 非空旧数组在 provider preparation 前返回 `SALTS_ENOTSUP`，即使 `.flow` 同时包含
-有效选择也不回退。Config parser 暂时仍可读取旧数组以给出明确迁移错误；operation
-policy 和 RulesForge 部署资源仍依赖 resolved config，完成 #238/#239/#93/#73 对应迁移后
+有效选择也不回退。Config parser 暂时仍可读取旧数组以给出明确迁移错误；RulesForge
+部署资源仍依赖 resolved config，完成 #239/#73 对应迁移后
 才能物理删除 Config。回滚必须同时回滚 `.flow` 和消费实现，不提供进程内双配置路径。
 
 正式验证：`test_flow_plugin_materializer_generation` 覆盖选择、MessagePlan 错误、
@@ -377,9 +438,9 @@ retain_view规则及成功路径，包括清除原projection后保留descriptor�
 ## 执行准入、额度与错误
 
 支持值必须 execution=SYNC(1)、threading=THREAD_SAFE(1)、cancellation=NONE(0)、
-effects=RESULT(1)、guarantees=STEPS_CHARGED(1)。descriptor未知值ENOTSUP；config
-execution必须inline、threading必须thread_safe、cancellation必须none、deadline_ms=0。
-声明不支持和配置不支持均preflight ENOTSUP且不创建任何实例。不得用调用后耗时检查
+effects=RESULT(1)、guarantees=STEPS_CHARGED(1)。descriptor未知值ENOTSUP；stage
+execution必须inline。policy只声明选择和quota，不接受重复profile字段。
+声明或Graph profile不支持时preflight ENOTSUP，未知policy字段EPROTO，均不创建实例。不得用调用后耗时检查
 冒充deadline。cooperative/cancel与complete竞争在本profile不存在：请求被提前拒绝，
 已接受的同步调用仅有一次返回，stop不取消它；以后增加异步需另定ABI，不发布占位标签。
 
@@ -388,21 +449,19 @@ DATA_MUTATION授权，provider options为MUTATES_IN_PLACE和EFFECT_NONE；只改
 不设置message decision/terminal。预先检查DSL execution/effect/runtime contract一致。
 Graph descriptor继续是优化屏障；不把DLL callback标pure，不融合/重排。
 无节点/Graph业务状态、无keyed、无emit、无跨domain bridge。不符合返回ENOTSUP。
-Graph的operation metadata由调用方在parse/compile前通过既有
-`turbo_flow_register_operation`注册，本profile不由DLL私自添加新Graph词汇。
-metadata.name/version必须与binding选择一致；input_domain/output_domain及input_type/
-output_type必须分别相等，因为主消息仍携带原内容；result schema是附加结果的类型，
-不得冒充Graph主输出类型改变下游类型链。metadata缺失EINVAL，版本或类型契约不符EPROTO。
-测试fixture通过此公开入口注册`fixture.double`的DATA/message→DATA/message契约，
-验证新增result不影响Graph边的原类型。
+Graph operation metadata 由调用方在 parse/compile 前通过
+`turbo_flow_register_reflected_operation` 注册；CMeta FunctionDesc/FunctionAbi/DataDesc 是
+native 类型与效果的事实源。metadata.name/version 必须与 policy 选择一致，input/output
+DataDesc 必须与插件发布值语义相等；旧 string-typed metadata 明确拒绝。附加 result
+不替换主消息 projection。metadata 缺失 EINVAL，版本或类型契约不符 EPROTO。
 operation绑定的resource若非NULL，必须精确匹配DSL和resolved已有channel；request中
 resolved只借用到工厂调用返回，工厂复制需要的配置/加载有界artifact，禁止保留指针。
 
-首profile无宿主I/O服务：descriptor permissions必须空数组/count0，binding permissions
-必须空；非空明确ENOTSUP，且注册校验标识符/去重/32项上限。不得把列表忽略后执行。
+首profile无宿主I/O服务：descriptor permissions必须空数组/count0，非空注册返回
+ENOTSUP。policy不接受permissions字段；不得把列表忽略后执行。
 未来权限服务属于#93余项，不能由原生DLL白名单推论已经有沙箱/崩溃隔离。
 
-limits范围沿用resolved config：max_inflight 1..1048576；bytes 1..1073741824；
+typed policy limits范围：max_inflight 1..1048576；bytes 1..1073741824；
 max_steps 1..UINT32_MAX；deadline为0。配置每项<=descriptor上限，否则ENOSPC；
 input固定storage size<=max_input_bytes；output固定storage size<=max_result_bytes。
 host在invoke之前用独立原子inflight admission计数，满立即ENOSPC；每个accept恰好减一次。
@@ -481,7 +540,7 @@ TURBO_FLOW_C_API int turbo_flow_plugin_generation_cleanup_error(
   const turbo_flow_plugin_generation_t *generation, turbo_flow_config_error_t *out);
 ```
 
-binding_index是resolved配置原数组下标；超界EINVAL，未实例化槽返回初始化OK。
+binding_index是编译后operation/resource绑定首次stage出现顺序；超界EINVAL，未实例化槽返回初始化OK。
 out必须完整初始化；只读复制，绝不重试清理。cleanup_error保存最近一次退役失败的
 阶段/状态；控制面串行查询，与create的原始error分离。
 
@@ -534,7 +593,8 @@ generation_create的两个out必需且不得别名，进入后都清NULL；flow_
 entry和后续清理状态预留空间，然后转移Graph/attach域。凡已创建的ctx先登记在已预留entry，
 然后执行下一步；不能因为push失败丢owner。
 
-resolved中重复operation/resource绑定须在工厂前返回EALREADY。
+非空旧resolved operation bindings在provider preparation前返回ENOTSUP。
+同operation/resource的stage policy不一致在operation callbacks前返回EPROTO。
 Graph既存或Product materialize期间新增的provider冲突，以公开register_operation_provider
 返回的EALREADY为准，保留原错误并进入同一可重试退役流程；该冲突可能在工厂已调用、
 Graph/domain已转移后发生。不得新增不可靠的provider查询或穿透Graph私有注册表，亦不得

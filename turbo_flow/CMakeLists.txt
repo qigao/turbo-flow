@@ -37,7 +37,7 @@ list(REMOVE_ITEM TURBO_FLOW_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_materializer_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_rulesforge.c)
@@ -186,7 +186,7 @@ set_target_properties(${turbo_flow_operation_stage_config_NATIVE_TARGET} PROPERT
 add_library(turbo_flow_plugin_host SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_materializer_config.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_operation_config.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_result_domain.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_projection.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flow_plugin_generation.c

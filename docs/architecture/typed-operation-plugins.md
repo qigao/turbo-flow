@@ -45,39 +45,22 @@ schema/operation catalog、独立result-domain、typed-result提交及同步gene
 
 ## 契约分层
 
-Materializer 选择已迁入 `.flow` operation stage，详见 [stage config 决策](typed-operation-abi3.md#materializer-stage-config)。以下 operation policy/resource 配置仍属 #241 待迁移消费者。
+Operation policy 与 materializer 选择共用 `.flow` stage 的生成 MessagePlan，详见
+[operation stage policy](typed-operation-abi3.md#operation-stage-policy) 和
+[materializer stage config](typed-operation-abi3.md#materializer-stage-config)。
 
-### 配置与只读查询边界（#93 第一阶段）
+### 配置与资源边界
 
-根字段 `operation_bindings` 可缺省，也可为数组；缺省或空数组表示没有显式 DLL
-operation 绑定。每项的唯一键是 `(operation, resource)`，其中 `resource` 可缺省以表示
-stateless operation；若提供，则必须引用 `channels` 中已有名称。数组顺序和权限顺序均
-原样保留，不去重、不裁剪、不改变大小写。
+`stage ... operation <name> [resource <name>]` 声明 operation/resource identity；stage
+block 中 `policy` record 声明精确 plugin/version 和五项有界 quota。输入/输出类型来自
+canonical CMeta，execution 来自 stage。一个 operation/resource 对应一个共享 session，
+所有引用它的 stages 必须声明相同 policy/materializer，包括一致省略。
 
-每项必须包含 `operation`、`plugin`、`version`、`input_schema`、
-`input_schema_version`、`output_schema`、`output_schema_version`、`permissions`、
-`execution`、`threading`、`cancellation`、`max_inflight`、`max_input_bytes`、
-`max_result_bytes`、`max_retained_bytes`、`max_steps`、`deadline_ms`；只允许额外的可选
-`resource`。标识符和权限由 ASCII `[A-Za-z0-9_.-]` 组成，长度为 1..127 字节。
-版本为 1..`UINT32_MAX`；`execution` 为 `inline`/`thread`/`coro`，`threading` 为
-`owner`/`thread_safe`，`cancellation` 为 `none`/`cooperative`。
-
-`max_inflight` 单位为并发调用数，范围 1..1048576。三个 `*_bytes` 以字节计，范围
-1..1073741824，且 `max_result_bytes <= max_retained_bytes`。`max_steps` 为抽象执行步数，
-范围 1..`UINT32_MAX`；`deadline_ms` 以毫秒计，范围 0..3600000。bindings 最多 1024
-项，每项 permissions 最多 32 项。所有数值必须为有限整数；类型、字段、标识、范围、
-枚举、resource 引用错误返回 `SALTS_EINVAL`，重复返回 `SALTS_EALREADY`，数量超限返回
-`SALTS_ENOSPC`，并在 `turbo_flow_config_error_t.path` 中定位到对应字段。解析失败不发布
-部分 resolved snapshot。
-
-`turbo_flow_resolved_config_operation_binding_count`、`..._at` 和
-`..._permission_at` 只返回借用视图；所有字符串及视图内容仅在对应 resolved config
-销毁前有效。这些 API 只证明配置的词法和额度关系有效，不证明 input/output schema 的
-payload 布局相容，也不证明 provider 具备相应权限、线程、取消或资源能力。
-
-合法的非空bindings仅在首个同步profile全部preflight通过后装配；不支持的execution、
-threading、cancellation、deadline、权限/effect或配额组合在Graph所有权转移前明确拒绝，
-不得自动降级到legacy provider或其他引擎。
+非空 YAML `operation_bindings` 和 `materializer_bindings` 在 provider preparation 前
+返回 `SALTS_ENOTSUP`，不再用于 generation 装配。旧 Config parser/query 仅暂存到
+#241 物理移除。RulesForge 的知识库路径、fact type/base directory 仍是待迁移的部署
+resource consumer，必须先完成 #239 的显式 resource contract；不能因为 policy 已迁移
+就删除 `request.resolved` 或 Config target。
 
 1. **Schema 注册**：size/ABI-version 包装不可变 CMeta 元数据，携带稳定 schema
    identity、版本、storage type 及所有权说明。跨 DLL/TU 用 `cmeta_type_equal`
@@ -85,7 +68,7 @@ threading、cancellation、deadline、权限/effect或配额组合在Graph所有
 2. **Operation 注册**：声明 operation identity/version、输入/输出 schema、effects、
    权限需求、支持的配额和取消模式、owner/threading 约束，以及版本化工厂与执行 vtable。
    描述符不是一个可任意 eval 的字符串入口。
-3. **装配 binding**：host 根据已解析配置选择准确的 operation/resource，验证资源
+3. **装配 binding**：host 根据 typed stage policy 选择准确的 operation/resource，验证资源
    artifact 和执行要求，再创建 opaque owner，连接既有 Graph operation provider。
    新引擎执行接口不接收可任意修改的 Graph、Gateway 或 registry 指针。
 4. **执行**：host 适配层读取已验证 typed projection，调用缓存的执行 vtable，

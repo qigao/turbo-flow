@@ -213,12 +213,25 @@ TURBO_FLOW_C_API int turbo_flow_plugin_catalog_snapshot_transactional_product_ca
  * side effect. The generation owns the Graph and one retained catalog snapshot on success. Create,
  * lease mutation, and destroy are caller-serialized on the Gateway control thread.
  *
+ * A typed operation stage selects its exact plugin/version and bounded limits in a generated
+ * `policy` record. Every field is required: plugin, version, max_inflight, max_input_bytes,
+ * max_result_bytes, max_retained_bytes, max_steps. Omitting policy creates no PluginHost binding.
+ * Stages sharing an operation/resource must declare identical policies, including omission.
+ * Execution/type semantics come from the Graph/CMeta contract, never duplicated policy fields.
+ * A typed operation stage selects its exact plugin/version and bounded limits in a generated
+ * `policy` record. Every field is required: plugin, version, max_inflight, max_input_bytes,
+ * max_result_bytes, max_retained_bytes, max_steps. Omitting policy creates no PluginHost binding.
+ * Stages sharing an operation/resource must declare identical policies, including omission.
+ * Execution/type semantics come from the Graph/CMeta contract, never duplicated policy fields.
  * A typed operation stage may select `materializer { plugin "provider.id" }` in its .flow block.
  * Omission selects no materializer. The canonical operation input supplies schema/version/encoding;
  * these are not authored again. Stages sharing one operation/resource binding must agree on the
  * selection, including omission. Invalid stage fields fail before operation callbacks and provider
  * materialization. Nonempty legacy `materializer_bindings` are rejected with SALTS_ENOTSUP before
- * provider preparation; operation/resource resolved-config inputs remain required during migration.
+ * provider preparation. Nonempty legacy `operation_bindings` are likewise rejected. Resolved
+ * deployment resource inputs remain required during migration. Bindings are ordered by first
+ * Graph stage occurrence of each selected operation/resource; diagnostics use
+ * $.generation.operations[i].field, while typed config errors use $.stages.<stage>[.<field>].
  * @param snapshot Live immutable provider snapshot; retained by the generation.
  * @param resolved Immutable resolved configuration borrowed for the duration of this call.
  * @param flow_io In/out parsed Graph; moved only after every preflight succeeds.
@@ -243,7 +256,7 @@ TURBO_FLOW_C_API int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_generation_t **generation_out, turbo_flow_plugin_generation_t **cleanup_out,
     turbo_flow_config_error_t *error);
 
-/** Read the most recently completed failure for the resolved binding index; never retries cleanup.
+/** Read the most recently completed failure for the compiled binding index; never retries cleanup.
  */
 TURBO_FLOW_C_API int
 turbo_flow_plugin_generation_operation_error(const turbo_flow_plugin_generation_t *generation,

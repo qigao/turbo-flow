@@ -497,10 +497,12 @@ spec("RulesForge real network composition") {
         "message Applicant { int32 age; }";
     static const char adult_payload[] = "{\"age\":21}";
     static const char minor_payload[] = "{\"age\":17}";
-    static const char graph_text[] =
+    static const char graph_template[] =
         "source jtt_decoded\n"
         "source coap_decoded\n" FLOW_E2E_MEMORY_STAGE
         "stage rules operation rulesforge.apply resource rules_adult {\n"
+        "  policy { plugin \"" TURBO_FLOW_RULESFORGE_PLUGIN_ID "\", version 1, max_inflight 8, "
+        "max_input_bytes %zu, max_result_bytes %zu, max_retained_bytes 64, max_steps 16 }\n"
         "  materializer { plugin \"" TURBO_FLOW_RULESFORGE_PLUGIN_ID "\" }\n"
         "}\n"
         "stage verify operation test.verify_decision\n" FLOW_E2E_OUTPUT_STAGE "stage main {\n"
@@ -598,38 +600,15 @@ spec("RulesForge real network composition") {
     check_true(output_port != 0u);
     check_equal(cnet_datagram_receive(&datagram, COMPOSITION_MESSAGE_CAPACITY), SALTS_OK);
 
-    count =
-        snprintf(yaml, sizeof(yaml),
-                 "version: 1\n"
-                 "channels:\n"
-                 "  rules_adult:\n"
-                 "    kind: %s\n"
-                 "    config:\n"
-                 "      rfl_file: \"%s\"\n"
-                 "      fact_type: Applicant\n"
-                 "operation_bindings:\n"
-                 "  - operation: %s\n"
-                 "    resource: rules_adult\n"
-                 "    plugin: %s\n"
-                 "    version: 1\n"
-                 "    input_schema: %s\n"
-                 "    input_schema_version: 1\n"
-                 "    output_schema: %s\n"
-                 "    output_schema_version: 1\n"
-                 "    permissions: []\n"
-                 "    execution: inline\n"
-                 "    threading: thread_safe\n"
-                 "    cancellation: none\n"
-                 "    max_inflight: 8\n"
-                 "    max_input_bytes: %zu\n"
-                 "    max_result_bytes: %zu\n"
-                 "    max_retained_bytes: 64\n"
-                 "    max_steps: 16\n"
-                 "    deadline_ms: 0\n",
-                 TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path, TURBO_FLOW_RULESFORGE_OPERATION,
-                 TURBO_FLOW_RULESFORGE_PLUGIN_ID, TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID,
-                 TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID, sizeof(turbo_flow_rulesforge_applicant),
-                 sizeof(turbo_flow_rulesforge_decision));
+    count = snprintf(yaml, sizeof(yaml),
+                     "version: 1\n"
+                     "channels:\n"
+                     "  rules_adult:\n"
+                     "    kind: %s\n"
+                     "    config:\n"
+                     "      rfl_file: \"%s\"\n"
+                     "      fact_type: Applicant\n",
+                     TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path);
     check_greater(count, 0);
     check_less(count, (int)sizeof(yaml));
 
@@ -661,7 +640,13 @@ spec("RulesForge real network composition") {
                                                        &result_domain, &plugin_error),
                 SALTS_OK);
     check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)count, &resolved, &error), SALTS_OK);
-    check_equal(turbo_flow_parse_string(flow, graph_text, sizeof(graph_text) - 1u), SALTS_OK);
+    char graph_text[4096];
+    count =
+        snprintf(graph_text, sizeof(graph_text), graph_template,
+                 sizeof(turbo_flow_rulesforge_applicant), sizeof(turbo_flow_rulesforge_decision));
+    check_greater(count, 0);
+    check_less(count, (int)sizeof(graph_text));
+    check_equal(turbo_flow_parse_string(flow, graph_text, (size_t)count), SALTS_OK);
     {
       const turbo_flow_primitive_descriptor_t rules_resource = {
           sizeof(turbo_flow_primitive_descriptor_t),

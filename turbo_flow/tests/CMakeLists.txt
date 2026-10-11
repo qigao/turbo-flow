@@ -103,7 +103,7 @@ set_tests_properties(test_flow_databind_service_plan PROPERTIES
 add_library(test_flow_plugin_cflow_function_fixture SHARED
   plugin_cflow_function_fixture.c)
 target_link_libraries(test_flow_plugin_cflow_function_fixture
-  PRIVATE Salts::PluginABI)
+  PRIVATE Salts::PluginABI Salts::Core)
 set_target_properties(test_flow_plugin_cflow_function_fixture PROPERTIES
   FOLDER "turbo_flow/tests/plugin-fixtures")
 

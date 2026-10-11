@@ -376,20 +376,14 @@ static void install_operation_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_e
 }
 
 static int install_operation_runtime(const char *plugin_path) {
-  static const char yaml_template[] =
-      "version: 1\nplugins:\n"
-      "  - {id: fixture.operation, version: 1.0.0, path: '%s'}\n"
-      "operation_bindings:\n"
-      "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
-      "    input_schema: cmeta.int.data\n    input_schema_version: 1\n"
-      "    output_schema: cmeta.int.data\n    output_schema_version: 1\n"
-      "    execution: inline\n    threading: thread_safe\n    cancellation: none\n"
-      "    permissions: []\n    max_inflight: 1\n    max_input_bytes: 8\n"
-      "    max_result_bytes: 8\n    max_retained_bytes: 32\n    max_steps: 2\n"
-      "    deadline_ms: 0\n";
-  static const char dsl[] = "source input\nstage calculate operation fixture.double\n"
-                            "stage output operation fixture.capture\nstage main {\n input -> "
-                            "calculate\n calculate -> output\n}\n";
+  static const char yaml_template[] = "version: 1\nplugins:\n"
+                                      "  - {id: fixture.operation, version: 1.0.0, path: '%s'}\n";
+  static const char dsl[] =
+      "source input\nstage calculate operation fixture.double {\n"
+      "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "
+      "max_result_bytes 8, max_retained_bytes 32, max_steps 2 }\n}\n"
+      "stage output operation fixture.capture\nstage main {\n input -> "
+      "calculate\n calculate -> output\n}\n";
   static const turbo_flow_data_schema_t input_schema = {sizeof(turbo_flow_data_schema_t),
                                                         TURBO_FLOW_DOMAIN_DATA,
                                                         TURBO_FLOW_DATA_ENCODING_OPAQUE,

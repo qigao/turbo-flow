@@ -4,6 +4,17 @@ message OperationMaterializerSelection {
   @Size(min = 1, max = 127) string plugin;
 }
 
+message OperationPolicy {
+  @Min(1) uint32 version;
+  @Min(1) @Max(1048576) uint32 max_inflight;
+  @Min(1) @Max(1073741824) uint32 max_input_bytes;
+  @Min(1) @Max(1073741824) uint32 max_result_bytes;
+  @Min(1) @Max(1073741824) uint32 max_retained_bytes;
+  @Min(1) uint32 max_steps;
+  @Size(min = 1, max = 127) string plugin;
+}
+
 message OperationStageConfig {
   optional OperationMaterializerSelection materializer;
+  optional OperationPolicy policy;
 }

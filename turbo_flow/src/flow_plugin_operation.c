@@ -273,7 +273,7 @@ static int operation_error(turbo_flow_config_error_t *error, size_t index, const
                            int rc) {
   *error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
   error->status = rc;
-  snprintf(error->path, sizeof(error->path), "$.operation_bindings[%zu].%s", index, field);
+  snprintf(error->path, sizeof(error->path), "$.generation.operations[%zu].%s", index, field);
   snprintf(error->message, sizeof(error->message), "operation %s failed", field);
   return rc;
 }
@@ -345,28 +345,25 @@ static int operation_reflected_contract(
   return SALTS_OK;
 }
 
-static int operation_graph_validate(
-    turbo_flow_t *flow,
-    const turbo_flow_resolved_operation_binding_view_t *v,
-    const char **resource,
-    const cmeta_data_desc **input_data,
-    const cmeta_data_desc **output_data) {
+static int operation_graph_validate(turbo_flow_t *flow,
+                                    const flow_plugin_operation_binding_t *binding,
+                                    const char **resource, const cmeta_data_desc **input_data,
+                                    const cmeta_data_desc **output_data) {
   const turbo_flow_operation_descriptor_t *m =
-      turbo_flow_find_operation(flow, v->operation);
+      turbo_flow_find_operation(flow, binding->request.operation_name);
   int found = 0;
   int rc;
 
   if (!m) return SALTS_EINVAL;
   if (m->size != sizeof(*m)) return SALTS_EINVAL;
-  if (m->version != v->version) return SALTS_EPROTO;
+  if (m->version != binding->version) return SALTS_EPROTO;
 
   /*
    * Native function/type/effect semantics must already exist in the canonical
    * reflected registry. ABI3 is an implementation/session/result-owner
    * mechanism only; a legacy string-typed operation is not a fallback.
    */
-  rc = operation_reflected_contract(
-      flow, v->operation, input_data, output_data);
+  rc = operation_reflected_contract(flow, binding->request.operation_name, input_data, output_data);
   if (rc != SALTS_OK) return rc;
 
   if (m->domain != TURBO_FLOW_DOMAIN_DATA ||
@@ -386,8 +383,8 @@ static int operation_graph_validate(
 
   for (size_t j = 0; j < turbo_flow_stage_count(flow); ++j) {
     const turbo_flow_stage_plan_t *s = turbo_flow_stage_at(flow, j);
-    if (!s || !same_name(s->operation_name, v->operation)) continue;
-    if (!same_name(s->resource_name, v->resource)) continue;
+    if (!s || !same_name(s->operation_name, binding->request.operation_name)) continue;
+    if (!same_name(s->resource_name, binding->request.resource_name)) continue;
     if (s->is_source || s->exec.kind != TURBO_FLOW_EXEC_INLINE ||
         s->effects != TURBO_FLOW_STAGE_EFFECT_NONE)
       return SALTS_ENOTSUP;
@@ -401,12 +398,10 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
                                    turbo_flow_plugin_result_domain_t *domain, size_t budget,
                                    vec_t *bindings, turbo_flow_config_error_t *error) {
   turbo_flow_plugin_operation_catalog_v3_t catalog;
-  size_t count = 0, required = 0;
-  int rc = turbo_flow_resolved_config_operation_binding_count(resolved, &count);
-  if (rc != SALTS_OK) return operation_error(error, 0, "config", rc);
-  rc = turbo_flow_stl_error(vec_init_bytes(bindings, sizeof(flow_plugin_operation_binding_t),
-                                           _Alignof(turbo_flow_max_align_t), count));
-  if (rc != SALTS_OK) return operation_error(error, 0, "allocation", rc);
+  size_t count, required = 0;
+  int rc = flow_plugin_operation_configure(flow, bindings, error);
+  if (rc != SALTS_OK) return rc;
+  count = vec_size(bindings);
   if (count || domain) {
     rc = flow_plugin_result_domain_admit(domain, snapshot, count);
     if (rc != SALTS_OK) return operation_error(error, 0, "result_domain", rc);
@@ -415,12 +410,7 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
   turbo_flow_plugin_operation_catalog_v3_init(&catalog);
   rc = turbo_flow_plugin_catalog_snapshot_operation_catalog(snapshot, &catalog);
   if (rc != SALTS_OK) return operation_error(error, 0, "catalog", rc);
-  rc = turbo_flow_stl_error(vec_resize(bindings, count));
-  if (rc != SALTS_OK) return operation_error(error, 0, "allocation", rc);
-  memset(vec_data(bindings), 0, count * sizeof(flow_plugin_operation_binding_t));
   for (size_t i = 0; i < count; ++i) {
-    turbo_flow_resolved_operation_binding_view_t v =
-        TURBO_FLOW_RESOLVED_OPERATION_BINDING_VIEW_INIT;
     turbo_flow_result_memory_requirements_t cost;
     flow_plugin_operation_binding_t *b = vec_at(bindings, i);
     const turbo_flow_plugin_operation_v3_t *op = NULL;
@@ -429,20 +419,14 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     int plugin_found = 0, operation_found = 0;
     const char *resource = NULL;
     size_t capacity;
-    rc = turbo_flow_resolved_config_operation_binding_at(resolved, i, &v);
-    if (rc != SALTS_OK) return operation_error(error, i, "config", rc);
-    for (size_t j = 0; j < i; ++j) {
-      const flow_plugin_operation_binding_t *previous = vec_at_const(bindings, j);
-      if (same_name(previous->request.operation_name, v.operation) &&
-          same_name(previous->request.resource_name, v.resource))
-        return operation_error(error, i, "operation", SALTS_EALREADY);
-    }
+    const turbo_flow_plugin_operation_limits_v3_t *limits = &b->request.limits;
     for (size_t j = 0; j < catalog.count; ++j) {
-      if (!same_name(catalog.entries[j].plugin_id, v.plugin)) continue;
+      if (!same_name(catalog.entries[j].plugin_id, b->plugin)) continue;
       plugin_found = 1;
-      if (!same_name(catalog.entries[j].operation.operation_name, v.operation)) continue;
+      if (!same_name(catalog.entries[j].operation.operation_name, b->request.operation_name))
+        continue;
       operation_found = 1;
-      if (catalog.entries[j].operation.operation_version == v.version)
+      if (catalog.entries[j].operation.operation_version == b->version)
         op = &catalog.entries[j].operation;
     }
     if (!op)
@@ -451,42 +435,32 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
                              : !operation_found ? "operation"
                                                 : "version",
                              SALTS_EINVAL);
-    rc = operation_graph_validate(
-        flow, &v, &resource, &canonical_input, &canonical_output);
+    rc = operation_graph_validate(flow, b, &resource, &canonical_input, &canonical_output);
     if (rc != SALTS_OK) return operation_error(error, i, "graph", rc);
-    if (!cmeta_data_desc_equal(op->input.data, canonical_input) ||
-        !same_name(canonical_input->stable_id, v.input_schema) ||
-        op->input.schema_version != v.input_schema_version)
+    if (!cmeta_data_desc_equal(op->input.data, canonical_input))
       return operation_error(error, i, "input_schema", SALTS_EPROTO);
-    if (!cmeta_data_desc_equal(op->output.data, canonical_output) ||
-        !same_name(canonical_output->stable_id, v.output_schema) ||
-        op->output.schema_version != v.output_schema_version)
+    if (!cmeta_data_desc_equal(op->output.data, canonical_output))
       return operation_error(error, i, "output_schema", SALTS_EPROTO);
-    if (v.execution != TURBO_FLOW_CONFIG_OPERATION_INLINE ||
-        v.threading != TURBO_FLOW_CONFIG_OPERATION_THREAD_SAFE ||
-        v.cancellation != TURBO_FLOW_CONFIG_OPERATION_CANCEL_NONE || v.deadline_ms ||
-        v.permission_count)
-      return operation_error(error, i, "profile", SALTS_ENOTSUP);
-    if (v.resource) {
+    if (b->request.resource_name) {
       turbo_flow_resolved_channel_view_t channel = TURBO_FLOW_RESOLVED_CHANNEL_VIEW_INIT;
-      rc = turbo_flow_resolved_config_channel(resolved, v.resource, &channel);
+      rc = turbo_flow_resolved_config_channel(resolved, b->request.resource_name, &channel);
       if (rc != SALTS_OK) return operation_error(error, i, "resource", SALTS_EINVAL);
     }
-    if (!v.max_inflight || !v.max_input_bytes || !v.max_result_bytes || !v.max_retained_bytes ||
-        !v.max_steps)
+    if (!limits->max_inflight || !limits->max_input_bytes || !limits->max_result_bytes ||
+        !limits->max_retained_bytes || !limits->max_steps)
       return operation_error(error, i, "limits", SALTS_EINVAL);
-    capacity = v.max_retained_bytes / v.max_result_bytes;
-    if (v.max_inflight > op->limits.max_inflight ||
-        v.max_input_bytes > op->limits.max_input_bytes ||
-        v.max_result_bytes > op->limits.max_result_bytes ||
-        v.max_retained_bytes > op->limits.max_retained_bytes ||
-        v.max_steps > op->limits.max_steps || capacity < v.max_inflight ||
+    capacity = limits->max_retained_bytes / limits->max_result_bytes;
+    if (limits->max_inflight > op->limits.max_inflight ||
+        limits->max_input_bytes > op->limits.max_input_bytes ||
+        limits->max_result_bytes > op->limits.max_result_bytes ||
+        limits->max_retained_bytes > op->limits.max_retained_bytes ||
+        limits->max_steps > op->limits.max_steps || capacity < limits->max_inflight ||
         capacity > FLOW_PLUGIN_OPERATION_MAX_INFLIGHT ||
-        canonical_input->storage_type->size > v.max_input_bytes ||
-        canonical_output->storage_type->size > v.max_result_bytes)
+        canonical_input->storage_type->size > limits->max_input_bytes ||
+        canonical_output->storage_type->size > limits->max_result_bytes)
       return operation_error(error, i, "limits", SALTS_ENOSPC);
     turbo_flow_result_memory_requirements_init(&cost);
-    rc = turbo_flow_result_memory_requirements(capacity, v.max_result_bytes, &cost);
+    rc = turbo_flow_result_memory_requirements(capacity, limits->max_result_bytes, &cost);
     /* Per-generation admission conservatively charges the bridge as well as the binding;
        the caller's separately bounded domain has already reserved the bridge storage. */
     if (rc != SALTS_OK || checked_add(&required, op->max_session_bytes) != SALTS_OK ||
@@ -498,15 +472,9 @@ int flow_plugin_operations_prepare(turbo_flow_plugin_catalog_snapshot_t *snapsho
     b->operation = *op;
     b->input_data = canonical_input;
     b->output_data = canonical_output;
-    turbo_flow_plugin_operation_request_v3_init(&b->request);
     b->request.resolved = resolved;
     b->request.operation_name = op->operation_name;
     b->request.resource_name = resource;
-    b->request.limits.max_inflight = v.max_inflight;
-    b->request.limits.max_input_bytes = v.max_input_bytes;
-    b->request.limits.max_result_bytes = v.max_result_bytes;
-    b->request.limits.max_retained_bytes = v.max_retained_bytes;
-    b->request.limits.max_steps = v.max_steps;
     turbo_flow_plugin_operation_error_v3_init(&b->error);
     atomic_init(&b->admission, 0);
     cmeta_mutex_init(&b->error_mutex);

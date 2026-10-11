@@ -88,7 +88,7 @@ static int runtime_register_reflected_operation(
   return turbo_flow_register_reflected_operation(flow, &registration);
 }
 
-static const char operation_yaml[] =
+static const char legacy_operation_yaml[] =
     "version: 1\noperation_bindings:\n"
     "  - operation: fixture.double\n    plugin: fixture.operation\n    version: 1\n"
     "    input_schema: cmeta.int.data\n    input_schema_version: 1\n"
@@ -96,9 +96,14 @@ static const char operation_yaml[] =
     "    execution: inline\n    threading: thread_safe\n    cancellation: none\n"
     "    permissions: []\n    max_inflight: 1\n    max_input_bytes: 8\n"
     "    max_result_bytes: 8\n    max_retained_bytes: 32\n    max_steps: 2\n    deadline_ms: 0\n";
-static const char operation_dsl[] = "source input\nstage calculate operation fixture.double\n"
-                                    "stage output operation fixture.capture\nstage main {\n input "
-                                    "-> calculate\n calculate -> output\n}\n";
+static const char operation_yaml[] = "version: 1\n";
+#define RUNTIME_POLICY                                                                             \
+  "  policy { plugin \"fixture.operation\", version 1, max_inflight 1, max_input_bytes 8, "        \
+  "max_result_bytes 8, max_retained_bytes 32, max_steps 2 }\n"
+static const char operation_dsl[] =
+    "source input\nstage calculate operation fixture.double {\n" RUNTIME_POLICY "}\n"
+    "stage output operation fixture.capture\nstage main {\n input "
+    "-> calculate\n calculate -> output\n}\n";
 static const turbo_flow_data_schema_t input_schema = {sizeof(turbo_flow_data_schema_t),
                                                       TURBO_FLOW_DOMAIN_DATA,
                                                       TURBO_FLOW_DATA_ENCODING_OPAQUE,
@@ -154,13 +159,13 @@ static void runtime_lifecycle(void *ctx, turbo_flow_plugin_lifecycle_event_t eve
     atomic_fetch_add(&t->lifecycle_wrong_thread, 1);
   if (event == TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD) atomic_fetch_add(&t->unloads, 1);
 }
-enum { RUNTIME_YAML_BYTES = 4096, RUNTIME_BARRIER_TIMEOUT_MS = 2000 };
-static void runtime_yaml(char *out, const char *field, const char *replacement) {
-  const char *at = strstr(operation_yaml, field);
+enum { RUNTIME_TEXT_BYTES = 4096, RUNTIME_BARRIER_TIMEOUT_MS = 2000 };
+static void runtime_dsl(char *out, const char *field, const char *replacement) {
+  const char *at = strstr(operation_dsl, field);
   check_not_null(at);
-  size_t prefix = (size_t)(at - operation_yaml);
-  check_less(prefix + strlen(replacement) + strlen(at + strlen(field)), (size_t)RUNTIME_YAML_BYTES);
-  memcpy(out, operation_yaml, prefix);
+  size_t prefix = (size_t)(at - operation_dsl);
+  check_less(prefix + strlen(replacement) + strlen(at + strlen(field)), (size_t)RUNTIME_TEXT_BYTES);
+  memcpy(out, operation_dsl, prefix);
   strcpy(out + prefix, replacement);
   strcpy(out + prefix + strlen(replacement), at + strlen(field));
 }
@@ -360,16 +365,13 @@ typedef struct runtime_worker_s {
 } runtime_worker_t;
 static void runtime_reject_error_header(uint32_t phase, int mode, int fault, int callback_status) {
   runtime_test_t t;
-  char yaml[RUNTIME_YAML_BYTES];
   turbo_flow_plugin_operation_error_v3_t diagnostic;
   turbo_flow_plugin_result_domain_snapshot_v3_t state;
   turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
   turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
   int alias = mode == OP_FIXTURE_EXECUTE_ALIAS;
-  runtime_yaml(yaml, "input_schema: cmeta.int.data",
-               alias ? "input_schema: operation.Record.data" : "input_schema: cmeta.int.data");
-  check_equal(runtime_open(&t, alias ? FLOW_OPERATION_EXECUTE_ALIAS : FLOW_OPERATION_OK, yaml,
-                           operation_dsl),
+  check_equal(runtime_open(&t, alias ? FLOW_OPERATION_EXECUTE_ALIAS : FLOW_OPERATION_OK,
+                           operation_yaml, operation_dsl),
               SALTS_OK);
   t.observer->mode = mode;
   t.observer->error_phase = phase;
@@ -485,9 +487,9 @@ static void runtime_reject_error_header(uint32_t phase, int mode, int fault, int
     }
   }
   if (phase != TURBO_FLOW_PLUGIN_OPERATION_PHASE_EXECUTE) {
-    const char *paths[] = {"", "$.operation_bindings[0].preflight",
-                           "$.operation_bindings[0].result_context",
-                           "$.operation_bindings[0].session"};
+    const char *paths[] = {"", "$.generation.operations[0].preflight",
+                           "$.generation.operations[0].result_context",
+                           "$.generation.operations[0].session"};
     check_equal(create_error.status, fault == OP_ERROR_VALID ? callback_status : SALTS_EINVAL);
     check_equal(create_error.path, paths[phase]);
   }
@@ -547,10 +549,10 @@ spec("ABI3 generation operation runtime") {
   it("rejects duplicate binding YAML before producing a resolved document or calling factories") {
     runtime_test_t t;
     turbo_flow_resolved_config_t *duplicate = NULL;
-    char yaml[RUNTIME_YAML_BYTES];
+    char yaml[RUNTIME_TEXT_BYTES];
     check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, operation_dsl), SALTS_OK);
-    check_less(snprintf(yaml, sizeof(yaml), "%s%s", operation_yaml,
-                        strstr(operation_yaml, "  - operation:")),
+    check_less(snprintf(yaml, sizeof(yaml), "%s%s", legacy_operation_yaml,
+                        strstr(legacy_operation_yaml, "  - operation:")),
                (int)sizeof(yaml));
     check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &duplicate, &t.error),
                 SALTS_EALREADY);
@@ -562,9 +564,10 @@ spec("ABI3 generation operation runtime") {
   }
   it("preserves an operation compile failure through cleanup and rejects reuse of its consumed "
      "domain") {
-    static const char invalid_dsl[] = "source input\nstage calculate operation fixture.double\n"
-                                      "stage missing operation fixture.missing\nstage main {\n "
-                                      "input -> calculate -> missing\n}\n";
+    static const char invalid_dsl[] =
+        "source input\nstage calculate operation fixture.double {\n" RUNTIME_POLICY "}\n"
+        "stage missing operation fixture.missing\nstage main {\n "
+        "input -> calculate -> missing\n}\n";
     runtime_test_t t;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
     turbo_flow_config_error_t cleanup_error = TURBO_FLOW_CONFIG_ERROR_INIT;
@@ -598,7 +601,7 @@ spec("ABI3 generation operation runtime") {
     check_equal(turbo_flow_parse_string(t.flow, invalid_dsl, sizeof(invalid_dsl) - 1u), SALTS_OK);
     turbo_flow_t *original = t.flow;
     check_equal(runtime_create(&t), SALTS_EINVAL);
-    check_equal(t.error.path, "$.operation_bindings[0].result_domain");
+    check_equal(t.error.path, "$.generation.operations[0].result_domain");
     check(t.flow == original);
     check_null(t.generation);
     check_null(t.cleanup);
@@ -688,19 +691,16 @@ spec("ABI3 generation operation runtime") {
   it("stops every owner before releasing any context and preserves second-factory failure "
      "ownership") {
     static const char dsl[] =
-        "source input\nsource idle\nstage calculate operation fixture.double\n"
-        "stage other operation fixture.other\nstage output operation fixture.capture\n"
+        "source input\nsource idle\nstage calculate operation fixture.double {\n" RUNTIME_POLICY
+        "}\n"
+        "stage other operation fixture.other {\n" RUNTIME_POLICY
+        "}\nstage output operation fixture.capture\n"
         "stage main {\n input -> calculate -> output\n idle -> other\n}\n";
     for (int fail_second = 0; fail_second < 3; ++fail_second) {
       runtime_test_t t;
-      char yaml[RUNTIME_YAML_BYTES], second[RUNTIME_YAML_BYTES];
       turbo_flow_plugin_error_t pe = TURBO_FLOW_PLUGIN_ERROR_INIT;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
-      runtime_yaml(second, "fixture.double", "fixture.other");
-      check_less(
-          snprintf(yaml, sizeof(yaml), "%s%s", operation_yaml, strstr(second, "  - operation:")),
-          (int)sizeof(yaml));
-      check_equal(runtime_open(&t, FLOW_OPERATION_TWO_NAMES, yaml, dsl), SALTS_OK);
+      check_equal(runtime_open(&t, FLOW_OPERATION_TWO_NAMES, operation_yaml, dsl), SALTS_OK);
       turbo_flow_operation_descriptor_t metadata =
           *turbo_flow_find_operation(t.flow, "fixture.double");
       metadata.name = "fixture.other";
@@ -953,37 +953,41 @@ spec("ABI3 generation operation runtime") {
     static const struct {
       const char *before, *after;
       int status;
-    } cases[] = {{"fixture.double", "fixture.missing", SALTS_EINVAL},
-                 {"fixture.operation", "fixture.missing", SALTS_EINVAL},
-                 {"    version: 1", "    version: 2", SALTS_EINVAL},
-                 {"input_schema: cmeta.int.data", "input_schema: missing", SALTS_EPROTO},
-                 {"output_schema_version: 1", "output_schema_version: 2", SALTS_EPROTO},
-                 {"thread_safe", "owner", SALTS_ENOTSUP},
-                 {"execution: inline", "execution: thread", SALTS_ENOTSUP},
-                 {"execution: inline", "execution: coro", SALTS_ENOTSUP},
-                 {"cancellation: none", "cancellation: cooperative", SALTS_ENOTSUP},
-                 {"deadline_ms: 0", "deadline_ms: 1", SALTS_ENOTSUP},
-                 {"permissions: []", "permissions: [network]", SALTS_ENOTSUP},
-                 {"max_inflight: 1", "max_inflight: 9", SALTS_ENOSPC},
-                 {"max_input_bytes: 8", "max_input_bytes: 65", SALTS_ENOSPC},
-                 {"max_result_bytes: 8\n    max_retained_bytes: 32",
-                  "max_result_bytes: 65\n    max_retained_bytes: 128", SALTS_ENOSPC},
-                 {"max_retained_bytes: 32", "max_retained_bytes: 513", SALTS_ENOSPC},
-                 {"max_steps: 2", "max_steps: 9", SALTS_ENOSPC},
-                 {"max_inflight: 1", "max_inflight: 5", SALTS_ENOSPC}};
+    } cases[] = {
+        {"fixture.double", "fixture.missing", SALTS_EINVAL},
+        {"fixture.operation", "fixture.missing", SALTS_EINVAL},
+        {"version 1", "version 2", SALTS_EINVAL},
+        {"version 1", "version 0", SALTS_EPROTO},
+        {"plugin \"fixture.operation\"", "plugin \"\"", SALTS_EPROTO},
+        {"max_inflight 1", "max_inflight 0", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 4294967296", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 2, input_schema \"private\"", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 2, threading \"owner\"", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 2, cancellation \"cooperative\"", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 2, deadline_ms 1", SALTS_EPROTO},
+        {"max_steps 2", "max_steps 2, permissions [\"network\"]", SALTS_EPROTO},
+        {"operation fixture.double {", "operation fixture.double exec thread {", SALTS_ENOTSUP},
+        {"operation fixture.double {", "operation fixture.double exec coro {", SALTS_ENOTSUP},
+        {"max_inflight 1", "max_inflight 9", SALTS_ENOSPC},
+        {"max_input_bytes 8", "max_input_bytes 65", SALTS_ENOSPC},
+        {"max_result_bytes 8, max_retained_bytes 32", "max_result_bytes 65, max_retained_bytes 128",
+         SALTS_ENOSPC},
+        {"max_retained_bytes 32", "max_retained_bytes 513", SALTS_ENOSPC},
+        {"max_steps 2", "max_steps 9", SALTS_ENOSPC},
+        {"max_inflight 1", "max_inflight 5", SALTS_ENOSPC}};
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
       runtime_test_t t;
-      char yaml[RUNTIME_YAML_BYTES];
+      char yaml[RUNTIME_TEXT_BYTES];
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
-      runtime_yaml(yaml, cases[i].before, cases[i].after);
-      check_equal(runtime_open(&t, FLOW_OPERATION_OK, yaml, operation_dsl), SALTS_OK);
+      runtime_dsl(yaml, cases[i].before, cases[i].after);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, yaml), SALTS_OK);
       turbo_flow_t *original = t.flow;
       int rc = runtime_create(&t);
       info("case %zu: %d %s", i, rc, t.error.path);
       check_equal(rc, cases[i].status);
       check(t.flow == original);
-      if (i == 1) check_equal(t.error.path, "$.operation_bindings[0].plugin");
-      if (i == 2) check_equal(t.error.path, "$.operation_bindings[0].version");
+      if (i == 1) check_equal(t.error.path, "$.generation.operations[0].plugin");
+      if (i == 2) check_equal(t.error.path, "$.generation.operations[0].version");
       check_null(t.generation);
       check_null(t.cleanup);
       check_equal(atomic_load(&t.observer->context_creates), 0u);
@@ -994,6 +998,182 @@ spec("ABI3 generation operation runtime") {
       check_equal(runtime_close(&t), SALTS_OK);
     }
   }
+  it("rejects legacy operation bindings even when a typed policy is present") {
+    runtime_test_t t;
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, legacy_operation_yaml, operation_dsl),
+                SALTS_OK);
+    turbo_flow_t *original = t.flow;
+    check_equal(runtime_create(&t), SALTS_ENOTSUP);
+    check_equal(t.error.path, "$.operation_bindings");
+    check(t.flow == original);
+    check_null(t.generation);
+    check_null(t.cleanup);
+    check_equal(atomic_load(&t.observer->preflights), 0u);
+    check_equal(atomic_load(&t.observer->context_creates), 0u);
+    check_equal(atomic_load(&t.observer->session_creates), 0u);
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
+  it("rejects missing or mistyped policy fields and numeric bounds through MessagePlan") {
+    static const struct {
+      const char *before, *after;
+    } cases[] = {{"plugin \"fixture.operation\", ", ""},
+                 {"version 1, ", ""},
+                 {"max_inflight 1, ", ""},
+                 {"max_input_bytes 8, ", ""},
+                 {"max_result_bytes 8, ", ""},
+                 {"max_retained_bytes 32, ", ""},
+                 {", max_steps 2", ""},
+                 {"plugin \"fixture.operation\"", "plugin 7"},
+                 {"max_inflight 1", "max_inflight true"},
+                 {"max_steps 2", "max_steps \"2\""},
+                 {"version 1", "version 4294967296"},
+                 {"max_inflight 1", "max_inflight 1048577"},
+                 {"max_input_bytes 8", "max_input_bytes 0"},
+                 {"max_result_bytes 8", "max_result_bytes 0"},
+                 {"max_retained_bytes 32", "max_retained_bytes 0"},
+                 {"max_steps 2", "max_steps 0"},
+                 {"max_input_bytes 8", "max_input_bytes 1073741825"},
+                 {"max_result_bytes 8", "max_result_bytes 1073741825"},
+                 {"max_retained_bytes 32", "max_retained_bytes 1073741825"}};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      runtime_test_t t;
+      char dsl[RUNTIME_TEXT_BYTES];
+      runtime_dsl(dsl, cases[i].before, cases[i].after);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_create(&t), SALTS_EPROTO);
+      check_contains(t.error.path, "$.stages.calculate");
+      check_not_null(t.flow);
+      check_null(t.generation);
+      check_null(t.cleanup);
+      check_equal(atomic_load(&t.observer->preflights), 0u);
+      check_equal(atomic_load(&t.observer->session_creates), 0u);
+      check_equal(runtime_close(&t), SALTS_OK);
+    }
+  }
+  it("requires identical policies for stages sharing an operation and resource") {
+    const char *const changes[] = {NULL,
+                                   "fixture.operation",
+                                   "version 1",
+                                   "max_inflight 1",
+                                   "max_input_bytes 8",
+                                   "max_result_bytes 8",
+                                   "max_retained_bytes 32",
+                                   "max_steps 2",
+                                   RUNTIME_POLICY};
+    const char *const replacements[] = {NULL,
+                                        "fixture.other",
+                                        "version 2",
+                                        "max_inflight 2",
+                                        "max_input_bytes 16",
+                                        "max_result_bytes 16",
+                                        "max_retained_bytes 64",
+                                        "max_steps 3",
+                                        ""};
+    for (size_t i = 0; i < sizeof(changes) / sizeof(changes[0]); ++i) {
+      for (int reversed = 0; reversed < 2; ++reversed) {
+        runtime_test_t t;
+        char changed[RUNTIME_TEXT_BYTES], dsl[2 * RUNTIME_TEXT_BYTES];
+        const char *first = operation_dsl;
+        if (i) {
+          runtime_dsl(changed, changes[i], replacements[i]);
+          first = changed;
+        }
+        /* Reuse complete stage declarations without copying their routing block. */
+        const char *first_end = strstr(first, "stage output");
+        const char *second = operation_dsl + strlen("source input\n");
+        const char *second_end = strstr(second, "stage output");
+        if (reversed) {
+          const char *swap = first;
+          first = operation_dsl;
+          first_end = strstr(first, "stage output");
+          second = swap + strlen("source input\n");
+          second_end = strstr(second, "stage output");
+        }
+        int length = snprintf(dsl, sizeof(dsl),
+                              "%.*s%.*sstage main {\n input -> calculate -> secondary\n}\n",
+                              (int)(first_end - first), first, (int)(second_end - second), second);
+        check_greater(length, 0);
+        check_less(length, (int)sizeof(dsl));
+        char *second_name = strstr(dsl + (first_end - first), "calculate");
+        check_not_null(second_name);
+        memcpy(second_name, "secondary", strlen("secondary"));
+        check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+        int rc = runtime_create(&t);
+        check_equal(rc, i ? SALTS_EPROTO : SALTS_OK);
+        check_equal(atomic_load(&t.observer->session_creates), i ? 0u : 1u);
+        if (i) {
+          check_equal(t.error.path, "$.stages.secondary.policy");
+          check_not_null(t.flow);
+          check_null(t.generation);
+          check_null(t.cleanup);
+          check_equal(atomic_load(&t.observer->preflights), 0u);
+        }
+        check_equal(runtime_close(&t), SALTS_OK);
+      }
+    }
+  }
+  it("keeps separate sessions for distinct explicit resources of one operation") {
+    static const char resources[] =
+        "version: 1\nchannels:\n  first: {kind: fixture.resource, config: {}}\n"
+        "  second: {kind: fixture.resource, config: {}}\n";
+    static const char dsl[] =
+        "source input\nstage first operation fixture.double resource first {\n" RUNTIME_POLICY "}\n"
+        "stage second operation fixture.double resource second {\n" RUNTIME_POLICY "}\n"
+        "stage main {\n input -> first -> second\n}\n";
+    runtime_test_t t;
+    check_equal(runtime_open(&t, FLOW_OPERATION_OK, resources, dsl), SALTS_OK);
+    check_equal(runtime_create(&t), SALTS_OK);
+    check_equal(atomic_load(&t.observer->context_creates), 2u);
+    check_equal(atomic_load(&t.observer->session_creates), 2u);
+    check_equal(runtime_close(&t), SALTS_OK);
+  }
+  it("bounds unique operation selections before domain admission or provider callbacks") {
+    for (size_t count = FLOW_PLUGIN_OPERATION_MAX_BINDINGS;
+         count <= FLOW_PLUGIN_OPERATION_MAX_BINDINGS + 1u; ++count) {
+      runtime_test_t t;
+      tstr source = tstr_dup("source input\n");
+      check_not_null(source);
+      for (size_t i = 0; i < count; ++i) {
+        char stage[1024];
+        int length = snprintf(
+            stage, sizeof(stage),
+            "stage selected%zu operation fixture.double resource resource%zu {\n" RUNTIME_POLICY
+            "}\n",
+            i, i);
+        check_greater(length, 0);
+        check_less(length, (int)sizeof(stage));
+        tstr next = tstr_cat(source, stage);
+        check_not_null(next);
+        source = next;
+      }
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, source), SALTS_OK);
+      tstr_free(source);
+      check_equal(runtime_create(&t), SALTS_ENOSPC);
+      check_equal(t.error.path, count == FLOW_PLUGIN_OPERATION_MAX_BINDINGS
+                                    ? "$.generation.operations[0].result_domain"
+                                    : "$.stages.selected1024.policy");
+      check_not_null(t.flow);
+      check_null(t.generation);
+      check_null(t.cleanup);
+      check_equal(atomic_load(&t.observer->preflights), 0u);
+      check_equal(atomic_load(&t.observer->session_creates), 0u);
+      check_equal(runtime_close(&t), SALTS_OK);
+    }
+  }
+  it("bounds the policy plugin identity independently of catalog admission") {
+    for (size_t n = TURBO_FLOW_PLUGIN_ID_MAX; n <= TURBO_FLOW_PLUGIN_ID_MAX + 1u; ++n) {
+      runtime_test_t t;
+      char name[TURBO_FLOW_PLUGIN_ID_MAX + 2u], dsl[RUNTIME_TEXT_BYTES];
+      memset(name, 'a', n);
+      name[n] = '\0';
+      runtime_dsl(dsl, "fixture.operation", name);
+      check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
+      check_equal(runtime_create(&t), n == TURBO_FLOW_PLUGIN_ID_MAX ? SALTS_EINVAL : SALTS_EPROTO);
+      check_equal(atomic_load(&t.observer->preflights), 0u);
+      check_equal(atomic_load(&t.observer->session_creates), 0u);
+      check_equal(runtime_close(&t), SALTS_OK);
+    }
+  }
   it("uses the Graph public cost query for exact budget admission") {
     for (int doubled = 0; doubled < 2; ++doubled) {
       for (int less = 0; less < 2; ++less) {
@@ -1001,10 +1181,10 @@ spec("ABI3 generation operation runtime") {
         turbo_flow_plugin_operation_catalog_v3_t catalog;
         turbo_flow_result_memory_requirements_t cost;
         turbo_flow_plugin_result_domain_snapshot_v3_t state;
-        char yaml[RUNTIME_YAML_BYTES];
-        runtime_yaml(yaml, "max_retained_bytes: 32",
-                     doubled ? "max_retained_bytes: 64" : "max_retained_bytes: 32");
-        check_equal(runtime_open(&t, FLOW_OPERATION_OK, yaml, operation_dsl), SALTS_OK);
+        char yaml[RUNTIME_TEXT_BYTES];
+        runtime_dsl(yaml, "max_retained_bytes 32",
+                    doubled ? "max_retained_bytes 64" : "max_retained_bytes 32");
+        check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, yaml), SALTS_OK);
         turbo_flow_plugin_operation_catalog_v3_init(&catalog);
         check_equal(turbo_flow_plugin_catalog_snapshot_operation_catalog(t.snapshot, &catalog),
                     SALTS_OK);
@@ -1040,8 +1220,9 @@ spec("ABI3 generation operation runtime") {
   }
   it("never implicitly replaces a result at a repeated operation stage") {
     static const char dsl[] =
-        "source input\nstage first operation fixture.double\n"
-        "stage second operation fixture.double\nstage main {\n input -> first -> second\n}\n";
+        "source input\nstage first operation fixture.double {\n" RUNTIME_POLICY "}\n"
+        "stage second operation fixture.double {\n" RUNTIME_POLICY
+        "}\nstage main {\n input -> first -> second\n}\n";
     runtime_test_t t;
     turbo_flow_plugin_result_domain_snapshot_v3_t state;
     check_equal(runtime_open(&t, FLOW_OPERATION_OK, operation_yaml, dsl), SALTS_OK);
@@ -1134,17 +1315,15 @@ spec("ABI3 generation operation runtime") {
     uint32_t phases[sizeof(modes) / sizeof(modes[0])] = {0};
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
       runtime_test_t t;
-      char yaml[RUNTIME_YAML_BYTES];
+      char yaml[RUNTIME_TEXT_BYTES];
       turbo_flow_plugin_operation_error_v3_t error;
       turbo_flow_plugin_result_domain_snapshot_v3_t state;
       int alias = i == 2 || i == 3;
       const char *path = i == 2   ? FLOW_OPERATION_EXECUTE_ALIAS
                          : i == 3 ? FLOW_OPERATION_EXECUTE_FAIL_ALIAS
                                   : FLOW_OPERATION_OK;
-      runtime_yaml(yaml, alias ? "input_schema: cmeta.int.data" : "max_steps: 2",
-                   alias ? "input_schema: operation.Record.data"
-                         : (i == 4 || i == 6 ? "max_steps: 1" : "max_steps: 2"));
-      check_equal(runtime_open(&t, path, yaml, operation_dsl), SALTS_OK);
+      runtime_dsl(yaml, "max_steps 2", i == 4 || i == 6 ? "max_steps 1" : "max_steps 2");
+      check_equal(runtime_open(&t, path, operation_yaml, yaml), SALTS_OK);
       t.observer->mode = modes[i];
       {
         const int create_rc = runtime_create(&t);

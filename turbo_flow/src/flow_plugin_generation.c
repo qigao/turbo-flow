@@ -329,7 +329,7 @@ int turbo_flow_plugin_generation_create(
     turbo_flow_plugin_generation_t **cleanup_out,
     turbo_flow_config_error_t *error) {
   turbo_flow_plugin_generation_t *generation;
-  size_t legacy_materializers = 0u;
+  size_t legacy_bindings = 0u;
   turbo_flow_config_error_t cleanup_error =
       TURBO_FLOW_CONFIG_ERROR_INIT;
   int rc;
@@ -352,11 +352,17 @@ int turbo_flow_plugin_generation_create(
     return flow_plugin_generation_error(
         error, SALTS_EINVAL, "$.graph", "Graph must be parsed");
 
-  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &legacy_materializers);
-  if (rc != SALTS_OK || legacy_materializers != 0u)
+  rc = turbo_flow_resolved_config_materializer_binding_count(resolved, &legacy_bindings);
+  if (rc != SALTS_OK || legacy_bindings != 0u)
     return flow_plugin_generation_error(
         error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.materializer_bindings",
         "move materializer selection into the typed operation stage config");
+
+  rc = turbo_flow_resolved_config_operation_binding_count(resolved, &legacy_bindings);
+  if (rc != SALTS_OK || legacy_bindings != 0u)
+    return flow_plugin_generation_error(
+        error, rc != SALTS_OK ? rc : SALTS_ENOTSUP, "$.operation_bindings",
+        "move operation policy into the typed operation stage config");
 
   generation =
       (turbo_flow_plugin_generation_t *)calloc(1u, sizeof(*generation));
@@ -380,9 +386,6 @@ int turbo_flow_plugin_generation_create(
   rc = flow_plugin_operations_prepare(
       snapshot, resolved, *flow_io, domain,
       config->operation_memory_budget_bytes, &generation->bindings, error);
-  if (rc != SALTS_OK) goto preflight_failed;
-
-  rc = flow_plugin_materializer_configure(*flow_io, &generation->bindings, error);
   if (rc != SALTS_OK) goto preflight_failed;
 
   rc = flow_plugin_generation_prepare_materializers(snapshot, &generation->bindings,

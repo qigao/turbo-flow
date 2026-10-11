@@ -143,6 +143,7 @@ typedef struct turbo_flow_plugin_operation_request_v3_s {
   size_t size;
   uint32_t abi_major;
   uint32_t abi_minor;
+  /** Migration-only deployment resource view; operation policy comes from the typed stage. */
   const turbo_flow_resolved_config_t *resolved;
   const char *operation_name;
   const char *resource_name;
