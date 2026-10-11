@@ -1,7 +1,7 @@
 # Typed-operation ABI 3.x 精确契约
 
 状态：首个同步 operation profile 最初在 shared ABI 3.0 下实施；事实基线为 `91fdf62ad9845e287a3bc773081a3f6a088b6ea8`。当前 shared PluginHost ABI 为 3.4，operation 使用显式资源 Interface，generation 配置继续持有 Component runtime；materializer 注册面自 3.1 引入；operation v3 profile 的执行、结果和生命周期语义不变。
-共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。当前 ABI 拒绝旧 3.0/3.1/3.2 DLL、旧 major、短布局和未来未支持 minor。
+共享 ABI 继续执行精确 size/major/minor 校验；插件与消费者必须同步重编译。当前 ABI 拒绝旧 3.0/3.1/3.2/3.3 DLL、旧 major、短布局和未来未支持 minor。
 本文件定义 #93 首个完整同步 profile；#93 的 owner/thread/coro/cooperative 和
 #73 的真实 RulesForge/TurboScript、旧入口删除、Core 链接解耦继续开放。
 

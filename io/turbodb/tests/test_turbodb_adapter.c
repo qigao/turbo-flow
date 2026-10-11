@@ -1,12 +1,13 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "turbodb_test_runtime.h"
 #include <tinytest.h>
 #include <turbo_flow_turbodb.h>
 
-#include <cbind/status.h>
 #include <cflow/publishers.h>
 #include <cmeta/data.h>
 #include <cmeta/struct.h>
 #include <cmeta_error.h>
+#include <data_bind.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,7 +20,9 @@
 
 Struct(test_db_row, (int, id), (long, score));
 Struct(test_db_nested_inner, (int, value));
-Struct(test_db_nested_row, (test_db_nested_inner, inner));
+typedef struct test_db_nested_row {
+  test_db_nested_inner inner;
+} test_db_nested_row;
 
 static const cmeta_type_identity TEST_DB_ROW_IDENTITY =
     CMETA_TYPE_ID_ATOM_INIT("turboflow.test.DbRow");
@@ -58,6 +61,12 @@ static const cmeta_type_desc TEST_DB_NESTED_INNER_TYPE = {.name = "test_db_neste
 static const cmeta_data_field_desc TEST_DB_NESTED_INNER_FIELDS[] = {
     {"turboflow.test.DbNestedInner.value", "value", offsetof(test_db_nested_inner, value),
      &cmeta_data_int}};
+/* The nested field must name the same custom storage type as its DataDesc;
+ * unregistered Struct fields otherwise have a NULL type witness. */
+CMETA_STRUCT_METADATA_DEFINE(test_db_nested_row,
+                             {"inner", "test_db_nested_inner", offsetof(test_db_nested_row, inner),
+                              sizeof(test_db_nested_inner), _Alignof(test_db_nested_inner),
+                              &TEST_DB_NESTED_INNER_TYPE, NULL});
 static const cmeta_data_struct_shape TEST_DB_NESTED_INNER_SHAPE = {
     .layout = StructMeta(test_db_nested_inner),
     .fields = TEST_DB_NESTED_INNER_FIELDS,
@@ -302,6 +311,8 @@ static void wait_source_signal(wait_source_t *source) {
   waker.wake(waker.user);
 }
 
+static orm_runtime_t *test_runtime;
+
 static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint64_t max_rows,
                                                         uint64_t max_bytes) {
   orm_config_t config;
@@ -316,7 +327,9 @@ static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint
   config.option_count = 1u;
   if (max_rows != 0u) config.max_result_rows = max_rows;
   if (max_bytes != 0u) config.max_result_bytes = max_bytes;
-  check_equal(orm_connect(&config, &connection, error), ORM_STATUS_OK);
+  if (!test_runtime)
+    check_equal(turbodb_test_sqlite_runtime_open(&test_runtime, error), ORM_STATUS_OK);
+  check_equal(orm_runtime_connect(test_runtime, &config, &connection, error), ORM_STATUS_OK);
   return connection;
 }
 
@@ -518,6 +531,11 @@ static bool tidesdb_busy_fixture_destroy(tidesdb_busy_fixture_t *fixture) {
 }
 
 spec("TurboDb ORM Publisher adapter") {
+  after_each() {
+    orm_error_t error;
+    orm_error_init(&error);
+    check_equal(turbodb_test_runtime_close(&test_runtime, &error), ORM_STATUS_OK);
+  }
   it("provides versioned source defaults") {
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
 
@@ -1045,19 +1063,13 @@ spec("TurboDb ORM Publisher adapter") {
     orm_disconnect(connection);
   }
 
-  it("fails a Graph run before projection when CBind scratch capacity is insufficient") {
+  it("rejects insufficient DataBind scratch before creating a Publisher") {
     orm_error_t error;
     orm_connection_t *connection;
     orm_query_t *query = NULL;
     orm_flow_config_t flow_config;
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
     cflow_publisher messages = {0};
-    count_graph_probe_t graph_probe = {0};
-    turbo_flow_t *flow;
-    turbo_flow_run_t *run = NULL;
-    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
-    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
-    cflow_scheduler scheduler = {0};
 
     orm_error_init(&error);
     connection = open_test_database(&error);
@@ -1068,34 +1080,18 @@ spec("TurboDb ORM Publisher adapter") {
     flow_config.scratch_bytes = 0u;
     config.projection_schema = &TEST_DB_ROW_SCHEMA;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
-                SALTS_OK);
-    flow = open_graph(count_graph_probe_stage, &graph_probe);
-    check_not_null(flow);
-    check_true(cflow_scheduler_inline_init(&scheduler));
-    run_config.scheduler = &scheduler;
-    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
-
-    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
-    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
-    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
-    check_equal(result.status, SALTS_EIO);
-    check_contains(result.error.message, "row binding failed");
-    check_equal(result.values, 0u);
-    check_equal(graph_probe.count, 0u);
-
-    turbo_flow_run_close(run);
-    cflow_scheduler_destroy(&scheduler);
+                SALTS_ENOSPC);
+    check_false(cflow_publisher_valid(&messages));
+    check_equal(error.status, ORM_STATUS_LIMIT_EXCEEDED);
     orm_query_destroy(query);
-    check_equal(turbo_flow_stop(flow), SALTS_OK);
-    turbo_flow_destroy(flow);
     orm_disconnect(connection);
   }
 
   it("distinguishes depth exhaustion from a nested row token mismatch before projection") {
     static const struct {
       size_t max_depth;
-      cbind_status expected_status;
-    } cases[] = {{1u, CBIND_LIMIT_EXCEEDED}, {2u, CBIND_TOKEN_MISMATCH}};
+      DataBindStatus expected_status;
+    } cases[] = {{1u, DATA_BIND_ERR_LIMIT}, {2u, DATA_BIND_ERR_TYPE_MISMATCH}};
     for (size_t case_index = 0u; case_index < sizeof(cases) / sizeof(cases[0]); ++case_index) {
       orm_error_t error;
       orm_connection_t *connection;
@@ -1109,7 +1105,7 @@ spec("TurboDb ORM Publisher adapter") {
       turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
       turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
       cflow_scheduler scheduler = {0};
-      char expected_error[sizeof("row binding failed: cbind=-2147483648 ")];
+      char expected_error[sizeof("row binding failed: databind=-2147483648 ")];
 
       orm_error_init(&error);
       connection = open_test_database(&error);
@@ -1119,8 +1115,17 @@ spec("TurboDb ORM Publisher adapter") {
       orm_flow_config(&flow_config, &TEST_DB_NESTED_ROW_DATA);
       flow_config.max_depth = cases[case_index].max_depth;
       config.projection_schema = &TEST_DB_NESTED_ROW_SCHEMA;
-      check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
-                  SALTS_OK);
+      int open_status =
+          turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error);
+      if (case_index == 0u) {
+        check_equal(open_status, SALTS_ENOSPC);
+        check_equal(error.status, ORM_STATUS_LIMIT_EXCEEDED);
+        check_false(cflow_publisher_valid(&messages));
+        orm_query_destroy(query);
+        orm_disconnect(connection);
+        continue;
+      }
+      check_equal(open_status, SALTS_OK);
       flow = open_graph(count_graph_probe_stage, &graph_probe);
       check_not_null(flow);
       check_true(cflow_scheduler_inline_init(&scheduler));
@@ -1132,7 +1137,7 @@ spec("TurboDb ORM Publisher adapter") {
       check_equal(result.state, TURBO_FLOW_RUN_FAILED);
       check_equal(result.status, SALTS_EIO);
       check_greater(snprintf(expected_error, sizeof(expected_error),
-                             "row binding failed: cbind=%d ",
+                             "row binding failed: databind=%d ",
                              (int)cases[case_index].expected_status),
                     0);
       check_contains(result.error.message, expected_error);

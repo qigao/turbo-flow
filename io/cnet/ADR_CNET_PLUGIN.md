@@ -360,3 +360,45 @@ CFlow 私有函数链接失败仍需修复。其他平台、sanitizer 和既有 
 验收范围。Config target/公开 generation 迁移接口仍存在；canonical operation publication、
 完整 RulesForge 执行配额/取消、TurboScript 和 broker/cutover 资格验证仍未完成，
 不据此关闭 #239/#241/#93/#73。
+
+
+### #241 安装验收恢复与 TurboDB 2.3.4 测试迁移（2026-10-11）
+
+Operation resource 已提交为 `eced7f35ddb7d21f63c5006152f8cc00180abc89` 并推送。
+随后恢复正式安装验收，发现旧 SDK 测试入口阻塞完整 build graph。本片段仅修改测试与其
+链接配置，未改变生产接口或降低运行时契约：
+
+- Plugin CFlow 测试通过 `start/publish/stop` 和下游捕获验证结果，保留 reset/recompile、
+  类型、module lease 与失败回滚断言；移除两个未导出的内部执行函数调用。
+- TurboDB adapter 使用显式 SQLite runtime/driver；CBind 断言迁为 DataBind。按 TurboDB
+  `v2.3.4` 的 `orm_row_publisher_prepare()`，scratch/depth 不足在创建 Publisher 前返回
+  LIMIT/ENOSPC；嵌套 token mismatch 仍在执行时失败且不发布半成品。嵌套测试的 CMeta
+  layout 现在显式引用其自定义字段 storage descriptor，消除旧 NULL type witness。
+- TurboDB provider fixture 复用现有测试部署 Component scope 和 resolver v2；验证释放
+  compiled instance 后 provider 仍被 scope 保活，scope 关闭后才可卸载。该测试部署不代表
+  生产 TurboDB provider 已完成 Component export 迁移。
+- Inbox 二进制 round trip 使用生成头声明的 `stl_byte_buffer`。崩溃恢复通过 Salts process
+  API 启动真实 helper，并验证进程终态和持久化记录；Windows helper 关闭 CRT abort 对话框，
+  仍执行 `abort()`，不运行正常关闭路径。
+- Protocol catalog DLL fixtures 补齐其公开头产生的 `Salts::CFlow` 符号链接依赖。
+
+最终 Windows Release 相关验证：**4/5 CTest 套件通过**。通过项为
+`test_flow_plugin_cflow_plan`、`test_protocol_registry`、`test_turbodb_inbox`（27/27 用例，
+包含真实进程崩溃恢复）和 `test_turbodb_durable_buffer_plugin`。
+`test_turbodb_adapter` 为 **17/20 用例通过，3 个 TidesDB 事务用例失败**，无 skip/filter。
+当前 TurboDB 2.3.4 安装目录仅有 SQLite/PostgreSQL/MySQL driver，旧 TidesDB fixture 仍使用
+`orm_connect()`，缺少可验收的独立 TidesDB driver 路径；没有替换后端来宣称其通过。
+
+```powershell
+cmake --build --preset win-release-user --target test_flow_plugin_cflow_plan test_protocol_registry test_turbodb_adapter test_turbodb_inbox test_turbodb_durable_buffer_plugin --parallel 8
+ctest --preset win-release-user -R "^(test_protocol_registry|test_flow_plugin_cflow_plan|test_turbodb_adapter|test_turbodb_inbox|test_turbodb_durable_buffer_plugin)$" --output-on-failure
+ctest --preset win-release-user -R "^test_turbo_flow_install_consumer$" --output-on-failure
+```
+
+最终构建/测试日志：`build/Msvc-Release/241-sdk-fixtures-final-{build,tests}.log`。
+最新完整安装尝试日志：`241-sdk-migration-install-tests.log`，**未通过**；本次已越过上述
+CFlow plugin、TurboDB 和 protocol fixture 构建点，继续发现 `test_flow_reflected_operation`、
+`test_flow_durable_lifecycle`、`test_flow_inbox_driver` 及 `bench_turbo_flow` 对未导出内部函数的调用。
+这些测试需要保持原行为覆盖并迁移执行边界，未新增私有符号导出或跳过 target。
+Config 消费者清点还包括 Product、security realm/auth/policy factory、rule processor、
+generation 旧参数与 callback；不能仅删除 generation 参数便宣告 #241 完成。

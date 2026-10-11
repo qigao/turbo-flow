@@ -6,6 +6,7 @@
 #include "turbodb_test_runtime.h"
 
 #include <cmeta_error.h>
+#include <cmeta_process.h>
 #include <cmeta_thread.h>
 
 #include <stdint.h>
@@ -1032,8 +1033,8 @@ spec("TurboDB durable inbox v3") {
     check_equal(envelope.protocolVersion, "v");
     check_equal(envelope.deviceId, "d");
     check_equal(envelope.operation, "o");
-    check_equal(tbe_bytes_t_size(&envelope.payload), sizeof(payload));
-    check_equal(tbe_bytes_t_data_const(&envelope.payload), payload, sizeof(payload));
+    check_equal(stl_byte_buffer_size(&envelope.payload), sizeof(payload));
+    check_equal(stl_byte_buffer_data_const(&envelope.payload), payload, sizeof(payload));
     data_bind_free(codec);
     ProtocolInboxEnvelope_clear(&envelope);
     check_equal(turbo_flow_inbox_complete(&recovered_inbox, &claim), SALTS_OK);
@@ -1181,17 +1182,28 @@ spec("TurboDB durable inbox v3") {
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     orm_connection_t *connection = NULL;
     orm_error_t error;
-    char command[4096];
-    int command_size;
+    cmeta_process_options_t process_options;
+    cmeta_process_result_t process_result = {0};
+    cmeta_process_t *process = NULL;
+    const char *process_args[2];
+    int process_status;
     size_t count = 0u;
 
     inbox_db_fixture_init(&fixture);
     inbox_db_provision(&fixture, 0);
 
-    command_size = snprintf(command, sizeof(command), "\"%s\" \"%s\"",
-                            TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER, fixture.path);
-    check_true(command_size > 0 && (size_t)command_size < sizeof(command));
-    check_not_equal(system(command), 0);
+    process_args[0] = fixture.path;
+    process_args[1] = NULL;
+    cmeta_process_options_init(&process_options);
+    process_options.program = TURBO_FLOW_TURBODB_INBOX_CRASH_HELPER;
+    process_options.args = process_args;
+    process_options.timeout_ms = 10000u;
+    check_equal(cmeta_process_spawn(&process_options, &process), SALTS_OK);
+    process_status = cmeta_process_wait(process, &process_result);
+    cmeta_process_destroy(process);
+    check_equal(process_status, SALTS_OK);
+    check_true(process_result.state == SALTS_PROCESS_SIGNALED ||
+               (process_result.state == SALTS_PROCESS_EXITED && process_result.exit_code != 0));
 
     connection = inbox_db_connect(&fixture, &error);
     check_equal(inbox_db_read_int64(

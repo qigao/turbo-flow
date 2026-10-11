@@ -61,6 +61,21 @@ static const turbo_flow_data_schema_t plugin_cflow_int_schema = {
     3u,
     NULL};
 
+typedef struct plugin_cflow_capture_s {
+  size_t calls;
+  int value;
+} plugin_cflow_capture_t;
+
+static int plugin_cflow_capture(turbo_flow_msg_t *message, void *ctx) {
+  plugin_cflow_capture_t *capture = ctx;
+  const int *value = turbo_flow_msg_projection(message, NULL);
+  if (!value || !cmeta_data_desc_equal(turbo_flow_msg_projection_data(message), &cmeta_data_int))
+    return SALTS_EPROTO;
+  ++capture->calls;
+  capture->value = *value;
+  return SALTS_OK;
+}
+
 static void plugin_cflow_registry_open(
     cmeta_plugin_registry *registry, cmeta_plugin_ref *ref) {
   const cmeta_plugin_registry_config config = {4u};
@@ -73,12 +88,12 @@ static void plugin_cflow_registry_open(
 
 suite("TurboFlow Salts Plugin CFlow binding") {
   it("compiles one canonical plugin function into a lease-safe CFlow region") {
-    static const char graph[] =
-        "source input\n"
-        "stage plugin operation test.plugin.cflow.double\n"
-        "stage main {\n"
-        "  input -> plugin\n"
-        "}\n";
+    static const char graph[] = "source input\n"
+                                "stage plugin operation test.plugin.cflow.double\n"
+                                "stage output operation test.plugin.cflow.capture\n"
+                                "stage main {\n"
+                                "  input -> plugin -> output\n"
+                                "}\n";
     cmeta_plugin_registry registry = {0};
     cmeta_plugin_ref plugin = {0};
     cmeta_plugin_lifecycle_info lifecycle = {0};
@@ -86,6 +101,11 @@ suite("TurboFlow Salts Plugin CFlow binding") {
     turbo_flow_operation_descriptor_t operation =
         plugin_cflow_operation_descriptor("test.plugin.cflow.double");
     flow_plugin_cflow_function_binding_t binding = {0};
+    plugin_cflow_capture_t capture = {0};
+    turbo_flow_operation_descriptor_t output =
+        plugin_cflow_operation_descriptor("test.plugin.cflow.capture");
+    turbo_flow_operation_provider_registration_t output_provider =
+        TURBO_FLOW_OPERATION_PROVIDER_REGISTRATION_INIT;
     const flow_cflow_region_plan_t *region;
     const flow_stage_semantic_plan_t *semantics;
     turbo_flow_msg_t message;
@@ -95,6 +115,13 @@ suite("TurboFlow Salts Plugin CFlow binding") {
 
     check_not_null(flow);
     plugin_cflow_registry_open(&registry, &plugin);
+    output.input_domain = TURBO_FLOW_DOMAIN_DATA;
+    output.input_type = cmeta_data_int.stable_id;
+    check_equal(turbo_flow_register_operation(flow, &output), SALTS_OK);
+    output_provider.operation_name = output.name;
+    output_provider.fn = plugin_cflow_capture;
+    output_provider.ctx = &capture;
+    check_equal(turbo_flow_register_operation_provider(flow, &output_provider), SALTS_OK);
     check_equal(
         turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
 
@@ -143,9 +170,13 @@ suite("TurboFlow Salts Plugin CFlow binding") {
             plugin_cflow_clone_int, plugin_cflow_destroy_int, NULL),
         SALTS_OK);
     input = NULL;
-    check_equal(flow_cflow_region_execute(flow, region, &message), SALTS_OK);
-    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 14);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(capture.calls, (size_t)1u);
+    check_equal(capture.value, 14);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 7);
     turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     /*
      * A registry-preserving reset returns the lease from the sealed plan to
@@ -178,9 +209,13 @@ suite("TurboFlow Salts Plugin CFlow binding") {
             plugin_cflow_clone_int, plugin_cflow_destroy_int, NULL),
         SALTS_OK);
     input = NULL;
-    check_equal(flow_cflow_region_execute(flow, region, &message), SALTS_OK);
-    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 18);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_publish(flow, "input", &message), SALTS_OK);
+    check_equal(capture.calls, (size_t)2u);
+    check_equal(capture.value, 18);
+    check_equal(*(const int *)turbo_flow_msg_projection(&message, NULL), 9);
     turbo_flow_msg_cleanup(&message);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
 
     check_equal(
         cmeta_plugin_registry_get_lifecycle(&registry, plugin, &lifecycle),

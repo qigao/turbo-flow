@@ -1,6 +1,6 @@
 function(turbo_flow_add_protocol_catalog_fixture target_name)
   add_library(${target_name} SHARED plugin_catalog_fixture.c)
-  target_link_libraries(${target_name} PRIVATE TurboFlow::ProtocolIngress)
+  target_link_libraries(${target_name} PRIVATE TurboFlow::ProtocolIngress Salts::CFlow)
   target_compile_definitions(${target_name} PRIVATE TURBO_FLOW_PLUGIN_BUILD)
   set_target_properties(
     ${target_name}

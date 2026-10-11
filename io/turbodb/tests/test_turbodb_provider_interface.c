@@ -1,4 +1,5 @@
 #include "../../../tests/flow_operation_fixture.h"
+#include "../../../turbo_flow/tests/adapter_component_fixture.h"
 #include "flow_provider_instance_internal.h"
 #include "tinytest.h"
 #include "turbo_flow_provider_binding.h"
@@ -143,10 +144,9 @@ static int output(turbo_flow_msg_t *message, void *ctx) {
   return SALTS_OK;
 }
 
-static int resolve_provider(
-    void *ctx, const char *provider_identity,
-    turbo_flow_provider_candidate_v1_t *out,
-    turbo_flow_config_error_t *error) {
+static int resolve_provider(void *ctx, const char *provider_identity,
+                            turbo_flow_provider_candidate_v2_t *out,
+                            turbo_flow_config_error_t *error) {
   resolver_fixture_t *fixture = (resolver_fixture_t *)ctx;
   if (!fixture || !out || out->size != sizeof(*out)) return SALTS_EINVAL;
   ++fixture->calls;
@@ -159,8 +159,7 @@ static int resolve_provider(
     return SALTS_ENOENT;
   }
   out->module_identity = "turbo-flow.durable.turbodb";
-  out->registry = fixture->registry;
-  out->plugin = fixture->plugin;
+  out->component_identity = "AdapterProviderFixture";
   return SALTS_OK;
 }
 
@@ -200,6 +199,7 @@ typedef struct provider_acceptance_fixture_s {
   int resource_loaded;
   int provider_started;
   int resource_started;
+  adapter_component_fixture_t component;
   flow_compiled_provider_instance_t *compiled;
   turbo_flow_runtime_owner *owner;
   int database_created;
@@ -227,6 +227,8 @@ static void acceptance_cleanup(void) {
     acceptance.owner = NULL;
     (void)flow_compiled_provider_instance_release(&acceptance.compiled);
   }
+
+  (void)adapter_component_close(&acceptance.component);
 
   if (acceptance.registry_initialized) {
     bool quiescent = false;
@@ -308,8 +310,7 @@ spec("TurboDB canonical Salts provider") {
     cmeta_plugin_registry_config registry_config = {2u};
     resolver_fixture_t provider_fixture = {0};
     resolver_fixture_t resource_fixture = {0};
-    turbo_flow_provider_resolver_v1_t provider_resolver =
-        TURBO_FLOW_PROVIDER_RESOLVER_V1_INIT;
+    turbo_flow_provider_resolver_v2_t provider_resolver = TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
     turbo_flow_resource_resolver_v1_t resource_resolver =
         TURBO_FLOW_RESOURCE_RESOLVER_V1_INIT;
     const turbo_flow_provider_instance_v1_t *view = NULL;
@@ -369,10 +370,12 @@ spec("TurboDB canonical Salts provider") {
     resource_resolver.ctx = &resource_fixture;
     resource_resolver.resolve = resolve_resource;
 
+    check_equal(adapter_component_open(&acceptance.component, &acceptance.registry,
+                                       acceptance.provider_ref, "flow.durable.turbodb"),
+                SALTS_OK);
     rc = flow_compiled_provider_instance_prepare(
-        acceptance.flow, (size_t)stage_index,
-        &provider_resolver, &resource_resolver,
-        &acceptance.compiled, &error);
+        acceptance.flow, (size_t)stage_index, &acceptance.component.component.scope,
+        &provider_resolver, &resource_resolver, &acceptance.compiled, &error);
     info("compiled TurboDB provider prepare status=%d provider_calls=%u "
          "resource_calls=%u path=%s reason=%s",
          rc, provider_fixture.calls, resource_fixture.calls,
@@ -445,6 +448,13 @@ spec("TurboDB canonical Salts provider") {
             &acceptance.compiled),
         SALTS_OK);
     check_null(acceptance.compiled);
+
+    /* The Component scope, rather than the released binding, still pins the provider. */
+    check_equal(cmeta_plugin_registry_poll_quiescent(&acceptance.registry, acceptance.provider_ref,
+                                                     &quiescent),
+                CMETA_PLUGIN_OK);
+    check_false(quiescent);
+    check_equal(adapter_component_close(&acceptance.component), SALTS_OK);
 
     check_equal(
         cmeta_plugin_registry_poll_quiescent(

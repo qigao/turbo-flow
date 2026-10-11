@@ -10,12 +10,14 @@ endif()
 cmake_add_test(
   test_turbodb_adapter
   SOURCES test_turbodb_adapter.c turbodb_adapter_header_cpp.cpp
-  LIBS TurboFlow::TurboDbAdapter Salts::TinyTest
+  LIBS TurboFlow::TurboDbAdapter Salts::DataBind Salts::TinyTest
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include
   FOLDER "io/turbodb/tests")
 
 set_tests_properties(test_turbodb_adapter
                      PROPERTIES LABELS "turbodb-adapter;graph")
+target_compile_definitions(test_turbodb_adapter PRIVATE
+  FLOW_TURBODB_SQLITE_DRIVER="${TURBO_FLOW_TURBODB_SQLITE_DRIVER}")
 
 cmake_add_test(
   test_turbodb_outbox_source
@@ -99,8 +101,8 @@ set_tests_properties(test_turbodb_durable_buffer_plugin PROPERTIES
   LABELS "turbodb-adapter;graph;durable;plugin;provider;resource;config")
 
 # Keep the canonical provider gate self-contained while compiling the installed
-# TurboDB/resource headers under C++17; the broader adapter runtime suite has
-# additional CBind dependencies outside this focused package contract.
+# TurboDB/resource headers under C++17; the broader adapter runtime suite also
+# exercises the installed DataBind row-decoding contract.
 cmake_add_test(
   test_turbodb_typed_config
   SOURCES

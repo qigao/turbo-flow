@@ -34,6 +34,10 @@ static int crash_record(turbo_flow_inbox_record_t *record, const char *admission
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+  /* Keep the intentional abort noninteractive; the parent verifies persisted state. */
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
   turbo_flow_turbodb_inbox_config_t config = turbo_flow_turbodb_inbox_config_default();
   turbo_flow_inbox_record_t claimed_record;
   turbo_flow_inbox_record_t pending_record;
