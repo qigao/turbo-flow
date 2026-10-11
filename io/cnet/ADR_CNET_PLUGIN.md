@@ -83,15 +83,16 @@ Publisher 值。正式 UDP 测试将 4 条消息排队，在 steps=1 的一次 p
 先用 `TURBO_FLOW_SOURCE_TRANSPORT_CONTRACT_INIT` 初始化。不存在的 stage 返回 `SALTS_ENOENT`，
 已绑定但未提供此能力的 Source 返回 `SALTS_ENOTSUP`；查询失败不覆盖输出。
 
-NetworkIntake v3 使用该契约检查 pending claims/bytes，已删除 Source 的 resolved CNet
+NetworkIntake v4 使用该契约检查 pending claims/bytes，已删除 Source 的 resolved CNet
 字段读取。每个 intake 保留地址稳定的 Component scope、compiled instance 和 runtime owner；
-decoder/protocol/mapper 仍使用其现有 catalog，后续迁移归 #253/#241。
+decoder 配置来自精确 stage 的生成 Message；protocol/mapper 实现仍使用现有 catalog，
+其发布方式迁移归 #253。
 
 选择复制 adapter 契约，避免 intake 依赖 CNet 私有 typed config 或给所有 factory 增加网络
 专属方法。现有注册结构、factory Interface 和直接使用 CNetAdapter 的调用保持兼容；新查询是
 additive C ABI。回滚需同时回滚依赖该契约的 consumer，不能用读取旧配置作为运行时 fallback。
 
-## NetworkIntake v3 消费端迁移
+## NetworkIntake v4 消费端迁移
 
 `source_stage_name` 指向已解析 `.flow` 中的精确 Source stage，例如 `wire`；该 stage 的
 adapter identity 选择 `cnet.listener_source` 或 `cnet.packet_source`。调用方显式传入
@@ -102,7 +103,7 @@ MessagePlan 绑定，endpoint/TLS/PSK 由 resource Interface 提供；不再从 
 选择复用 compiled provider instance，避免把 provider factory 或原生 CNet owner 复制进
 NetworkIntake。给 CNet 恢复 PluginHost export、在 intake 中保留 resolved field reader 均会
 重新建立第二条配置和发布路径，因此不采用。协议 codec/mapper 的迁移单独推进，避免扩大
-本次 Source 所有权变更。
+Source 所有权变更。decoder 的配置迁移复用同一 typed-config binder，见下文。
 
 create 先校验 decoder、typed config 和显式资源，再 materialize Source、登记 decoder、compile。
 reply capability 在 compile 冻结 stage binding 后校验，仍早于 start 和网络 I/O。端点快照通过
@@ -115,10 +116,50 @@ retry owner，调用方必须显式 stop/destroy 并检查结果。stop 保留 c
 lease 和 Component scope；destroy 完成 shutdown、Graph teardown、owner destroy、typed config
 与 resource release 后才释放 scope。任何失败保留尚未完成的清理义务。
 
-这是公开 config/snapshot v3 的布局变更，v2 被拒绝。消费者需同步重新编译、替换 Source
-配置并提供 resolver；decoder 配置暂时保留。回滚必须成套回滚消费者和对应 SDK，不能混用
-v2/v3 布局。可执行迁移示例位于 `ingress/protocol/tests/protocol_network_e2e_fixture.c` 和
+公开 config/snapshot 使用 v4，旧版本被拒绝。消费者需同步重新编译、将 Source 和 decoder
+配置移入各自 stage，并提供 resolver。回滚必须成套回滚消费者、`.flow` 和对应 SDK，不能混用
+版本布局。可执行迁移示例位于 `ingress/protocol/tests/protocol_network_e2e_fixture.c` 和
 `turbo_flow/tests/test_flow_rulesforge_durable_network.c`。
+
+### Decoder typed config（#238 / #241）
+
+v4 删除 `config.resolved`，将 `decoder_adapter_name` 改为精确的 `decoder_stage_name`。
+该 stage 必须选择 `protocol.decode`，不允许附加未消费的 deployment resource。
+协议配置归 `ingress/protocol/network/src/protocol_network_decoder_config.schema` 所有，
+通过现有 bounded CSerde reader 和生成的 `DataBindMessageNativeArtifact` / MessagePlan
+绑定，不在 Graph Core 增加字段语义。示例中的 `wire` 是已经配置的 canonical Source：
+
+```flow
+stage decode adapter protocol.decode {
+  schema_version 1
+  protocol_provider "coap"
+  protocol_kind "coap"
+  protocol_version "RFC7252"
+  source_id "coap.primary"
+  max_sessions 1
+  max_frame_size 1024
+  max_pending_claims 64
+  max_pending_bytes 65536
+  mapper { plugin "applicant.mapper", name "applicant-json", profile "applicant-json", message_type 2, semantic_type 50, semantic_media_type "application/json", max_semantic_bytes 256, max_output_bytes 256 }
+}
+stage main {
+  wire -> decode
+}
+```
+
+API v4 与 decoder schema 1 分别标识 C 布局和 Message 契约。旧 YAML decoder schema 2/3
+不再作为输入：普通 decoder 省略 `mapper`；语义映射提供完整嵌套 record。选择可选 record，
+使 DataBind 负责其整体 presence、所有子字段的必填性、类型、长度和正数约束，避免继续维护
+随版本变化的私有字段表。未知、缺失或无效字段返回 canonical binder 的 `SALTS_EPROTO`；
+诊断保留精确 stage，以及 MessagePlan 提供的字段名和错误文本。当前 SDK 对未知字段可能
+只提供 stage 位置。跨字段语义和原生 `size_t` 溢出仍由 protocol 边界校验；mapper semantic
+bytes 不得超过 frame bound，违反返回 `SALTS_ERANGE`。
+
+绑定在 Source provider 查找、scope acquire 和 materialize 之前完成。临时 typed native 值、
+MessagePlan 和 workspace 在 preflight 内释放，只有经过校验、拥有自身存储的有界 settings
+进入 intake。catalog 继续固定 codec/mapper 的代码生命周期，Source retry-owner 顺序不变。
+协议测试和真实 RulesForge 双 Source 组合已迁移至此路径；后者的 operation/materializer
+仍消费旧 Config，属于 #93/#73/#241 的后续范围，不能据此删除整个 `TurboFlow::Config`。
 
 ## 停止、排空和卸载
 
@@ -149,7 +190,7 @@ materialization；`test_flow_provider_adapter_binding` 覆盖精确 stage、契�
 重复登记和 reset；`test_cnet_packet_source` 覆盖真实 UDP 批量交付，listener 套件覆盖 TCP/TLS。
 这些测试的 Windows Release 结果不替代 NetworkIntake 闭环、安装态、其他平台或 sanitizer 验收。
 
-NetworkIntake 正式测试覆盖 v2 拒绝、preflight/materialize 失败、失败创建的 retry owner、
+NetworkIntake 正式测试覆盖 v2/v3 拒绝、preflight/materialize 失败、失败创建的 retry owner、
 start/poll 错误和 drain/shutdown 重试。JTT808/CoAP 实网测试分别使用内存与 TurboDB 2.3.4
 资源；RulesForge 组合用 TCP/UDP 两个 Source 驱动同一业务图和 UDP Sink。真实 DSO lease 断言
 覆盖 create/start/stop/destroy：单 intake 的资源 lease 为 3，Source destroy 后为 2，业务图
@@ -165,3 +206,33 @@ mapper、RulesForge 与实网组合共 16 个 CTest 套件通过；相邻 Plugin
 构建和测试日志位于本地 `build/Msvc-Release/274-final-{build,tests}.log` 与
 `274-adjacent-{build,tests}.log`。复验使用同一 user preset 构建上述 targets，再通过 CTest
 选择相同套件；本条记录限定于这组安装 SDK 与 Windows Release。
+
+2026-10-11 后续 #241 decoder 迁移验证使用同一 `win-release-user`，实际安装的 Salts 已为
+`2.3.0-rc.11`（`40173f836d983225d14e87b1c98b78ffc7047174`），TurboDB 仍为上述 `2.3.4`。
+构建日志确认同步了新的 Salts DLL；测试目录 DLL 与安装目录 DLL 的 SHA256 相同。
+TurboDB 的生产 manifest 记录其构建依赖为 Salts rc.10，因此这里的结果是该 TurboDB 包与
+Salts rc.11 的本地组合验证，不宣称 TurboDB 已针对 rc.11 重新发布。
+
+本轮 decoder 配置、core、edges、owner、JT/T808/CoAP（内存及 TurboDB）和 RulesForge
+双 Source 共 9/9 个 CTest 套件通过，包含 decoder 失败发生在 Source resolver 调用之前的
+断言。相邻 provider config/binding/generation 和 Component generation 4/4 通过。
+`test_cnet_stream_sink` 仍有上述三个 Windows Pipe 用例失败，首个返回 `SALTS_ENOTSUP`
+（`-4039`）；没有跳过用例或替换传输。全部 14 个选中套件为 13 通过、1 失败。
+
+复验先通过 `cmake --build --preset win-release-user --target <选中套件> --parallel 8`
+构建下列过滤器对应的同名 targets，再执行：
+
+```powershell
+ctest --preset win-release-user -R "^test_(protocol_network_intake(_config|_core|_edges)?|protocol_network_(jtt808|coap)(_turbodb)?|flow_rulesforge_durable_network)$" --output-on-failure
+ctest --preset win-release-user -R "^test_(flow_(provider_config|provider_binding|provider_generation|component_generation)|cnet_stream_sink)$" --output-on-failure
+```
+
+Windows 命令在 `VsDevCmd.bat` 环境执行，GitHub Packages token 由父环境提供。日志位于
+本地 `build/Msvc-Release/241-decoder-final-{build,tests}.log` 和
+`241-decoder-rc11-adjacent-{build,tests}.log`；本轮未执行安装态、其他平台或 sanitizer 验收。
+
+#241 的生产消费者清单尚包含
+[`flow_plugin_operation.c`](../../turbo_flow/src/flow_plugin_operation.c) 的 operation/resource
+绑定，以及 [`flow_plugin_generation.c`](../../turbo_flow/src/flow_plugin_generation.c) 的
+materializer 绑定。两者仍读取 resolved config，需与 #93/#73 的 typed binding 契约协调迁移，
+再删除 Config target/API 和剩余 YAML 测试；本轮只移除了 NetworkIntake decoder 消费端。

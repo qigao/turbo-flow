@@ -281,11 +281,9 @@ static size_t composition_coap_frame(uint8_t *out, size_t capacity, const uint8_
 }
 
 static int composition_intake_create(turbo_flow_plugin_catalog_snapshot_t *snapshot,
-                                     const turbo_flow_resolved_config_t *resolved,
                                      turbo_flow_t *downstream,
                                      protocol_network_e2e_fixture_t *deployment,
-                                     const char *decoder_adapter, const char *decoded_source,
-                                     const char *graph_text,
+                                     const char *decoded_source, const char *graph_text,
                                      turbo_flow_protocol_network_intake_t **out) {
   turbo_flow_protocol_network_intake_config_t config =
       TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
@@ -293,21 +291,19 @@ static int composition_intake_create(turbo_flow_plugin_catalog_snapshot_t *snaps
   turbo_flow_t *flow = turbo_flow_create();
   int rc;
   if (out) *out = NULL;
-  if (!flow || !snapshot || !resolved || !downstream || !deployment || !decoder_adapter ||
-      !decoded_source || !graph_text || !out) {
+  if (!flow || !snapshot || !downstream || !deployment || !decoded_source || !graph_text || !out) {
     turbo_flow_destroy(flow);
     return SALTS_EINVAL;
   }
   rc = turbo_flow_parse_string(flow, graph_text, strlen(graph_text));
   if (rc == SALTS_OK) {
     config.catalog = snapshot;
-    config.resolved = resolved;
     config.downstream_flow = downstream;
     config.source_stage_name = "wire";
     config.component_runtime = deployment->component_runtime;
     config.provider_resolver = &deployment->provider_resolver;
     config.resource_resolver = &deployment->resource_resolver;
-    config.decoder_adapter_name = decoder_adapter;
+    config.decoder_stage_name = "decode";
     config.decoded_source_name = decoded_source;
     rc = turbo_flow_protocol_network_intake_create(&config, &flow, out, &error);
   }
@@ -512,8 +508,20 @@ spec("RulesForge real network composition") {
         "  rules -> verify\n"
         "  verify -> output\n"
         "}\n";
-    static const char jtt_intake_graph[] = FLOW_E2E_LISTENER_GRAPH("listener_net", "jtt.decode");
-    static const char coap_intake_graph[] = FLOW_E2E_PACKET_GRAPH("packet_net", "coap.decode");
+    /* Message/semantic IDs are the JT/T808 0x0900 and CoAP JSON fixture contracts. */
+#define APPLICANT_MAPPER_FIELDS(message, semantic)                                                 \
+  "  mapper { plugin \"" TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID "\", "                              \
+  "name \"" TURBO_FLOW_APPLICANT_MAPPER_NAME "\", "                                                \
+  "profile \"" TURBO_FLOW_APPLICANT_MAPPER_PROFILE "\", "                                          \
+  "message_type " message ", semantic_type " semantic ", "                                         \
+  "semantic_media_type \"application/json\", max_semantic_bytes 256, max_output_bytes 256 }\n"
+    static const char jtt_intake_graph[] = FLOW_E2E_LISTENER_GRAPH(
+        "listener_net", FLOW_E2E_DECODER_FIELDS("jtt808", "2019-A1", "fleet.primary", "128",
+                                                "131072") APPLICANT_MAPPER_FIELDS("2304", "1"));
+    static const char coap_intake_graph[] = FLOW_E2E_PACKET_GRAPH(
+        "packet_net", FLOW_E2E_DECODER_FIELDS("coap", "RFC7252", "coap.primary", "128", "131072")
+                          APPLICANT_MAPPER_FIELDS("2", "50"));
+#undef APPLICANT_MAPPER_FIELDS
     protocol_network_deployment_lifetime_t lifetime = {0};
     char rfl[2048];
     char yaml[16384];
@@ -588,90 +596,44 @@ spec("RulesForge real network composition") {
     check_true(output_port != 0u);
     check_equal(cnet_datagram_receive(&datagram, COMPOSITION_MESSAGE_CAPACITY), SALTS_OK);
 
-    count = snprintf(
-        yaml, sizeof(yaml),
-        "version: 1\n"
-        "adapters:\n"
-        "  jtt.decode:\n"
-        "    kind: protocol.decode\n"
-        "    config:\n"
-        "      schema_version: 3\n"
-        "      protocol_provider: jtt808\n"
-        "      protocol_kind: jtt808\n"
-        "      protocol_version: 2019-A1\n"
-        "      source_id: fleet.primary\n"
-        "      max_sessions: 1\n"
-        "      max_frame_size: 1024\n"
-        "      max_pending_claims: 128\n"
-        "      max_pending_bytes: 131072\n"
-        "      mapper_plugin: %s\n"
-        "      mapper_name: %s\n"
-        "      mapper_profile: %s\n"
-        "      mapper_message_type: %u\n"
-        "      mapper_semantic_type: %u\n"
-        "      mapper_semantic_media_type: application/json\n"
-        "      mapper_max_semantic_bytes: 256\n"
-        "      mapper_max_output_bytes: 256\n"
-        "  coap.decode:\n"
-        "    kind: protocol.decode\n"
-        "    config:\n"
-        "      schema_version: 3\n"
-        "      protocol_provider: coap\n"
-        "      protocol_kind: coap\n"
-        "      protocol_version: RFC7252\n"
-        "      source_id: coap.primary\n"
-        "      max_sessions: 1\n"
-        "      max_frame_size: 1024\n"
-        "      max_pending_claims: 128\n"
-        "      max_pending_bytes: 131072\n"
-        "      mapper_plugin: %s\n"
-        "      mapper_name: %s\n"
-        "      mapper_profile: %s\n"
-        "      mapper_message_type: %u\n"
-        "      mapper_semantic_type: %u\n"
-        "      mapper_semantic_media_type: application/json\n"
-        "      mapper_max_semantic_bytes: 256\n"
-        "      mapper_max_output_bytes: 256\n"
-        "channels:\n"
-        "  rules_adult:\n"
-        "    kind: %s\n"
-        "    config:\n"
-        "      rfl_file: \"%s\"\n"
-        "      fact_type: Applicant\n"
-        "operation_bindings:\n"
-        "  - operation: %s\n"
-        "    resource: rules_adult\n"
-        "    plugin: %s\n"
-        "    version: 1\n"
-        "    input_schema: %s\n"
-        "    input_schema_version: 1\n"
-        "    output_schema: %s\n"
-        "    output_schema_version: 1\n"
-        "    permissions: []\n"
-        "    execution: inline\n"
-        "    threading: thread_safe\n"
-        "    cancellation: none\n"
-        "    max_inflight: 8\n"
-        "    max_input_bytes: %zu\n"
-        "    max_result_bytes: %zu\n"
-        "    max_retained_bytes: 64\n"
-        "    max_steps: 16\n"
-        "    deadline_ms: 0\n"
-        "materializer_bindings:\n"
-        "  - plugin: %s\n"
-        "    schema: %s\n"
-        "    schema_version: 1\n"
-        "    encoding: json\n",
-        TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID, TURBO_FLOW_APPLICANT_MAPPER_NAME,
-        TURBO_FLOW_APPLICANT_MAPPER_PROFILE, (unsigned)TURBO_FLOW_APPLICANT_JTT808_MESSAGE_TYPE,
-        (unsigned)TURBO_FLOW_APPLICANT_JTT808_SEMANTIC_TYPE, TURBO_FLOW_APPLICANT_MAPPER_PLUGIN_ID,
-        TURBO_FLOW_APPLICANT_MAPPER_NAME, TURBO_FLOW_APPLICANT_MAPPER_PROFILE,
-        (unsigned)TURBO_FLOW_APPLICANT_COAP_MESSAGE_TYPE,
-        (unsigned)TURBO_FLOW_APPLICANT_COAP_SEMANTIC_TYPE, TURBO_FLOW_RULESFORGE_RESOURCE_KIND,
-        rfl_path, TURBO_FLOW_RULESFORGE_OPERATION, TURBO_FLOW_RULESFORGE_PLUGIN_ID,
-        TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID, TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID,
-        sizeof(turbo_flow_rulesforge_applicant), sizeof(turbo_flow_rulesforge_decision),
-        TURBO_FLOW_RULESFORGE_PLUGIN_ID, TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID);
+    count =
+        snprintf(yaml, sizeof(yaml),
+                 "version: 1\n"
+                 "channels:\n"
+                 "  rules_adult:\n"
+                 "    kind: %s\n"
+                 "    config:\n"
+                 "      rfl_file: \"%s\"\n"
+                 "      fact_type: Applicant\n"
+                 "operation_bindings:\n"
+                 "  - operation: %s\n"
+                 "    resource: rules_adult\n"
+                 "    plugin: %s\n"
+                 "    version: 1\n"
+                 "    input_schema: %s\n"
+                 "    input_schema_version: 1\n"
+                 "    output_schema: %s\n"
+                 "    output_schema_version: 1\n"
+                 "    permissions: []\n"
+                 "    execution: inline\n"
+                 "    threading: thread_safe\n"
+                 "    cancellation: none\n"
+                 "    max_inflight: 8\n"
+                 "    max_input_bytes: %zu\n"
+                 "    max_result_bytes: %zu\n"
+                 "    max_retained_bytes: 64\n"
+                 "    max_steps: 16\n"
+                 "    deadline_ms: 0\n"
+                 "materializer_bindings:\n"
+                 "  - plugin: %s\n"
+                 "    schema: %s\n"
+                 "    schema_version: 1\n"
+                 "    encoding: json\n",
+                 TURBO_FLOW_RULESFORGE_RESOURCE_KIND, rfl_path, TURBO_FLOW_RULESFORGE_OPERATION,
+                 TURBO_FLOW_RULESFORGE_PLUGIN_ID, TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID,
+                 TURBO_FLOW_RULESFORGE_OUTPUT_SCHEMA_ID, sizeof(turbo_flow_rulesforge_applicant),
+                 sizeof(turbo_flow_rulesforge_decision), TURBO_FLOW_RULESFORGE_PLUGIN_ID,
+                 TURBO_FLOW_RULESFORGE_INPUT_SCHEMA_ID);
     check_greater(count, 0);
     check_less(count, (int)sizeof(yaml));
 
@@ -739,13 +701,13 @@ spec("RulesForge real network composition") {
     check_not_null(generation);
     check_equal(turbo_flow_start(turbo_flow_plugin_generation_flow(generation)), SALTS_OK);
 
-    check_equal(composition_intake_create(
-                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation), &deployment,
-                    "jtt.decode", "jtt_decoded", jtt_intake_graph, &jtt_intake),
+    check_equal(composition_intake_create(snapshot, turbo_flow_plugin_generation_flow(generation),
+                                          &deployment, "jtt_decoded", jtt_intake_graph,
+                                          &jtt_intake),
                 SALTS_OK);
-    check_equal(composition_intake_create(
-                    snapshot, resolved, turbo_flow_plugin_generation_flow(generation), &deployment,
-                    "coap.decode", "coap_decoded", coap_intake_graph, &coap_intake),
+    check_equal(composition_intake_create(snapshot, turbo_flow_plugin_generation_flow(generation),
+                                          &deployment, "coap_decoded", coap_intake_graph,
+                                          &coap_intake),
                 SALTS_OK);
     check_not_null(jtt_intake);
     check_not_null(coap_intake);

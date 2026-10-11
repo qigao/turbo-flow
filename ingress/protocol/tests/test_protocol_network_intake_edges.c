@@ -50,7 +50,7 @@ static turbo_flow_protocol_t *intake_edge_protocol(void) {
 static flow_protocol_network_intake_settings_t intake_edge_settings(void) {
   flow_protocol_network_intake_settings_t settings;
   memset(&settings, 0, sizeof(settings));
-  settings.schema_version = 2u;
+  settings.mapper_enabled = 0;
   settings.protocol_kind = TURBO_FLOW_PROTOCOL_JTT_808;
   settings.transport_kind = FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP;
   memcpy(settings.protocol_provider, "jtt808", sizeof("jtt808"));

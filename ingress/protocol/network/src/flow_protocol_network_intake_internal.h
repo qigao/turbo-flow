@@ -5,7 +5,6 @@
 #include "turbo_flow_protocol_network_intake.h"
 #include "turbo_flow_protocol_source.h"
 #include "turbo_flow_protocol_mapper.h"
-#include "turbo_flow_resolved_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,8 +22,9 @@ typedef struct flow_protocol_network_intake_settings_s {
   char protocol_version[TURBO_FLOW_PROTOCOL_VERSION_MAX + 1u];
   char source_id[TURBO_FLOW_DURABLE_SOURCE_ID_MAX + 1u];
   char source_stage_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
+  char decoder_stage_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
   char decoder_adapter_name[TURBO_FLOW_RESOURCE_OWNER_MAX + 1u];
-  uint32_t schema_version;
+  int mapper_enabled;
   char mapper_plugin[TURBO_FLOW_CONFIG_PLUGIN_ID_MAX + 1u];
   char mapper_name[TURBO_FLOW_PROTOCOL_MAPPER_NAME_MAX + 1u];
   char mapper_profile[TURBO_FLOW_PROTOCOL_MAPPER_PROFILE_MAX + 1u];
@@ -69,10 +69,10 @@ typedef struct flow_protocol_network_intake_sink_config_s {
   const turbo_flow_protocol_mapper_contract_t *mapper_contract;
 } flow_protocol_network_intake_sink_config_t;
 
-int flow_protocol_network_intake_preflight(
-    const turbo_flow_resolved_config_t *resolved, const turbo_flow_t *flow,
-    const char *source_stage_name, const char *decoder_adapter_name,
-    flow_protocol_network_intake_settings_t *settings, turbo_flow_config_error_t *error);
+int flow_protocol_network_intake_preflight(const turbo_flow_t *flow, const char *source_stage_name,
+                                           const char *decoder_stage_name,
+                                           flow_protocol_network_intake_settings_t *settings,
+                                           turbo_flow_config_error_t *error);
 
 int flow_protocol_network_intake_transport_bind(
     const turbo_flow_source_transport_contract_t *transport,

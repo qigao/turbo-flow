@@ -11,7 +11,6 @@ extern int protocol_network_intake_header_cpp_probe(void);
 typedef struct intake_owner_fixture_s {
   turbo_flow_plugin_host_t *host;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
-  turbo_flow_resolved_config_t *resolved;
   turbo_flow_inbox_t inbox;
   turbo_flow_t *flow;
   turbo_flow_t *downstream_flow;
@@ -22,6 +21,7 @@ typedef struct intake_owner_fixture_s {
   int provider_live;
   adapter_component_fixture_t component;
   turbo_flow_provider_resolver_v2_t resolver;
+  size_t provider_resolutions;
 } intake_owner_fixture_t;
 static intake_owner_fixture_t fixture;
 static turbo_flow_protocol_network_intake_t *intake;
@@ -31,6 +31,7 @@ static int resolve_provider(void *ctx, const char *identity,
   (void)error;
   if (ctx != &fixture || !identity || strcmp(identity, "fixture.source") != 0)
     return SALTS_ENOENT;
+  ++fixture.provider_resolutions;
   out->component_identity = "AdapterProviderFixture";
   out->module_identity = "fixture.network.source";
   return SALTS_OK;
@@ -63,11 +64,9 @@ static int intake_owner_downstream_open(intake_owner_fixture_t *state) {
 static void open_fixture(unsigned mode, const char *version) {
   turbo_flow_plugin_host_config_t host_config = TURBO_FLOW_PLUGIN_HOST_CONFIG_INIT;
   turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-  turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
   turbo_flow_inbox_memory_config_t inbox_config = turbo_flow_inbox_memory_config_default();
   cmeta_plugin_registry_config registry_config = {1u};
-  char yaml[2048];
-  char graph[512];
+  char graph[2048];
   host_config.module_capacity = 1u;
   host_config.protocol_provider_capacity = 1u;
   host_config.transactional_adapter_provider_capacity = 0u;
@@ -85,21 +84,21 @@ static void open_fixture(unsigned mode, const char *version) {
   fixture.resolver = (turbo_flow_provider_resolver_v2_t)TURBO_FLOW_PROVIDER_RESOLVER_V2_INIT;
   fixture.resolver.ctx = &fixture;
   fixture.resolver.resolve = resolve_provider;
-  check_true(snprintf(yaml, sizeof(yaml),
-      "version: 1\nadapters:\n  protocol.decode:\n    kind: protocol.decode\n    config:\n"
-      "      schema_version: 2\n      protocol_provider: jtt808\n      protocol_kind: jtt808\n"
-      "      protocol_version: %s\n      source_id: fixture.source\n      max_sessions: 1\n"
-      "      max_frame_size: 64\n      max_pending_claims: 4\n      max_pending_bytes: 256\n", version) > 0);
-  check_equal(turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture.resolved, &error), SALTS_OK);
   inbox_config.max_records = 8u;
   inbox_config.max_total_bytes = 8192u;
   inbox_config.max_record_bytes = 4096u;
   inbox_config.max_claims = 8u;
   check_equal(turbo_flow_inbox_memory_create(&inbox_config, &fixture.inbox), SALTS_OK);
   check_equal(intake_owner_downstream_open(&fixture), SALTS_OK);
-  check_true(snprintf(graph, sizeof(graph),
-      "source wire adapter fixture.source {\n  mode %u\n}\n"
-      "stage decode adapter protocol.decode\nstage main {\n  wire -> decode\n}\n", mode) > 0);
+  check_true(
+      snprintf(graph, sizeof(graph),
+               "source wire adapter fixture.source {\n  mode %u\n}\n"
+               "stage decode adapter protocol.decode {\n"
+               "  schema_version 1\n  protocol_provider \"jtt808\"\n  protocol_kind \"jtt808\"\n"
+               "  protocol_version \"%s\"\n  source_id \"fixture.source\"\n  max_sessions 1\n"
+               "  max_frame_size 64\n  max_pending_claims 4\n  max_pending_bytes 256\n"
+               "}\nstage main {\n  wire -> decode\n}\n",
+               mode, version) > 0);
   fixture.flow = turbo_flow_create();
   check_not_null(fixture.flow);
   check_equal(turbo_flow_parse_string(fixture.flow, graph, strlen(graph)), SALTS_OK);
@@ -108,10 +107,9 @@ static void open_fixture(unsigned mode, const char *version) {
 static turbo_flow_protocol_network_intake_config_t intake_config(void) {
   turbo_flow_protocol_network_intake_config_t config = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT;
   config.catalog = fixture.catalog;
-  config.resolved = fixture.resolved;
   config.downstream_flow = fixture.downstream_flow;
   config.source_stage_name = "wire";
-  config.decoder_adapter_name = "protocol.decode";
+  config.decoder_stage_name = "decode";
   config.decoded_source_name = "decoded";
   config.component_runtime = &fixture.component.component.runtime;
   config.provider_resolver = &fixture.resolver;
@@ -155,7 +153,6 @@ spec("canonical ProtocolNetworkIntake owner") {
       check_equal(turbo_flow_inbox_close(&fixture.inbox), SALTS_OK);
       check_equal(turbo_flow_inbox_destroy(&fixture.inbox), SALTS_OK);
     }
-    turbo_flow_resolved_config_destroy(fixture.resolved);
     if (fixture.catalog) turbo_flow_plugin_catalog_snapshot_destroy(fixture.catalog);
     if (fixture.host) check_equal(turbo_flow_plugin_host_destroy(fixture.host, 1000u, &error), SALTS_OK);
     if (fixture.registry_live) {
@@ -170,14 +167,36 @@ spec("canonical ProtocolNetworkIntake owner") {
     }
   }
 
-  it("exposes the v3 C and C++ contract and rejects v2 before transfer") {
+  it("exposes the v4 C and C++ contract and rejects old APIs before transfer") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     turbo_flow_protocol_network_intake_config_t config;
     check_equal(protocol_network_intake_header_cpp_probe(), 0);
     open_fixture(0u, "2019-A1");
     config = intake_config();
-    config.version = 2u;
-    check_equal(turbo_flow_protocol_network_intake_create(&config, &fixture.flow, &intake, &error), SALTS_EINVAL);
+    for (uint32_t version = 2u; version < 4u; ++version) {
+      config.version = version;
+      check_equal(
+          turbo_flow_protocol_network_intake_create(&config, &fixture.flow, &intake, &error),
+          SALTS_EINVAL);
+      check_not_null(fixture.flow);
+      check_null(intake);
+      check_equal(fixture.provider_resolutions, (size_t)0u);
+    }
+  }
+
+  it("rejects an incomplete decoder Message before resolving any Source provider") {
+    static const char graph[] = "source wire adapter fixture.source {\n  mode 2\n}\n"
+                                "stage decode adapter protocol.decode {\n  schema_version 1\n}\n"
+                                "stage main {\n  wire -> decode\n}\n";
+    turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
+    open_fixture(2u, "2019-A1");
+    turbo_flow_destroy(fixture.flow);
+    fixture.flow = turbo_flow_create();
+    check_not_null(fixture.flow);
+    check_equal(turbo_flow_parse_string(fixture.flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(create_intake(&error), SALTS_EPROTO);
+    check_contains(error.path, "$.stages.decode");
+    check_equal(fixture.provider_resolutions, (size_t)0u);
     check_not_null(fixture.flow);
     check_null(intake);
   }
@@ -218,6 +237,7 @@ spec("canonical ProtocolNetworkIntake owner") {
     turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
     open_fixture(2u, "2013-A1");
     check_equal(create_intake(&error), SALTS_ENOTSUP);
+    check_equal(fixture.provider_resolutions, (size_t)0u);
     check_not_null(fixture.flow); check_null(intake);
   }
 

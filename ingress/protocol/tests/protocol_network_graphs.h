@@ -7,7 +7,21 @@
 #else
   #define FLOW_E2E_BACKEND "1"
 #endif
-#define FLOW_E2E_LISTENER_GRAPH(resource_name, decoder_name)                                       \
+#define FLOW_E2E_DECODER_FIELDS(protocol, version, source, claims, bytes)                          \
+  "  schema_version 1\n"                                                                           \
+  "  max_sessions 1\n"                                                                             \
+  "  max_frame_size 1024\n"                                                                        \
+  "  max_pending_claims " claims "\n"                                                              \
+  "  max_pending_bytes " bytes "\n"                                                                \
+  "  protocol_provider \"" protocol "\"\n"                                                         \
+  "  protocol_kind \"" protocol "\"\n"                                                             \
+  "  protocol_version \"" version "\"\n"                                                           \
+  "  source_id \"" source "\"\n"
+#define FLOW_E2E_JTT_DECODER_FIELDS                                                                \
+  FLOW_E2E_DECODER_FIELDS("jtt808", "2019-A1", "fleet.primary", "64", "65536")
+#define FLOW_E2E_COAP_DECODER_FIELDS                                                               \
+  FLOW_E2E_DECODER_FIELDS("coap", "RFC7252", "coap.primary", "64", "65536")
+#define FLOW_E2E_LISTENER_GRAPH(resource_name, decoder_fields)                                     \
   "source wire adapter cnet.listener_source {\n"                                                   \
   "  resource " resource_name "\n"                                                                 \
   "  schema_version 2\n"                                                                           \
@@ -51,13 +65,13 @@
   "  content_schema \"Wire\"\n"                                                                    \
   "  content_type \"Frame\"\n"                                                                     \
   "}\n"                                                                                            \
-  "stage decode adapter " decoder_name "\n"                                                        \
+  "stage decode adapter protocol.decode {\n" decoder_fields "}\n"                                  \
   "stage main {\n"                                                                                 \
   "  wire -> decode\n"                                                                             \
   "}\n"
 static const char protocol_network_listener_graph[] =
-    FLOW_E2E_LISTENER_GRAPH("wire_net", "protocol.decode");
-#define FLOW_E2E_PACKET_GRAPH(resource_name, decoder_name)                                         \
+    FLOW_E2E_LISTENER_GRAPH("wire_net", FLOW_E2E_JTT_DECODER_FIELDS);
+#define FLOW_E2E_PACKET_GRAPH(resource_name, decoder_fields)                                       \
   "source wire adapter cnet.packet_source {\n"                                                     \
   "  resource " resource_name "\n"                                                                 \
   "  schema_version 2\n"                                                                           \
@@ -99,12 +113,12 @@ static const char protocol_network_listener_graph[] =
   "  content_schema \"Wire\"\n"                                                                    \
   "  content_type \"Frame\"\n"                                                                     \
   "}\n"                                                                                            \
-  "stage decode adapter " decoder_name "\n"                                                        \
+  "stage decode adapter protocol.decode {\n" decoder_fields "}\n"                                  \
   "stage main {\n"                                                                                 \
   "  wire -> decode\n"                                                                             \
   "}\n"
 static const char protocol_network_packet_graph[] =
-    FLOW_E2E_PACKET_GRAPH("wire_net", "protocol.decode");
+    FLOW_E2E_PACKET_GRAPH("wire_net", FLOW_E2E_COAP_DECODER_FIELDS);
 #define FLOW_E2E_MEMORY_STAGE                                                                      \
   "buffer intake provider flow.durable.memory {\n"                                                 \
   "  resource intake_store\n"                                                                      \

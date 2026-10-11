@@ -1,0 +1,25 @@
+schema TurboFlowNetworkDecoderConfig [version(1)];
+
+message NetworkDecoderMapperConfig {
+  uint32 message_type;
+  uint32 semantic_type;
+  @Min(1) uint64 max_semantic_bytes;
+  @Min(1) uint64 max_output_bytes;
+  @Size(min = 1, max = 127) string plugin;
+  @Size(min = 1, max = 63) string name;
+  @Size(min = 1, max = 63) string profile;
+  @Size(min = 1, max = 127) string semantic_media_type;
+}
+
+message NetworkDecoderConfig {
+  @Min(1) @Max(1) uint32 schema_version;
+  @Min(1) uint64 max_sessions;
+  @Min(1) uint64 max_frame_size;
+  @Min(1) uint64 max_pending_claims;
+  @Min(1) uint64 max_pending_bytes;
+  optional NetworkDecoderMapperConfig mapper;
+  @Size(min = 1, max = 63) string protocol_provider;
+  @Size(min = 1, max = 63) string protocol_kind;
+  @Size(min = 1, max = 15) string protocol_version;
+  @Size(min = 1, max = 127) string source_id;
+}

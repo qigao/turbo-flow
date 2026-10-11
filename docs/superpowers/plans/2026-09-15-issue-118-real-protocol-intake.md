@@ -1,6 +1,6 @@
 # Issue #118 Real Protocol Network Intake Implementation Plan
 
-> Historical v2 design. NetworkIntake v3 replaces the Source adapter-table path with an exact `.flow` stage, Component scope, and typed provider/resource bindings. Current API, migration, retry ownership, and executable examples are documented in [ADR_CNET_PLUGIN](../../../io/cnet/ADR_CNET_PLUGIN.md).
+> Historical v2 design. NetworkIntake v4 replaces Source and decoder adapter-table inputs with exact `.flow` stages and generated typed config, retaining the Component scope and explicit resource bindings. Current API, migration, retry ownership, and executable examples are documented in [ADR_CNET_PLUGIN](../../../io/cnet/ADR_CNET_PLUGIN.md).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

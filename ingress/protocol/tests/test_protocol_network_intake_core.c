@@ -377,7 +377,7 @@ intake_test_settings(turbo_flow_protocol_kind_t kind) {
   flow_protocol_network_intake_settings_t settings;
   memset(&settings, 0, sizeof(settings));
   settings.protocol_kind = kind;
-  settings.schema_version = 2u;
+  settings.mapper_enabled = 0;
   settings.transport_kind = kind == TURBO_FLOW_PROTOCOL_JTT_808
                                 ? FLOW_PROTOCOL_NETWORK_TRANSPORT_LISTENER_TCP
                                 : FLOW_PROTOCOL_NETWORK_TRANSPORT_PACKET_UDP;
@@ -811,7 +811,7 @@ spec("protocol network intake core") {
     turbo_flow_msg_t message;
     uint64_t record_id;
 
-    settings.schema_version = 3u;
+    settings.mapper_enabled = 1;
     memcpy(settings.mapper_semantic_media_type, "application/json",
            sizeof("application/json"));
     flow = intake_test_flow_with_mapper(&sink, protocol, &inbox, &settings,
@@ -857,7 +857,7 @@ spec("protocol network intake core") {
     turbo_flow_inbox_snapshot_t snapshot = TURBO_FLOW_INBOX_SNAPSHOT_INIT;
     turbo_flow_msg_t message;
 
-    settings.schema_version = 3u;
+    settings.mapper_enabled = 1;
     memcpy(settings.mapper_semantic_media_type, "application/json",
            sizeof("application/json"));
     flow = intake_test_flow_with_mapper(&sink, protocol, &inbox, &settings,

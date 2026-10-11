@@ -87,20 +87,6 @@ static int protocol_network_coap_host_open(protocol_network_e2e_fixture_t *fixtu
   return rc;
 }
 
-static int protocol_network_coap_yaml(protocol_network_e2e_fixture_t *fixture,
-                                      protocol_network_e2e_storage_kind_t storage, char *out,
-                                      size_t capacity) {
-  static const char yaml[] =
-      "version: 1\nadapters:\n  protocol.decode:\n    kind: protocol.decode\n    config:\n"
-      "      schema_version: 2\n      protocol_provider: coap\n      protocol_kind: coap\n"
-      "      protocol_version: RFC7252\n      source_id: coap.primary\n      max_sessions: 1\n"
-      "      max_frame_size: 1024\n      max_pending_claims: 64\n      max_pending_bytes: 65536\n";
-  (void)fixture;
-  (void)storage;
-  if (capacity < sizeof(yaml)) return SALTS_ENOSPC;
-  memcpy(out, yaml, sizeof(yaml));
-  return SALTS_OK;
-}
 
 static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fixture) {
   const char *graph = protocol_network_packet_graph;
@@ -117,13 +103,12 @@ static int protocol_network_coap_intake_open(protocol_network_e2e_fixture_t *fix
     return rc;
   }
   config.catalog = fixture->catalog;
-  config.resolved = fixture->resolved;
   config.downstream_flow = turbo_flow_plugin_generation_flow(fixture->business_generation);
   config.source_stage_name = "wire";
   config.component_runtime = fixture->component_runtime;
   config.provider_resolver = &fixture->provider_resolver;
   config.resource_resolver = &fixture->resource_resolver;
-  config.decoder_adapter_name = "protocol.decode";
+  config.decoder_stage_name = "decode";
   config.decoded_source_name = "decoded";
   if (fixture->reply_enabled) {
     reply.point = TURBO_FLOW_PROTOCOL_NETWORK_REPLY_DURABLE_ADMISSION;
@@ -145,7 +130,7 @@ static int protocol_network_e2e_coap_init_mode(protocol_network_e2e_fixture_t *f
                                                char *turbodb_path, int reply_enabled,
                                                protocol_network_e2e_fixture_t *peer) {
   turbo_flow_config_error_t error = TURBO_FLOW_CONFIG_ERROR_INIT;
-  char yaml[16384];
+  static const char empty_business_config[] = "version: 1\n";
   int rc;
   if (!fixture || !cnet_module || !cnet_module[0] || !coap_module || !coap_module[0] ||
       !durable_module || !durable_module[0])
@@ -159,9 +144,9 @@ static int protocol_network_e2e_coap_init_mode(protocol_network_e2e_fixture_t *f
     if (peer) fixture->deployment = peer->deployment;
     rc = protocol_network_deployment_open(fixture, cnet_module, durable_module, 1);
   }
-  if (rc == SALTS_OK) rc = protocol_network_coap_yaml(fixture, storage, yaml, sizeof(yaml));
   if (rc == SALTS_OK)
-    rc = turbo_flow_config_resolve_yaml(yaml, strlen(yaml), &fixture->resolved, &error);
+    rc = turbo_flow_config_resolve_yaml(empty_business_config, sizeof(empty_business_config) - 1u,
+                                        &fixture->resolved, &error);
   if (rc == SALTS_OK) rc = protocol_network_e2e_business_open(fixture);
   if (rc == SALTS_OK) rc = protocol_network_coap_intake_open(fixture);
   if (rc != SALTS_OK) {

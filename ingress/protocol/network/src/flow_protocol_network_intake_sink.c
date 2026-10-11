@@ -927,11 +927,10 @@ int flow_protocol_network_intake_sink_create(
       !config->decoded_source_name[0] || !config->settings ||
       config->settings->max_sessions == 0u || config->settings->max_frame_size == 0u ||
       config->settings->max_pending_claims == 0u || config->settings->max_pending_bytes == 0u ||
-      (config->settings->schema_version != 2u && config->settings->schema_version != 3u) ||
       strcmp(config->adapter_name, config->settings->decoder_adapter_name) != 0 ||
       !intake_downstream_buffer_valid(config->downstream_flow, config->decoded_source_name) ||
-      (config->settings->schema_version == 3u && (!config->mapper || !config->mapper_contract)) ||
-      (config->settings->schema_version == 2u && (config->mapper || config->mapper_contract)))
+      (config->settings->mapper_enabled && (!config->mapper || !config->mapper_contract)) ||
+      (!config->settings->mapper_enabled && (config->mapper || config->mapper_contract)))
     return SALTS_EINVAL;
   if (config->settings->max_sessions == SIZE_MAX ||
       config->settings->max_frame_size > SIZE_MAX / (config->settings->max_sessions + 1u) ||

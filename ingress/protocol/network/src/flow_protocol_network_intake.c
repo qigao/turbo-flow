@@ -53,12 +53,12 @@ static int intake_owner_public_validate(const turbo_flow_protocol_network_intake
   if (!config || config->size != sizeof(*config) || !config->component_runtime ||
       !config->provider_resolver ||
       config->version != TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION || !config->catalog ||
-      !config->resolved || !config->downstream_flow ||
+      !config->downstream_flow ||
       turbo_flow_state(config->downstream_flow) != TURBO_FLOW_STATE_STARTED ||
-      !config->source_stage_name || !config->source_stage_name[0] ||
-      !config->decoder_adapter_name || !config->decoder_adapter_name[0] ||
-      !config->decoded_source_name || !config->decoded_source_name[0] || !flow_io || !*flow_io ||
-      !out || !error || error->size < sizeof(*error))
+      !config->source_stage_name || !config->source_stage_name[0] || !config->decoder_stage_name ||
+      !config->decoder_stage_name[0] || !config->decoded_source_name ||
+      !config->decoded_source_name[0] || !flow_io || !*flow_io || !out || !error ||
+      error->size < sizeof(*error))
     return intake_owner_error(error, SALTS_EINVAL, "$.protocol_network_intake",
                               "invalid ProtocolNetworkIntake create arguments");
   if (turbo_flow_state(*flow_io) != TURBO_FLOW_STATE_PARSED)
@@ -116,7 +116,7 @@ static int intake_owner_mapper_bind(turbo_flow_plugin_catalog_snapshot_t *snapsh
                               "invalid protocol mapper binding arguments");
   memset(mapper_out, 0, sizeof(*mapper_out));
   *contract_out = (turbo_flow_protocol_mapper_contract_t)TURBO_FLOW_PROTOCOL_MAPPER_CONTRACT_INIT;
-  if (settings->schema_version != 3u) return SALTS_OK;
+  if (!settings->mapper_enabled) return SALTS_OK;
 
   rc = turbo_flow_plugin_catalog_snapshot_protocol_mapper_catalog(snapshot, &catalog);
   if (rc != SALTS_OK)
@@ -223,7 +223,7 @@ intake_owner_compiled_topology_validate(const turbo_flow_protocol_network_intake
     const turbo_flow_stage_plan_t *stage = turbo_flow_stage_at(intake->flow, i);
     if (!stage || !stage->adapter_name) continue;
     if (strcmp(stage->name, intake->settings.source_stage_name) == 0) source_index = i;
-    if (strcmp(stage->adapter_name, intake->settings.decoder_adapter_name) == 0) decoder_index = i;
+    if (strcmp(stage->name, intake->settings.decoder_stage_name) == 0) decoder_index = i;
   }
   edge = turbo_flow_edge_at(intake->flow, 0u);
   if (source_index == SIZE_MAX || decoder_index == SIZE_MAX || !edge ||
@@ -287,9 +287,8 @@ int turbo_flow_protocol_network_intake_create(
   intake->component_scope = (salts_component_plugin_scope)SALTS_COMPONENT_PLUGIN_SCOPE_INIT;
   intake->state = TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_COMPILED;
   intake->status = SALTS_OK;
-  rc = flow_protocol_network_intake_preflight(
-      config->resolved, *intake_flow_io, config->source_stage_name, config->decoder_adapter_name,
-      &intake->settings, error);
+  rc = flow_protocol_network_intake_preflight(*intake_flow_io, config->source_stage_name,
+                                              config->decoder_stage_name, &intake->settings, error);
   if (rc != SALTS_OK) goto fail;
   rc = intake_owner_reply_policy(config, &intake->settings, error);
   if (rc != SALTS_OK) goto fail;
@@ -336,7 +335,7 @@ int turbo_flow_protocol_network_intake_create(
   rc = intake_owner_mapper_bind(intake->catalog, &intake->settings, &intake->mapper,
                                 &intake->mapper_contract, error);
   if (rc != SALTS_OK) goto fail;
-  intake->mapper_bound = intake->settings.schema_version == 3u;
+  intake->mapper_bound = intake->settings.mapper_enabled;
 
   /* First side effect can register callbacks. From here Graph teardown is ours. */
   intake->flow = *intake_flow_io;

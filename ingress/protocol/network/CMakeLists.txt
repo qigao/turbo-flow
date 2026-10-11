@@ -1,3 +1,13 @@
+salts_idl_target(
+  TARGET turbo_flow_network_decoder_config
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/src/protocol_network_decoder_config.schema"
+  ARTIFACT_NAME "network_decoder_config"
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
+set_target_properties(${turbo_flow_network_decoder_config_NATIVE_TARGET} PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 add_library(
   tf_protocol_network_intake_core STATIC
   src/flow_protocol_network_intake_config.c
@@ -10,11 +20,15 @@ set_target_properties(
 target_include_directories(
   tf_protocol_network_intake_core
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
-         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+         ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${PROJECT_SOURCE_DIR}/turbo_flow/src
+          "${turbo_flow_network_decoder_config_GENERATED_DIR}")
 target_link_libraries(
   tf_protocol_network_intake_core
   PUBLIC TurboFlow::Graph TurboFlow::ProtocolIngress TurboFlow::PluginHost
-  PRIVATE tf_protocol_envelope TurboFlow::CNetAdapter xxHash::xxhash)
+  PRIVATE tf_protocol_envelope TurboFlow::CNetAdapter TurboFlow::Product
+          ${turbo_flow_network_decoder_config_NATIVE_TARGET} xxHash::xxhash)
+add_dependencies(tf_protocol_network_intake_core turbo_flow_network_decoder_config_idl_codegen)
 
 add_library(
   tf_protocol_network_intake SHARED

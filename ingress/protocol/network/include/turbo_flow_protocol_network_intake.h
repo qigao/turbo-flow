@@ -3,14 +3,13 @@
 
 #include "turbo_flow_plugin.h"
 #include "turbo_flow_provider_binding.h"
-#include "turbo_flow_resolved_config.h"
 #include "turbo_flow_resource.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(3)
+#define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION UINT32_C(4)
 
 typedef struct turbo_flow_protocol_network_intake_s turbo_flow_protocol_network_intake_t;
 
@@ -40,7 +39,6 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   size_t size;
   uint32_t version;
   turbo_flow_plugin_catalog_snapshot_t *catalog;
-  const turbo_flow_resolved_config_t *resolved;
   /**
    * Borrowed STARTED Flow receiving normalized protocol messages. The named
    * decoded source must feed exactly one generic durable-buffer stage.
@@ -48,7 +46,8 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
   turbo_flow_t *downstream_flow;
   /** Exact parsed Source stage name; its adapter identity selects the factory. */
   const char *source_stage_name;
-  const char *decoder_adapter_name;
+  /** Exact stage name selecting protocol.decode and its generated typed config. */
+  const char *decoder_stage_name;
   const char *decoded_source_name;
   /**
    * Optional reply policy. NULL selects no replies.
@@ -64,7 +63,6 @@ typedef struct turbo_flow_protocol_network_intake_config_s {
 #define TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_CONFIG_INIT                                             \
   {sizeof(turbo_flow_protocol_network_intake_config_t),                                            \
    TURBO_FLOW_PROTOCOL_NETWORK_INTAKE_API_VERSION,                                                 \
-   NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
    NULL,                                                                                           \
@@ -115,8 +113,10 @@ typedef struct turbo_flow_protocol_network_intake_snapshot_s {
 /**
  * Prepare a canonical Source from its .flow typed config and deployment resource,
  * then compile one Source -> decoder edge. No network I/O starts during create.
- * catalog/resolved describe only decoder/protocol/mapper inputs and are never
- * consulted for Source provider selection or CNet fields. v2 configs are rejected.
+ * Both Source and decoder config come from their exact .flow stage blocks.
+ * catalog retains protocol/mapper implementations only. Older API layouts are
+ * rejected; no resolved-config input or fallback exists. Decoder schema version
+ * 1 uses an optional mapper record whose fields are all required when present.
  *
  * Preflight failure leaves *intake_flow_io caller-owned. Once materialization
  * begins, intake takes the Flow and sets *intake_flow_io to NULL, even on failure.
@@ -127,7 +127,9 @@ typedef struct turbo_flow_protocol_network_intake_snapshot_s {
  * component_runtime must stay alive through successful final destroy.
  * Invalid layout/arguments return SALTS_EINVAL; missing bindings return
  * SALTS_ENOENT; unsupported transport/capability returns SALTS_ENOTSUP; invalid
- * transport bounds return SALTS_ERANGE. Provider/codec errors are propagated.
+ * transport bounds return SALTS_ERANGE. Typed MessagePlan validation returns
+ * SALTS_EPROTO with the stage and any available field diagnostic. Provider/codec
+ * errors are propagated.
  * The real TCP/UDP create and retry sequence is exercised in
  * ingress/protocol/tests/protocol_network_e2e_fixture.c.
  */
