@@ -8,6 +8,12 @@ static_assert(std::is_standard_layout_v<turbo_flow_plugin_transactional_adapter_
 static_assert(std::is_standard_layout_v<turbo_flow_plugin_transactional_resource_provider_v1_t>);
 static_assert(std::is_standard_layout_v<turbo_flow_plugin_transactional_product_catalog_v1_t>);
 static_assert(std::is_standard_layout_v<turbo_flow_plugin_generation_config_t>);
+static_assert(std::is_standard_layout_v<turbo_flow_plugin_module_spec_t>);
+static_assert(std::is_same_v<
+              decltype(&turbo_flow_plugin_host_create_modules),
+              int (*)(const turbo_flow_plugin_host_config_t *,
+                      const turbo_flow_plugin_module_spec_t *, size_t, uint64_t,
+                      turbo_flow_plugin_host_t **, turbo_flow_plugin_error_t *)>);
 static_assert(TURBO_FLOW_PLUGIN_ABI_VERSION_MAJOR == 3u);
 static_assert(TURBO_FLOW_PLUGIN_CAP_EXTERNAL_POLL == (UINT64_C(1) << 6));
 static_assert(TURBO_FLOW_PLUGIN_CAP_OPERATION == (UINT64_C(1) << 8));

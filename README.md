@@ -91,6 +91,12 @@ Protocol decoders validate framing and normalize accepted data into the canonica
 
 NetworkIntake v4 selects its Source and decoder by exact `.flow` stage names and receives explicit Component/provider/resource resolvers. Both configurations use generated typed Messages; decoder schema 1 has an optional complete mapper record and no resolved-config input. CNet deployment resource Interfaces retain endpoint/TLS ownership. The compiled Source instance and generation scope survive stop until final destruction; failed cleanup returns an owner for explicit retry. See the [CNet migration and lifetime contract](io/cnet/ADR_CNET_PLUGIN.md#networkintake-v4-消费端迁移) and the real TCP/UDP integration tests.
 
+Deployment-owned PluginHost module lists use `turbo_flow_plugin_host_create_modules()`
+with explicit ID/version/absolute-path entries. The resolved-config
+`turbo_flow_plugin_host_create_configured()` entry point is removed. The list is
+borrowed only during creation; failed rollback returns an owner for destroy retry.
+Canonical provider modules continue to use Salts Plugin / Component scopes.
+
 PluginHost ABI 3.5 removes the resolved-config argument from
 `turbo_flow_plugin_generation_create()`. Pass the parsed `.flow` Graph, explicit
 Component/provider/resource resolvers, catalog snapshot and result domain directly.

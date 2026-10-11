@@ -1285,58 +1285,78 @@ int turbo_flow_plugin_host_load(turbo_flow_plugin_host_t *host, const char *path
   return flow_plugin_host_load_expected(host, path, NULL, NULL, error);
 }
 
-int turbo_flow_plugin_host_create_configured(
+/* Keep the deployment path contract, including Windows forward-slash UNC paths.
+ * Generic filesystem absolute-path classification does not admit the same set. */
+static int flow_plugin_module_path_valid(const char *path) {
+  const size_t length = flow_plugin_bounded_length(path, TURBO_FLOW_PLUGIN_PATH_MAX);
+  if (!path || length == 0u || length > TURBO_FLOW_PLUGIN_PATH_MAX) return 0;
+#ifdef _WIN32
+  if (length >= 2u &&
+      ((path[0] == '/' && path[1] == '/') || (path[0] == '\\' && path[1] == '\\')))
+    return 1;
+  if (length < 3u) return 0;
+  return ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+         path[1] == ':' && (path[2] == '/' || path[2] == '\\');
+#else
+  return path[0] == '/';
+#endif
+}
+
+int turbo_flow_plugin_host_create_modules(
     const turbo_flow_plugin_host_config_t *host_config,
-    const turbo_flow_resolved_config_t *resolved, uint64_t rollback_timeout_ms,
+    const turbo_flow_plugin_module_spec_t *modules, size_t module_count, uint64_t rollback_timeout_ms,
     turbo_flow_plugin_host_t **host_out, turbo_flow_plugin_error_t *error) {
   turbo_flow_plugin_host_t *host = NULL;
-  size_t count = 0u;
   int rc;
   if (host_out) *host_out = NULL;
-  if (!host_config || !resolved || !host_out || !flow_plugin_error_valid(error))
+  if (!host_config || (!modules && module_count) || !host_out || !flow_plugin_error_valid(error))
     return flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL,
-                                   NULL, "invalid configured PluginHost arguments");
-  rc = turbo_flow_resolved_config_plugin_count(resolved, &count);
-  if (rc != SALTS_OK)
-    return flow_plugin_error_write(error, rc, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL, NULL,
-                                   "resolved plugin manifest is invalid");
+                                   NULL, "invalid deployment module list arguments");
   rc = turbo_flow_plugin_host_create(host_config, &host, error);
   if (rc != SALTS_OK) return rc;
-  if (count > host->config.module_capacity) {
-    turbo_flow_plugin_error_t cleanup_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+  if (module_count > host->config.module_capacity) {
     rc = flow_plugin_error_write(error, SALTS_ENOSPC, TURBO_FLOW_PLUGIN_STAGE_CAPACITY, NULL, NULL,
-                                 "configured plugin count exceeds host module capacity");
-    if (turbo_flow_plugin_host_destroy(host, rollback_timeout_ms, &cleanup_error) != SALTS_OK) {
-      *host_out = host;
-      *error = cleanup_error;
-      return cleanup_error.status;
-    }
-    return rc;
+                                 "deployment module count exceeds host module capacity");
+    goto rollback;
   }
-  for (size_t i = 0u; i < count; ++i) {
-    turbo_flow_resolved_plugin_view_t plugin = TURBO_FLOW_RESOLVED_PLUGIN_VIEW_INIT;
-    rc = turbo_flow_resolved_config_plugin_at(resolved, i, &plugin);
-    if (rc != SALTS_OK)
-      (void)flow_plugin_error_write(error, rc, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT, NULL, NULL,
-                                    "resolved plugin manifest projection failed");
-    if (rc == SALTS_OK)
-      rc = flow_plugin_host_load_expected(host, plugin.path, plugin.id, plugin.version, error);
-    if (rc != SALTS_OK) {
-      turbo_flow_plugin_error_t load_error = *error;
-      turbo_flow_plugin_error_t rollback_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-      const int rollback_rc =
-          turbo_flow_plugin_host_destroy(host, rollback_timeout_ms, &rollback_error);
-      if (rollback_rc != SALTS_OK) {
-        *host_out = host;
-        *error = rollback_error;
-        return rollback_rc;
-      }
-      *error = load_error;
-      return rc;
+  /* Admission is complete before opening any DLL or invoking provider callbacks. */
+  for (size_t i = 0u; i < module_count; ++i) {
+    const turbo_flow_plugin_module_spec_t *module = &modules[i];
+    if (!flow_plugin_identity_valid(module->id) || !flow_plugin_version_valid(module->version) ||
+        !flow_plugin_module_path_valid(module->path)) {
+      rc = flow_plugin_error_write(error, SALTS_EINVAL, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT,
+                                   module->id, module->path, "invalid deployment module entry");
+      goto rollback;
     }
+    for (size_t prior = 0u; prior < i; ++prior) {
+      if (strcmp(modules[prior].id, module->id) == 0) {
+        rc = flow_plugin_error_write(error, SALTS_EALREADY, TURBO_FLOW_PLUGIN_STAGE_IDENTITY,
+                                     module->id, module->path, "duplicate deployment module identity");
+        goto rollback;
+      }
+    }
+  }
+  for (size_t i = 0u; i < module_count; ++i) {
+    rc = flow_plugin_host_load_expected(host, modules[i].path, modules[i].id, modules[i].version,
+                                        error);
+    if (rc != SALTS_OK) goto rollback;
   }
   *host_out = host;
   return SALTS_OK;
+
+rollback: {
+    turbo_flow_plugin_error_t load_error = *error;
+    turbo_flow_plugin_error_t rollback_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    const int rollback_rc =
+        turbo_flow_plugin_host_destroy(host, rollback_timeout_ms, &rollback_error);
+    if (rollback_rc != SALTS_OK) {
+      *host_out = host;
+      *error = rollback_error;
+      return rollback_rc;
+    }
+    *error = load_error;
+    return rc;
+  }
 }
 
 size_t turbo_flow_plugin_host_module_count(const turbo_flow_plugin_host_t *host) {

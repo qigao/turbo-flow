@@ -262,19 +262,39 @@ TURBO_FLOW_C_API int turbo_flow_plugin_host_create(const turbo_flow_plugin_host_
                                                    turbo_flow_plugin_host_t **host_out,
                                                    turbo_flow_plugin_error_t *error);
 
+/** One deployment-owned module selection; all strings are required and NUL-terminated. */
+typedef struct turbo_flow_plugin_module_spec_s {
+  const char *id;
+  const char *version;
+  const char *path;
+} turbo_flow_plugin_module_spec_t;
+
 /**
- * Create a fresh host and load the ordered DLL manifest from a resolved configuration.
+ * Create a fresh host from an explicit ordered deployment module list.
+ * @param host_config Bounded host configuration, copied on success.
+ * @param modules Array borrowed only during this call. Strings and array must remain immutable
+ * during the call, including lifecycle callbacks. May be NULL only when module_count is zero.
+ * IDs/versions obey the root vtable identity limits; paths must be absolute and no longer than
+ * TURBO_FLOW_PLUGIN_PATH_MAX. Duplicate IDs are rejected before any module is opened.
+ * @param module_count Number of entries, at most host_config's module_capacity.
+ * @param rollback_timeout_ms Timeout passed to host destruction on load failure.
+ * @param host_out Owned host on success. NULL on failure unless rollback also fails: then the
+ * caller owns a cleanup-only host and must retry turbo_flow_plugin_host_destroy().
+ * @param error Initialized structured error output; rollback error wins if cleanup fails.
+ * @return SALTS_OK; SALTS_EINVAL for invalid arguments/entries; SALTS_EALREADY for duplicate IDs;
+ * SALTS_ENOSPC for excess modules; or the exact allocation/load/rollback error.
  *
- * Each configured path is opened exactly once. The DLL's canonical root vtable identity and
- * version must exactly match the configured values before the plugin load callback is invoked.
- * No name search, alternate path, static provider, or replacement DLL is attempted.
- *
- * On load failure, already loaded modules are shut down and the output remains NULL. If rollback
- * itself fails, the retryable host is returned through `host_out` and the rollback error wins.
+ * All entries are validated before loading. Each listed path is opened once in order and its
+ * root ID/version must match exactly before its load callback. Failure rolls back earlier
+ * modules in reverse order. No search, alternate path or replacement provider is attempted.
+ * This replaces the removed resolved-config create_configured entry point; it does not load
+ * canonical Salts Component/provider modules, which remain owned by Salts Plugin.
+ * Example: const turbo_flow_plugin_module_spec_t modules[] = {{"acme.ops", "1.0", absolute_path}};
+ * turbo_flow_plugin_host_create_modules(&config, modules, 1u, 1000u, &host, &error);
  */
-TURBO_FLOW_C_API int turbo_flow_plugin_host_create_configured(
+TURBO_FLOW_C_API int turbo_flow_plugin_host_create_modules(
     const turbo_flow_plugin_host_config_t *host_config,
-    const turbo_flow_resolved_config_t *resolved, uint64_t rollback_timeout_ms,
+    const turbo_flow_plugin_module_spec_t *modules, size_t module_count, uint64_t rollback_timeout_ms,
     turbo_flow_plugin_host_t **host_out, turbo_flow_plugin_error_t *error);
 
 /**

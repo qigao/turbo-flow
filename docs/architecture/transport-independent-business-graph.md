@@ -26,43 +26,27 @@ Source 表示接收，Sink 表示发送，二者与 client/server 身份无关�
 两种角色，但连接、重连与协议状态只能由原生 owner 推进。Gateway 是装配和控制宿主；
 它的 socket+binary parser 是应用协议 Source，encoder+socket 是对应 Sink。
 
-MQTT/socket/HTTP/WS 的两种角色均通过配置选择 DLL provider 和资源实例，由统一 PluginHost
-vtable 装配；同一个 DLL 可注册多个端点能力，不要求每个角色各占一个 DLL。
-配置显式绑定 Source、schema、接收存储、业务图和 Sink 目的地。
-缺少所选 DLL、schema、存储能力或容量立即失败，不选择另一协议、内存后备或静态实现。
+MQTT/socket/HTTP/WS 的两种角色通过 `.flow` 选择 canonical provider 能力和具名资源，
+由 Salts Plugin / Component generation 管理模块与服务生命期。同一个模块可提供多种能力。
+`.flow` 显式绑定 Source、schema、接收存储、业务图和 Sink；部署资源提供端点与凭据。
+缺少所选模块、schema、存储能力或容量立即失败。
 
-### 配置加载与 vtable 边界
+### 部署模块加载边界
 
-~~~yaml
-version: 1
-plugins:
-  - id: turbo-flow.cnet
-    version: 1.0.0
-    path: C:/turbo-flow/plugins/turbo_flow_cnet_plugin.dll
-  - id: turbo-flow.chttp
-    version: 1.0.0
-    path: C:/turbo-flow/plugins/turbo_flow_chttp_plugin.dll
-adapters:
-  socket.input:
-    kind: cnet.stream_source
-    config: { ... }
-  http.output:
-    kind: chttp.client
-    config: { ... }
-~~~
+仍使用 PluginHost 的 operation/protocol 模块从部署方接收
+`turbo_flow_plugin_module_spec_t` 数组，由 `turbo_flow_plugin_host_create_modules()`
+创建宿主。每项给出必需的 id/version/绝对 path；数组与字符串仅在调用期间借用，
+包括生命周期回调期间必须保持不可变。该入口不用于加载 canonical CNet/CHTTP provider。
 
-plugins 是有序 DLL 清单。每项只接受 id/version/path，其中 path 必须是绝对路径；
-不接受候选目录、fallback DLL、静态 target 名或协议别名。配置解析生成不可变借用 view，
-turbo_flow_plugin_host_create_configured() 创建新的有界宿主并逐项加载。宿主只查找
-turbo_flow_plugin_get_api，取得版本化 root vtable 后，必须在调用 DLL 的 load() 前
-精确核验配置 ID、版本以及 root ABI。provider 注册和实际能力仍由该 vtable 完成，配置不传递
-函数地址或 DLL 内对象。
+宿主先检查完整清单的容量、字段及重复 ID，再逐项打开模块并查找
+`turbo_flow_plugin_get_api`，在调用 load 前精确核验 root ABI、ID 和版本。
+后续模块失败时，已提交模块按现有逆序阶段执行 quiesce、shutdown、destroy/unload。
+回滚失败返回仅用于清理的 owner，调用方显式重试 destroy，不能继续创建 generation。
+空清单只表示部署没有选择 PluginHost 模块，不能替代 Graph 所需能力。
 
-多 DLL 装配是一个启动事务：任一 open/symbol/ABI/身份/load/register 失败，已经提交的前序
-DLL 必须逆序 quiesce、shutdown、destroy、unload，不能发布半配置 PluginHost。若回滚回调本身
-失败，返回该可重试宿主和明确生命周期错误；调用方不得继续创建 generation。空 plugins
-只表示当前配置不需要外部 provider；一旦 Graph 引用了未注册 kind，preflight 直接失败，
-不会寻找同名系统 DLL 或链接进程内实现。
+旧 `turbo_flow_plugin_host_create_configured()` 和 YAML plugins/adapters 示例已移除；
+产品语义归 `.flow`，部署清单不能重定义 topology 或 provider schema。
+canonical provider 的 Component scope 和 resource lease 继续使用各自既有 owner。
 
 不选择“每种协议复制一张业务图”，因为会造成业务规则分叉；不选择 MQTT 作为内部总线格式，
 因为会让 topic/QoS 成为所有业务的必需字段。复用 CFlow 的现有图编译、执行和调度，不新增执行器。

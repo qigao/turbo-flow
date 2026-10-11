@@ -415,9 +415,8 @@ static int install_operation_runtime(const char *plugin_path) {
   turbo_flow_msg_init(&clone);
   host_config.lifecycle_observer = install_operation_lifecycle;
   host_config.lifecycle_observer_ctx = &unloads;
-  rc = turbo_flow_plugin_host_create(&host_config, &host, &plugin_error);
-  if (rc != SALTS_OK) goto cleanup_all;
-  rc = turbo_flow_plugin_host_load(host, plugin_path, &plugin_error);
+  const turbo_flow_plugin_module_spec_t module = {"fixture.operation", "1.0.0", plugin_path};
+  rc = turbo_flow_plugin_host_create_modules(&host_config, &module, 1u, 1000u, &host, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;
   rc = turbo_flow_plugin_catalog_snapshot_create(host, &snapshot, &plugin_error);
   if (rc != SALTS_OK) goto cleanup_all;

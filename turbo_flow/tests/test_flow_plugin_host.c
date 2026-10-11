@@ -127,118 +127,146 @@ static void flow_plugin_test_check_event(const flow_plugin_test_probe_t *probe, 
 }
 
 spec("unified PluginHost") {
-  it("creates a host from configured DLLs and verifies identity before plugin load") {
-    char yaml[2048];
+  it("loads deployment modules in order and releases the borrowed input after creation") {
     flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t host_config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
-    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
-    int size = snprintf(yaml, sizeof(yaml),
-                        "version: 1\nplugins:\n"
-                        "  - {id: fixture.one, version: 1.0.0, path: '%s'}\n"
-                        "  - {id: fixture.two, version: 1.0.0, path: '%s'}\n"
-                        "adapters: {}\n",
-                        FLOW_PLUGIN_FIXTURE_GOOD_ONE, FLOW_PLUGIN_FIXTURE_GOOD_TWO);
+    turbo_flow_plugin_module_spec_t modules[] = {
+        {"fixture.one", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE},
+        {"fixture.two", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO}};
 
-    check_true(size > 0 && (size_t)size < sizeof(yaml));
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)size, &resolved, &config_error),
-                SALTS_OK);
-    check_equal(turbo_flow_plugin_host_create_configured(&host_config, resolved, 1000u, &host,
-                                                         &plugin_error),
+    check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 2u, 1000u, &host, &error),
                 SALTS_OK);
     check_not_null(host);
+    memset(modules, 0, sizeof(modules));
     check_equal(turbo_flow_plugin_host_module_count(host), 2u);
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
-    turbo_flow_resolved_config_destroy(resolved);
-
-    size = snprintf(yaml, sizeof(yaml),
-                    "version: 1\nplugins:\n"
-                    "  - {id: fixture.wrong, version: 1.0.0, path: '%s'}\n"
-                    "adapters: {}\n",
-                    FLOW_PLUGIN_FIXTURE_GOOD_ONE);
-    check_true(size > 0 && (size_t)size < sizeof(yaml));
-    resolved = NULL;
-    host = NULL;
-    memset(&probe, 0, sizeof(probe));
-    config_error = (turbo_flow_config_error_t)TURBO_FLOW_CONFIG_ERROR_INIT;
-    plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)size, &resolved, &config_error),
-                SALTS_OK);
-    check_equal(turbo_flow_plugin_host_create_configured(&host_config, resolved, 1000u, &host,
-                                                         &plugin_error),
-                SALTS_EPROTO);
-    check_null(host);
-    check_equal(plugin_error.stage, TURBO_FLOW_PLUGIN_STAGE_IDENTITY);
-    check_equal(plugin_error.plugin_id, "fixture.wrong");
-    check_equal(probe.count, 0u);
-    turbo_flow_resolved_config_destroy(resolved);
+    flow_plugin_test_check_event(&probe, 0u, TURBO_FLOW_PLUGIN_LIFECYCLE_LOAD, "fixture.one", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 3u, TURBO_FLOW_PLUGIN_LIFECYCLE_LOAD, "fixture.two", SALTS_OK);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
   }
 
-  it("rolls back earlier configured DLLs when a later DLL cannot load") {
-    char yaml[2048];
-    flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t host_config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
-    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_resolved_config_t *resolved = NULL;
-    turbo_flow_plugin_host_t *host = NULL;
-    int size = snprintf(yaml, sizeof(yaml),
-                        "version: 1\nplugins:\n"
-                        "  - {id: fixture.one, version: 1.0.0, path: '%s'}\n"
-                        "  - {id: fixture.missing, version: 1.0.0, "
-                        "path: 'C:/turbo-flow-test/missing-plugin.dll'}\n"
-                        "adapters: {}\n",
-                        FLOW_PLUGIN_FIXTURE_GOOD_ONE);
+  it("rejects mismatched deployment ID and version before the plugin load callback") {
+    const turbo_flow_plugin_module_spec_t cases[] = {
+        {"fixture.wrong", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE},
+        {"fixture.one", "2.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE}};
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      flow_plugin_test_probe_t probe = {0};
+      turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 1u, 1u, 1u);
+      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_plugin_host_t *host = NULL;
+      check_equal(turbo_flow_plugin_host_create_modules(&config, &cases[i], 1u, 1000u, &host,
+                                                        &error), SALTS_EPROTO);
+      check_null(host);
+      check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_IDENTITY);
+      check_equal(error.plugin_id, cases[i].id);
+      check_equal(probe.count, 0u);
+    }
+  }
 
-    check_true(size > 0 && (size_t)size < sizeof(yaml));
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)size, &resolved, &config_error),
+  it("validates the complete module list before any plugin side effects") {
+    char long_path[TURBO_FLOW_PLUGIN_PATH_MAX + 2u];
+    char long_id[TURBO_FLOW_PLUGIN_ID_MAX + 2u];
+    char long_version[TURBO_FLOW_PLUGIN_VERSION_MAX + 2u];
+    const turbo_flow_plugin_module_spec_t invalid[] = {
+        {NULL, "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"invalid id", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {long_id, "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.two", NULL, FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.two", "", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.two", "invalid version", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.two", long_version, FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.two", "1.0.0", NULL},
+        {"fixture.two", "1.0.0", ""},
+        {"fixture.two", "1.0.0", "relative/plugin.dll"},
+        {"fixture.two", "1.0.0", long_path}};
+    memset(long_path, 'x', sizeof(long_path) - 1u);
+    long_path[sizeof(long_path) - 1u] = '\0';
+    memset(long_id, 'x', sizeof(long_id) - 1u);
+    long_id[sizeof(long_id) - 1u] = '\0';
+    memset(long_version, '1', sizeof(long_version) - 1u);
+    long_version[sizeof(long_version) - 1u] = '\0';
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+      flow_plugin_test_probe_t probe = {0};
+      turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
+      turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+      turbo_flow_plugin_host_t *host = NULL;
+      const turbo_flow_plugin_module_spec_t modules[] = {
+          {"fixture.one", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE}, invalid[i]};
+      check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 2u, 1000u, &host, &error),
+                  SALTS_EINVAL);
+      check_null(host);
+      check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_ARGUMENT);
+      check_equal(probe.count, 0u);
+    }
+  }
+
+  it("admits an empty list and rejects null, duplicate and over-capacity module lists") {
+    flow_plugin_test_probe_t probe = {0};
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_host_t *host = NULL;
+    const turbo_flow_plugin_module_spec_t modules[] = {
+        {"fixture.one", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE},
+        {"fixture.one", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO}};
+    check_equal(turbo_flow_plugin_host_create_modules(&config, NULL, 0u, 1000u, &host, &error),
                 SALTS_OK);
-    check_equal(turbo_flow_plugin_host_create_configured(&host_config, resolved, 1000u, &host,
-                                                         &plugin_error),
+    check_equal(turbo_flow_plugin_host_module_count(host), 0u);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
+    host = NULL;
+    check_equal(turbo_flow_plugin_host_create_modules(&config, NULL, 1u, 1000u, &host, &error),
+                SALTS_EINVAL);
+    check_null(host);
+    check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 2u, 1000u, &host, &error),
+                SALTS_EALREADY);
+    check_null(host);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_IDENTITY);
+    config.module_capacity = 1u;
+    check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 2u, 1000u, &host, &error),
+                SALTS_ENOSPC);
+    check_null(host);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_CAPACITY);
+    check_equal(probe.count, 0u);
+  }
+
+  it("rolls back deployment modules in reverse order when a later DLL cannot load") {
+    flow_plugin_test_probe_t probe = {0};
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 3u, 3u, 3u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
+    turbo_flow_plugin_host_t *host = NULL;
+    const turbo_flow_plugin_module_spec_t modules[] = {
+        {"fixture.one", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE},
+        {"fixture.two", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_TWO},
+        {"fixture.missing", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE ".missing"}};
+    check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 3u, 1000u, &host, &error),
                 SALTS_ENOENT);
     check_null(host);
-    check_equal(plugin_error.stage, TURBO_FLOW_PLUGIN_STAGE_OPEN);
-    check_equal(probe.count, 7u);
-    flow_plugin_test_check_event(&probe, 3u, TURBO_FLOW_PLUGIN_LIFECYCLE_QUIESCE, "fixture.one",
-                                 SALTS_OK);
-    flow_plugin_test_check_event(&probe, 4u, TURBO_FLOW_PLUGIN_LIFECYCLE_SHUTDOWN, "fixture.one",
-                                 SALTS_OK);
-    flow_plugin_test_check_event(&probe, 5u, TURBO_FLOW_PLUGIN_LIFECYCLE_DESTROY, "fixture.one",
-                                 SALTS_OK);
-    flow_plugin_test_check_event(&probe, 6u, TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD, "fixture.one",
-                                 SALTS_OK);
-    turbo_flow_resolved_config_destroy(resolved);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_OPEN);
+    check_equal(probe.count, 14u);
+    flow_plugin_test_check_event(&probe, 6u, TURBO_FLOW_PLUGIN_LIFECYCLE_QUIESCE, "fixture.two", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 7u, TURBO_FLOW_PLUGIN_LIFECYCLE_QUIESCE, "fixture.one", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 8u, TURBO_FLOW_PLUGIN_LIFECYCLE_SHUTDOWN, "fixture.two", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 9u, TURBO_FLOW_PLUGIN_LIFECYCLE_SHUTDOWN, "fixture.one", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 10u, TURBO_FLOW_PLUGIN_LIFECYCLE_DESTROY, "fixture.two", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 11u, TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD, "fixture.two", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 12u, TURBO_FLOW_PLUGIN_LIFECYCLE_DESTROY, "fixture.one", SALTS_OK);
+    flow_plugin_test_check_event(&probe, 13u, TURBO_FLOW_PLUGIN_LIFECYCLE_UNLOAD, "fixture.one", SALTS_OK);
   }
 
-  it("returns a retryable host when configured-load rollback itself fails") {
-    char yaml[2048];
+  it("returns a retryable host when deployment-load rollback itself fails") {
     flow_plugin_test_probe_t probe = {0};
-    turbo_flow_plugin_host_config_t host_config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
-    turbo_flow_plugin_error_t plugin_error = TURBO_FLOW_PLUGIN_ERROR_INIT;
-    turbo_flow_config_error_t config_error = TURBO_FLOW_CONFIG_ERROR_INIT;
-    turbo_flow_resolved_config_t *resolved = NULL;
+    turbo_flow_plugin_host_config_t config = flow_plugin_test_config(&probe, 2u, 2u, 2u);
+    turbo_flow_plugin_error_t error = TURBO_FLOW_PLUGIN_ERROR_INIT;
     turbo_flow_plugin_host_t *host = NULL;
-    int size = snprintf(yaml, sizeof(yaml),
-                        "version: 1\nplugins:\n"
-                        "  - {id: fixture.quiesce-once, version: 1.0.0, path: '%s'}\n"
-                        "  - {id: fixture.missing, version: 1.0.0, "
-                        "path: 'C:/turbo-flow-test/missing-plugin.dll'}\n"
-                        "adapters: {}\n",
-                        FLOW_PLUGIN_FIXTURE_QUIESCE_ONCE);
-
-    check_true(size > 0 && (size_t)size < sizeof(yaml));
-    check_equal(turbo_flow_config_resolve_yaml(yaml, (size_t)size, &resolved, &config_error),
-                SALTS_OK);
-    check_equal(turbo_flow_plugin_host_create_configured(&host_config, resolved, 1000u, &host,
-                                                         &plugin_error),
+    const turbo_flow_plugin_module_spec_t modules[] = {
+        {"fixture.quiesce-once", "1.0.0", FLOW_PLUGIN_FIXTURE_QUIESCE_ONCE},
+        {"fixture.missing", "1.0.0", FLOW_PLUGIN_FIXTURE_GOOD_ONE ".missing"}};
+    check_equal(turbo_flow_plugin_host_create_modules(&config, modules, 2u, 1000u, &host, &error),
                 SALTS_EIO);
     check_not_null(host);
-    check_equal(plugin_error.stage, TURBO_FLOW_PLUGIN_STAGE_QUIESCE);
-    plugin_error = (turbo_flow_plugin_error_t)TURBO_FLOW_PLUGIN_ERROR_INIT;
-    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &plugin_error), SALTS_OK);
-    turbo_flow_resolved_config_destroy(resolved);
+    check_equal(error.stage, TURBO_FLOW_PLUGIN_STAGE_QUIESCE);
+    check_equal(turbo_flow_plugin_host_destroy(host, 1000u, &error), SALTS_OK);
   }
 
   it("rejects external progress capability without a transactional Product provider") {

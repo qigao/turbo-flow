@@ -565,20 +565,26 @@ Adapter commands use `turbo_flow_resource_command()` and a stable command-capabl
 connection resource provider. The former `turbo_flow_adapter_command()` API,
 its payload types and the adapter ops command tail field have been removed.
 Consumers must register resource metadata/command callbacks and recompile against
-the new adapter ops layout. The plugin ABI is exactly 3.0.
+the new adapter ops layout. The plugin ABI is exactly 3.5.
 ABI 1.x/2.x plugins are rejected before load or registration: the root
 vtable also gates adapter layouts passed later across DLL boundaries. Host config
 and Product owner descriptors must be complete; old short layouts and padding
 compatibility are removed. Existing `_v1` type names do not enable ABI 1.x support.
 Snapshot data remains observed state.
 
-Product startup resolves an ordered `plugins: [{id, version, path}]` manifest and
-creates PluginHost through `turbo_flow_plugin_host_create_configured()`. Paths
-must be absolute. The host opens only that path, resolves only
-`turbo_flow_plugin_get_api`, and compares configured identity/version before
-calling the DLL vtable. A later module failure rolls back earlier modules in
-reverse order; there is no module search, static-provider fallback, or partial
-catalog publication.
+Deployment supplies an ordered array of `turbo_flow_plugin_module_spec_t` to
+`turbo_flow_plugin_host_create_modules()` for the remaining PluginHost modules.
+The array contains explicit ID/version/absolute-path selections and is borrowed
+only during creation. Complete list validation precedes DLL loading; exact root
+identity/version admission precedes each plugin load callback. A later failure
+rolls back earlier modules through reverse-order quiesce, shutdown and destruction.
+Rollback failure returns a cleanup-only host for explicit destroy retry.
+
+Canonical provider/Component modules use Salts Plugin and the retained Component
+generation scope instead. Neither path consumes YAML module configuration.
+Product topology and typed node policy come from `.flow`; named resources and
+module selections are explicit deployment inputs. The removed
+`turbo_flow_plugin_host_create_configured()` has no forwarding alias.
 
 Hosts serialize adapter commands with lifecycle/configuration calls. For sink
 endpoint replacement, first pause and drain core publication so no consume call

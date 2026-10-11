@@ -156,3 +156,45 @@ CNet missing-transitive negative fixture (`tests/install_consumer/run.cmake`):
 copying only the plugin does not isolate dependency search from the inherited
 runtime paths. No gate is skipped and full installed runtime qualification is
 not claimed. Debug/sanitizers and other platforms were not rerun for this slice.
+
+
+## Explicit deployment module loading (2026-10-11)
+
+The remaining configured host-loading consumer used resolved YAML only to
+project ordered module ID/version/path selections. It is replaced by
+`turbo_flow_plugin_host_create_modules()` and a borrowed native module-spec array.
+All entries, duplicate IDs and capacity are admitted before any module opens;
+identity/version checks still precede each plugin load callback. Successful
+creation retains no pointers into the caller's array. Rollback preserves the
+existing phase order and returns a cleanup-only host if quiesce/shutdown fails.
+
+Keeping a nullable resolved input would retain the Config dependency; switching
+to unchecked host_load calls would lose deployment identity admission. The chosen
+entry point reuses the existing loader and destruction owner. It introduces no
+new module registry, parser or canonical provider publication path. Canonical
+Salts Plugin/Component modules remain outside this PluginHost module list.
+
+The old create_configured symbol is removed without an alias. Consumers must
+supply explicit deployment entries and handle a non-NULL cleanup owner on error.
+The root vtable/config layout and ABI 3.5 remain unchanged; this is a host API
+symbol replacement, not a provider ABI extension. Rollback uses the previous
+complete host package and its matching caller. Security/Policy, Product assembly
+and physical Config removal remain open under #241.
+
+
+Validation for this slice: `cmake --build --preset win-release-user`,
+`cmake --build --preset install-win-release-user`,
+`ctest --preset win-release-user -R "^test_flow_plugin_host$" --output-on-failure`
+and `ctest --preset win-release-user -L plugin --output-on-failure` pass
+(1/1 focused host test and 25/25 plugin regressions). The host suite covers
+ordered loading, ID/version mismatch before load, invalid later entries before
+any load, empty/null/duplicate/capacity admission, reverse rollback and retryable
+cleanup. The C++ exact-signature contract compiles in the host suite.
+
+The formal `test_turbo_flow_install_consumer` still fails. Its full installed
+C++ consumer compiles/links the new module-list API, but is not run before the
+CNet consumer build fails: installed Salts `platform.h` includes missing
+`cmeta_api.h`. The shared Salts root changed during validation; its preceding
+2.3.0-rc.11 provenance record is now in a backup directory. This run neither
+qualifies the current shared SDK nor reaches the previously failing missing-DLL
+negative case. Debug/sanitizers and other platforms were not run in this slice.
