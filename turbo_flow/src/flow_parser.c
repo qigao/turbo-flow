@@ -1098,7 +1098,8 @@ int turbo_flow_parse_string(turbo_flow_t *flow, const char *text, size_t len) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot parse after compile");
   }
 
-  flow_clear_plan(flow);
+  rc = flow_clear_plan(flow);
+  if (rc != SALTS_OK) return rc;
   flow_clear_error(flow);
 
   rc = flow_parse_ctx_init(&ctx, flow);

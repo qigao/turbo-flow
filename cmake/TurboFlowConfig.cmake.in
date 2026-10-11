@@ -155,10 +155,10 @@ if(_TurboFlow_needs_rules_forge)
   _TurboFlow_verify_dependency_root(RulesForge RULES_FORGE_ROOT)
 endif()
 if(_TurboFlow_needs_turbodb)
-  _TurboFlow_require_dependency_root(Orm TURBODB_ROOT Orm::C)
-  find_dependency(Orm CONFIG REQUIRED
+  _TurboFlow_require_dependency_root(TurboDB TURBODB_ROOT Orm::C)
+  find_dependency(TurboDB 2.3.4 CONFIG REQUIRED
                   PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
-  _TurboFlow_verify_dependency_root(Orm TURBODB_ROOT)
+  _TurboFlow_verify_dependency_root(TurboDB TURBODB_ROOT)
 endif()
 
 if("CHTTPAdapter" IN_LIST _TurboFlow_requested_components)

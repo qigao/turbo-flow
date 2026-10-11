@@ -24,8 +24,8 @@ static const char FLOW_SEGMENT_STATUS_SCHEMA_TEXT[] =
     "  uint32 edge_index;\n"
     "  uint32 width;\n"
     "  uint32 capacity;\n"
-    "  string load;\n"
     "  bool saturated;\n"
+    "  string load;\n"
     "}\n";
 
 static const turbo_flow_resource_schema_t FLOW_RUNTIME_STATUS_SCHEMA = {
@@ -49,9 +49,9 @@ static int flow_native_available(const turbo_flow_t *flow) {
 
 static uint64_t flow_native_generation(const turbo_flow_t *flow) {
   uint64_t generation;
-  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&flow->runtime_mutex);
   generation = flow->runtime_generation;
-  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&flow->runtime_mutex);
   return generation == 0u ? 1u : generation;
 }
 
@@ -225,13 +225,13 @@ int flow_native_resource_command(turbo_flow_t *flow, size_t index,
   rc = turbo_flow_runtime_snapshot(flow, &after);
   if (rc != SALTS_OK) return rc;
   if (before.accepting_publishes != after.accepting_publishes) {
-    salts_mutex_lock(&flow->runtime_mutex);
+    cmeta_mutex_lock(&flow->runtime_mutex);
     if (flow->runtime_generation == UINT64_MAX) {
-      salts_mutex_unlock(&flow->runtime_mutex);
+      cmeta_mutex_unlock(&flow->runtime_mutex);
       return SALTS_ERANGE;
     }
     ++flow->runtime_generation;
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
   }
   return SALTS_OK;
 }

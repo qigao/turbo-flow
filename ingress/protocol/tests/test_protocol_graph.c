@@ -1,7 +1,7 @@
 #include "tinytest.h"
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "turbo_flow_protocol_graph.h"
-#include "salts_thread.h"
+#include "cmeta_thread.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -43,7 +43,7 @@ static int graph_async_gate_stage(turbo_flow_msg_t *message, void *ctx) {
   if (!gate || !message) return SALTS_EINVAL;
   atomic_store_explicit(&gate->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&gate->allow_exit, memory_order_acquire))
-    salts_sleep_ms(1);
+    cmeta_sleep_ms(1);
   return SALTS_OK;
 }
 
@@ -165,7 +165,7 @@ spec("protocol graph bridge") {
     graph_async_gate_t gate;
     graph_completion_probe_t completion;
     graph_publish_thread_t publish;
-    salts_thread_t thread;
+    cmeta_thread_t thread;
     turbo_flow_t *flow = turbo_flow_create();
     int returned_before_release;
 
@@ -208,14 +208,14 @@ spec("protocol graph bridge") {
     publish.request = &request;
     publish.status = SALTS_EBUSY;
 
-    check_equal(salts_thread_create(&thread, graph_publish_thread_run, &publish), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, graph_publish_thread_run, &publish), SALTS_OK);
     for (int i = 0; i < 1000 && !atomic_load_explicit(&gate.entered, memory_order_acquire); ++i)
-      salts_sleep_ms(1);
+      cmeta_sleep_ms(1);
     returned_before_release = atomic_load_explicit(&publish.returned, memory_order_acquire);
     atomic_store_explicit(&gate.allow_exit, 1, memory_order_release);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
     for (int i = 0; i < 1000 && !atomic_load_explicit(&completion.calls, memory_order_acquire); ++i)
-      salts_sleep_ms(1);
+      cmeta_sleep_ms(1);
 
     check_equal(returned_before_release, 1);
     check_equal(publish.status, SALTS_OK);

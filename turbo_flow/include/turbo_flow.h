@@ -4,8 +4,8 @@
 #include "turbo_flow_export.h"
 #include "platform.h"
 #include <salts/clock.h>
-#include "salts_buffer.h"
-#include "salts_error.h"
+#include "cmeta_buffer.h"
+#include "salts/error_codes.h"
 #include "turbo_flow_domain.h"
 #include "turbo_flow_config_limits.h"
 #include "tstr.h"
@@ -909,7 +909,7 @@ typedef struct turbo_flow_resource_command_s {
   char target_uid[TURBO_FLOW_RESOURCE_UID_MAX + 1u];
   char idempotency_key[TURBO_FLOW_RESOURCE_COMMAND_KEY_MAX + 1u];
   uint64_t expected_generation;
-  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute cmeta_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
   uint32_t parallelism;
   /** Resize-only owner drain budget; UINT64_MAX waits without a drain deadline. */
@@ -1011,7 +1011,7 @@ typedef struct turbo_flow_resize_workflow_spec_s {
   uint64_t pool_generation;
   uint32_t parallelism;
   uint64_t drain_timeout_ms;
-  /** Absolute salts_hrtime() deadline; UINT64_MAX means no deadline. */
+  /** Absolute cmeta_hrtime() deadline; UINT64_MAX means no deadline. */
   uint64_t deadline_ns;
 } turbo_flow_resize_workflow_spec_t;
 
@@ -1187,6 +1187,10 @@ typedef struct turbo_flow_adapter_ops_s {
    *
    * The flow data planes and executors are already created, but external
    * ingress should not publish messages until turbo_flow_start() returns.
+   * The core records rollback ownership before calling start. On failure it
+   * invokes this binding's stop callback along with earlier started bindings.
+   * Keep partially initialized resources visible to stop until cleanup succeeds.
+   * An adapter that can retain resources after start fails must provide stop.
    */
   int (*start)(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage);
   /**
@@ -1200,7 +1204,12 @@ typedef struct turbo_flow_adapter_ops_s {
   /** Adapter-owned bounded retry path, required only when stage retry is configured. */
   int (*consume_retry)(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage,
                        turbo_flow_msg_t *msg, const turbo_flow_retry_policy_t *policy);
-  /** Stop one active source/sink adapter binding during turbo_flow_stop(). */
+  /**
+   * Stop one source/sink binding during explicit stop or failed-start rollback.
+   * Must accept partial initialization, including a failed start that created
+   * no resources or already cleaned up. Report only remaining cleanup failures
+   * through turbo_flow_adapter_report_stop_status(), after settling Flow claims.
+   */
   void (*stop)(void *ctx, turbo_flow_t *flow, const turbo_flow_stage_plan_t *stage);
   /** Release adapter-wide resources when the adapter registry is cleared. */
   void (*shutdown)(void *ctx);
@@ -1873,6 +1882,18 @@ typedef struct turbo_flow_control_command_s {
 #define TURBO_FLOW_CONTROL_COMMAND_INIT {sizeof(turbo_flow_control_command_t), 0}
 
 TURBO_FLOW_C_API turbo_flow_t *turbo_flow_create(void);
+/**
+ * Stop a running flow and release its plan and registries after successful stop.
+ *
+ * Lifecycle operations must be serialized by the host. NULL is a no-op. If the
+ * implicit stop fails, the Flow remains caller-owned in FAILED state and
+ * turbo_flow_last_error() records the stop error. A Flow already awaiting a stop
+ * retry is retained with SALTS_EBUSY; destroy does not retry adapter callbacks.
+ * In either case, keep the Flow and adapter contexts alive, explicitly retry
+ * turbo_flow_stop() until it succeeds, then call destroy again. Callers needing
+ * a return status should stop explicitly before destroy. A successful destroy
+ * invalidates the pointer; never query it afterwards.
+ */
 TURBO_FLOW_C_API void turbo_flow_destroy(turbo_flow_t *flow);
 
 /**

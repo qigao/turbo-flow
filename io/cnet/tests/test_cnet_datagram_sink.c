@@ -1,7 +1,9 @@
 #include "tinytest.h"
 #include "turbo_flow_cnet.h"
+#include "turbo_flow_cnet_test_internal.h"
 
 #include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdatomic.h>
 #include <string.h>
@@ -18,6 +20,31 @@ typedef struct datagram_sink_completion_s {
   atomic_size_t calls;
   atomic_int status;
 } datagram_sink_completion_t;
+
+typedef struct datagram_sink_snapshot_race_s {
+  turbo_flow_cnet_datagram_sink_t *sink;
+  atomic_bool ready;
+  atomic_bool done;
+  atomic_size_t snapshots;
+  atomic_int status;
+} datagram_sink_snapshot_race_t;
+
+static void datagram_sink_snapshot_race(void *ctx) {
+  datagram_sink_snapshot_race_t *race = (datagram_sink_snapshot_race_t *)ctx;
+  while (!atomic_load_explicit(&race->done, memory_order_acquire)) {
+    turbo_flow_cnet_datagram_sink_snapshot_t snapshot = TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
+    int status = turbo_flow_cnet_datagram_sink_snapshot(race->sink, &snapshot);
+    if (status != SALTS_OK || snapshot.active_requests > 2u ||
+        (snapshot.state == TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED && snapshot.bound_port != 0u)) {
+      atomic_store_explicit(&race->status, status != SALTS_OK ? status : SALTS_EPROTO,
+                            memory_order_release);
+      break;
+    }
+    (void)atomic_fetch_add_explicit(&race->snapshots, 1u, memory_order_relaxed);
+    atomic_store_explicit(&race->ready, true, memory_order_release);
+    cmeta_thread_yield();
+  }
+}
 
 static native_io_backend_kind datagram_sink_backend(void) {
 #if defined(_WIN32)
@@ -113,6 +140,132 @@ static void datagram_sink_message(turbo_flow_msg_t *message, const char *payload
 }
 
 spec("TurboFlow CNet datagram sink") {
+  static datagram_sink_snapshot_race_t race;
+  static cmeta_thread_t reader = NULL;
+  after_each() {
+    if (reader) {
+      atomic_store_explicit(&race.done, true, memory_order_release);
+      check_equal(cmeta_thread_join(&reader), SALTS_OK);
+    }
+  }
+
+  it("retains native owners after stop or destroy fails and retries only explicitly") {
+    const int statuses[] = {SALTS_EIO, SALTS_ETIMEDOUT, SALTS_EBUSY};
+    for (size_t index = 0u; index < sizeof(statuses) / sizeof(statuses[0]); ++index) {
+      cnet_datagram_config native = datagram_sink_cnet_config(2u);
+      turbo_flow_cnet_datagram_sink_t *sink = NULL;
+      turbo_flow_cnet_datagram_sink_snapshot_t snapshot = TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
+      turbo_flow_t *flow = datagram_sink_flow(&native, datagram_sink_peer(9u), &sink);
+      check_not_null(flow);
+      if (index < 2u)
+        check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_stop(sink, statuses[index], false),
+                    SALTS_OK);
+      else
+        check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_destroy(sink, statuses[index]),
+                    SALTS_OK);
+      check_equal(turbo_flow_stop(flow), statuses[index]);
+      check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED);
+      check_equal(snapshot.status, statuses[index]);
+      check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_EBUSY);
+      /* Fault admission requires the original native owner to remain initialized. */
+      check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_destroy(sink, SALTS_EBUSY), SALTS_OK);
+      turbo_flow_destroy(flow);
+      check_equal(turbo_flow_stop(flow), SALTS_EBUSY);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_destroy(flow);
+      check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_OK);
+    }
+  }
+
+  it("settles two native-pending claims once while failed stops retain their Actor tokens") {
+    cnet_datagram_config native = datagram_sink_cnet_config(2u);
+    turbo_flow_cnet_datagram_sink_t *sink = NULL;
+    turbo_flow_cnet_datagram_sink_snapshot_t snapshot = TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
+    datagram_sink_completion_t completion[2];
+    turbo_flow_t *flow = datagram_sink_flow(&native, datagram_sink_peer(9u), &sink);
+    uint64_t deadline;
+    check_not_null(flow);
+    for (size_t index = 0u; index < 2u; ++index) {
+      turbo_flow_msg_t message;
+      atomic_init(&completion[index].calls, 0u);
+      atomic_init(&completion[index].status, SALTS_EALREADY);
+      datagram_sink_message(&message, index == 0u ? "first" : "second");
+      check_equal(turbo_flow_publish_async(flow, "input", &message, datagram_sink_complete,
+                                           &completion[index]), SALTS_OK);
+      turbo_flow_msg_cleanup(&message);
+    }
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    do {
+      check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
+      if (snapshot.active_requests < 2u) cmeta_thread_yield();
+    } while (snapshot.active_requests < 2u && cmeta_monotonic_ms() < deadline);
+    check_equal(snapshot.active_requests, (size_t)2u);
+    /* Drive real native send admission without observing its terminal batch. */
+    check_equal(turbo_flow_cnet_test_datagram_sink_submit_ready(sink), SALTS_OK);
+    for (size_t index = 0u; index < 2u; ++index)
+      check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)0u);
+
+    race.sink = sink;
+    atomic_init(&race.ready, false);
+    atomic_init(&race.done, false);
+    atomic_init(&race.snapshots, 0u);
+    atomic_init(&race.status, SALTS_OK);
+    check_equal(cmeta_thread_create(&reader, datagram_sink_snapshot_race, &race), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    while (!atomic_load_explicit(&race.ready, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) cmeta_thread_yield();
+    check_true(atomic_load_explicit(&race.ready, memory_order_acquire));
+    check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_stop(sink, SALTS_ETIMEDOUT, false),
+                SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    for (size_t index = 0u; index < 2u; ++index) {
+      check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)1u);
+      check_equal(atomic_load_explicit(&completion[index].status, memory_order_acquire),
+                  SALTS_ESHUTDOWN);
+    }
+    check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED);
+    check_equal(snapshot.active_requests, (size_t)2u);
+    check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_stop(sink, SALTS_EIO, false), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_EIO);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    atomic_store_explicit(&race.done, true, memory_order_release);
+    check_equal(cmeta_thread_join(&reader), SALTS_OK);
+    check_equal(atomic_load_explicit(&race.status, memory_order_acquire), SALTS_OK);
+    check_greater(atomic_load_explicit(&race.snapshots, memory_order_acquire), (size_t)0u);
+    check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_DATAGRAM_SINK_STOPPED);
+    check_equal(snapshot.active_requests, (size_t)0u);
+    check_equal(snapshot.messages_sent, (uint64_t)0u);
+    for (size_t index = 0u; index < 2u; ++index) {
+      check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)1u);
+      check_equal(atomic_load_explicit(&completion[index].status, memory_order_acquire),
+                  SALTS_ESHUTDOWN);
+    }
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_OK);
+  }
+
+  it("reports a native drain error and permits explicit cleanup retry") {
+    cnet_datagram_config native = datagram_sink_cnet_config(2u);
+    turbo_flow_cnet_datagram_sink_t *sink = NULL;
+    turbo_flow_cnet_datagram_sink_snapshot_t snapshot = TURBO_FLOW_CNET_DATAGRAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = datagram_sink_flow(&native, datagram_sink_peer(9u), &sink);
+    check_not_null(flow);
+    check_equal(turbo_flow_cnet_test_datagram_sink_fail_next_stop(sink, SALTS_EIO, true), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_EIO);
+    check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_DATAGRAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EIO);
+    check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_datagram_sink_destroy(sink), SALTS_OK);
+  }
+
   it("settles one raw UDP terminal only after the tagged send completes") {
     static const char payload[] = "udp-terminal";
     datagram_sink_receiver_t receiver = {0};
@@ -147,9 +300,9 @@ spec("TurboFlow CNet datagram sink") {
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_datagram_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_OK);
@@ -195,12 +348,12 @@ spec("TurboFlow CNet datagram sink") {
     turbo_flow_msg_cleanup(&first_message);
     turbo_flow_msg_cleanup(&second_message);
 
-    deadline = salts_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + DATAGRAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
-      if (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u) salts_sleep_ms(1u);
+      if (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u) cmeta_sleep_ms(1u);
     } while (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(turbo_flow_cnet_datagram_sink_snapshot(sink, &snapshot), SALTS_OK);
     check_equal(snapshot.active_requests, (size_t)1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)0u);

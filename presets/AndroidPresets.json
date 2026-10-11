@@ -20,7 +20,16 @@
             "name": "android-vcpkg-chainload",
             "hidden": true,
             "cacheVariables": {
-                "VCPKG_MANIFEST_MODE": true
+                "VCPKG_MANIFEST_MODE": true,
+                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"
+            }
+        },
+        {
+            "name": "android-win-paths",
+            "hidden": true,
+            "inherits": "ISWindows",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
             }
         },
         {
@@ -38,7 +47,7 @@
         },
         {
             "name": "android-arm64-v8a-release",
-            "hidden": true,
+            "displayName": "Android arm64-v8a Release",
             "inherits": ["android-base", "release-mode"],
             "binaryDir": "${sourceDir}/build/android-arm64-v8a-release",
             "cacheVariables": {
@@ -46,7 +55,8 @@
                 "VCPKG_TARGET_TRIPLET": "arm64-android",
                 "ENABLE_TESTS": false,
                 "BUILD_TESTS": "OFF",
-                "BUILD_EXAMPLES": "OFF"
+                "BUILD_EXAMPLES": "OFF",
+                "BUILD_BENCHMARKS": "OFF"
             }
         },
         {

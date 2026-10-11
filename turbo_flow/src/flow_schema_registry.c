@@ -1,6 +1,6 @@
 #include "turbo_flow.h"
 
-#include "salts_thread.h"
+#include "cmeta_thread.h"
 #include "turbo_flow_stl_error_internal.h"
 
 #include <stdlib.h>
@@ -145,7 +145,7 @@ typedef struct flow_schema_registry_entry_s {
 
 struct turbo_flow_schema_registry_s {
   vec_t entries;
-  salts_mutex_t lock;
+  cmeta_mutex_t lock;
   int lock_initialized;
 };
 
@@ -271,14 +271,14 @@ turbo_flow_schema_registry_t *turbo_flow_schema_registry_create(void) {
     free(registry);
     return NULL;
   }
-  salts_mutex_init(&registry->lock);
+  cmeta_mutex_init(&registry->lock);
   registry->lock_initialized = 1;
   return registry;
 }
 
 void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) {
   if (!registry) return;
-  if (registry->lock_initialized) salts_mutex_lock(&registry->lock);
+  if (registry->lock_initialized) cmeta_mutex_lock(&registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t **entry =
         (flow_schema_registry_entry_t **)vec_at(&registry->entries, i);
@@ -286,8 +286,8 @@ void turbo_flow_schema_registry_destroy(turbo_flow_schema_registry_t *registry) 
   }
   vec_destroy(&registry->entries);
   if (registry->lock_initialized) {
-    salts_mutex_unlock(&registry->lock);
-    salts_mutex_destroy(&registry->lock);
+    cmeta_mutex_unlock(&registry->lock);
+    cmeta_mutex_destroy(&registry->lock);
   }
   free(registry);
 }
@@ -310,19 +310,19 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
        strcmp(match->type_name, schema->type_name) != 0)) {
     return SALTS_EPROTO;
   }
-  salts_mutex_lock(&registry->lock);
+  cmeta_mutex_lock(&registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *current =
         (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
     if (current && flow_schema_registry_key_equal(*current, match, schema)) {
       rc = flow_schema_registry_definition_equal(*current, schema) ? SALTS_EALREADY : SALTS_EPROTO;
-      salts_mutex_unlock(&registry->lock);
+      cmeta_mutex_unlock(&registry->lock);
       return rc;
     }
   }
   entry = (flow_schema_registry_entry_t *)calloc(1, sizeof(*entry));
   if (!entry) {
-    salts_mutex_unlock(&registry->lock);
+    cmeta_mutex_unlock(&registry->lock);
     return SALTS_ENOMEM;
   }
   entry->match = *match;
@@ -332,7 +332,7 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->projection_type = tstr_dup(schema->projection_type);
   if (!entry->schema_name || !entry->type_name || !entry->projection_type) {
     flow_schema_registry_entry_destroy(entry);
-    salts_mutex_unlock(&registry->lock);
+    cmeta_mutex_unlock(&registry->lock);
     return SALTS_ENOMEM;
   }
   entry->schema = *schema;
@@ -343,7 +343,7 @@ int turbo_flow_schema_registry_register(turbo_flow_schema_registry_t *registry,
   entry->schema.schema_text = NULL;
   rc = turbo_flow_stl_error(vec_push(&registry->entries, &entry));
   if (rc != SALTS_OK) flow_schema_registry_entry_destroy(entry);
-  salts_mutex_unlock(&registry->lock);
+  cmeta_mutex_unlock(&registry->lock);
   return rc;
 }
 
@@ -356,7 +356,7 @@ int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *regis
     return SALTS_EINVAL;
   }
   const turbo_flow_data_schema_t *resolved = NULL;
-  salts_mutex_lock(&mutable_registry->lock);
+  cmeta_mutex_lock(&mutable_registry->lock);
   for (size_t i = 0; i < vec_size(&registry->entries); ++i) {
     flow_schema_registry_entry_t *const *entry =
         (flow_schema_registry_entry_t *const *)vec_at_const(&registry->entries, i);
@@ -366,10 +366,10 @@ int turbo_flow_schema_registry_resolve(const turbo_flow_schema_registry_t *regis
   }
   if (resolved) {
     *schema_out = resolved;
-    salts_mutex_unlock(&mutable_registry->lock);
+    cmeta_mutex_unlock(&mutable_registry->lock);
     return SALTS_OK;
   }
-  salts_mutex_unlock(&mutable_registry->lock);
+  cmeta_mutex_unlock(&mutable_registry->lock);
   return SALTS_ENOENT;
 }
 

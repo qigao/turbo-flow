@@ -116,7 +116,7 @@ static uint64_t flow_resize_workflow_drain_timeout(const turbo_flow_resize_workf
   uint64_t now;
   uint64_t remaining_ms;
   if (spec->deadline_ns == UINT64_MAX) return spec->drain_timeout_ms;
-  now = salts_hrtime();
+  now = cmeta_hrtime();
   if (now >= spec->deadline_ns) return 0u;
   remaining_ms = (spec->deadline_ns - now + UINT64_C(999999)) / UINT64_C(1000000);
   return spec->drain_timeout_ms < remaining_ms ? spec->drain_timeout_ms : remaining_ms;
@@ -171,7 +171,7 @@ int turbo_flow_resize_workflow_tick(turbo_flow_t *flow,
     *out = result;
     return state->last_status;
   }
-  if (spec->deadline_ns != UINT64_MAX && salts_hrtime() >= spec->deadline_ns) {
+  if (spec->deadline_ns != UINT64_MAX && cmeta_hrtime() >= spec->deadline_ns) {
     rc = flow_resize_workflow_fail(state, &result, SALTS_ETIMEDOUT);
     *out = result;
     return rc;

@@ -63,6 +63,7 @@ typedef struct turbo_flow_chttp_client_config_s {
   uint32_t overall_timeout_ms;
   uint32_t max_attempts;
   uint32_t retry_delay_ms;
+  /** One native stop attempt; a timeout requires an explicit Flow stop retry. */
   uint32_t stop_timeout_ms;
   /** Allows retries for methods that are not idempotent by definition. */
   int idempotent;
@@ -93,9 +94,11 @@ typedef struct turbo_flow_chttp_client_snapshot_s {
   size_t size;
   uint32_t version;
   turbo_flow_chttp_client_state_t state;
+  /** Native requests still borrowing callback slots, including failed-stop drain. */
   size_t active_requests;
   size_t queued_requests;
   uint64_t submitted_requests;
+  /** Flow claims completed; native callbacks may still drain after stop failure. */
   uint64_t completed_requests;
   uint64_t retried_requests;
   uint64_t canceled_requests;

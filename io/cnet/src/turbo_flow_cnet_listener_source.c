@@ -1,7 +1,11 @@
 #include "turbo_flow_cnet.h"
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+#include "turbo_flow_cnet_test_internal.h"
+#endif
 
 #include <cflow/scheduler.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
+#include <salts/error_codes.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -66,6 +70,9 @@ struct turbo_flow_cnet_listener_source_s {
   bool publisher_cancelled;
   bool has_content;
   bool message_id_exhausted;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  turbo_flow_cnet_test_cleanup_fault test_cleanup_fault;
+#endif
 };
 
 static bool listener_source_connection_equal(cnet_connection lhs, cnet_connection rhs) {
@@ -99,6 +106,7 @@ static void listener_source_close_connections(turbo_flow_cnet_listener_source_t 
 static void listener_source_fail(turbo_flow_cnet_listener_source_t *source, int status,
                                  int native_status, const char *stage) {
   if (!source || source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED ||
+      source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING ||
       source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED)
     return;
   source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED;
@@ -107,10 +115,11 @@ static void listener_source_fail(turbo_flow_cnet_listener_source_t *source, int 
   listener_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
   (void)snprintf(source->publisher_error, sizeof(source->publisher_error),
                  "CNet listener source failed at %s: %s (%d, native=%d)", source->error_stage,
-                 salts_strerror(source->status), source->status, source->native_status);
+                 cmeta_strerror(source->status), source->status, source->native_status);
   if (source->listener_initialized && !source->listener_closed) {
-    (void)cnet_listener_close(&source->listener);
-    source->listener_closed = true;
+    int close_status = cnet_listener_close(&source->listener);
+    if (close_status == SALTS_OK || close_status == SALTS_EALREADY)
+      source->listener_closed = true;
   }
   listener_source_close_connections(source);
   listener_source_wake(&source->value_waker);
@@ -394,29 +403,29 @@ static int listener_source_config_validate(const turbo_flow_cnet_listener_source
   return SALTS_OK;
 }
 
-static void listener_source_open_cleanup(turbo_flow_cnet_listener_source_t *source,
-                                         cflow_publisher *publisher) {
-  if (!source) return;
-  if (source->run) {
-    turbo_flow_run_close(source->run);
-    source->run = NULL;
-  } else if (publisher && cflow_publisher_valid(publisher)) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+static _Thread_local turbo_flow_cnet_test_cleanup_fault listener_source_test_open_fault;
+#endif
+
+static int listener_source_open_failed(turbo_flow_cnet_listener_source_t *source,
+                                      cflow_publisher *publisher,
+                                      turbo_flow_cnet_listener_source_t **source_out,
+                                      int open_status, const char *stage) {
+  int cleanup_status;
+  if (!source->run && publisher && cflow_publisher_valid(publisher))
     cflow_publisher_destroy(publisher);
-  }
-  if (source->listener_initialized) {
-    if (!source->listener_closed) (void)cnet_listener_close(&source->listener);
-    (void)cnet_listener_destroy(&source->listener);
-  }
-  if (source->client_initialized) {
-    (void)cnet_client_stop(&source->client, 0u);
-    (void)cnet_client_destroy(&source->client);
-  }
-  if (source->tls_server_initialized) (void)cnet_tls_server_destroy(&source->tls_server);
-  if (source->scheduler_initialized) cflow_scheduler_destroy(&source->scheduler);
-  turbo_flow_msg_cleanup(&source->ready_message);
-  free(source->slots);
-  tstr_free(source->source_name);
-  free(source);
+  cleanup_status = turbo_flow_cnet_listener_source_stop(source, 0u);
+  /* A progress error can accompany complete native teardown. Resource state,
+   * not the stop error alone, determines whether a retry owner is necessary. */
+  if (source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED)
+    cleanup_status = turbo_flow_cnet_listener_source_destroy(source);
+  if (cleanup_status == SALTS_OK) return open_status;
+  source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED;
+  source->status = open_status;
+  source->native_status = 0;
+  listener_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
+  *source_out = source;
+  return cleanup_status;
 }
 
 int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_config_t *config,
@@ -432,19 +441,21 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
   if (status != SALTS_OK) return status;
   source = (turbo_flow_cnet_listener_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  source->test_cleanup_fault = listener_source_test_open_fault;
+#endif
   source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_NEW;
   source->status = SALTS_OK;
   source->source_name = tstr_dup(config->source_name);
   source->slots = (listener_source_slot_t *)calloc(config->max_connections, sizeof(*source->slots));
-  source->slot_capacity = config->max_connections;
+  source->slot_capacity = source->slots ? config->max_connections : 0u;
   source->max_message_bytes = config->max_message_bytes;
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
   source->tls_enabled = config->tls != NULL;
   turbo_flow_msg_init(&source->ready_message);
   if (!source->source_name || !source->slots) {
-    listener_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return listener_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "open_storage");
   }
   for (index = 0u; index < source->slot_capacity; ++index)
     source->slots[index].owner = source;
@@ -453,55 +464,82 @@ int turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_c
     source->has_content = true;
   }
   if (!cflow_scheduler_manual_init_with_capacity(&source->scheduler, config->scheduler_capacity)) {
-    listener_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return listener_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "scheduler_init");
   }
   source->scheduler_initialized = true;
   status = cnet_client_init(&source->client, config->client);
+  source->client_initialized = source->client.impl != NULL;
   if (status != SALTS_OK) {
-    listener_source_open_cleanup(source, &publisher);
-    return status;
+    return listener_source_open_failed(source, &publisher, source_out, status, "client_init");
   }
-  source->client_initialized = true;
   if (config->socket_options) {
     status = cnet_client_set_stream_socket_options(&source->client, config->socket_options);
     if (status != SALTS_OK) {
-      listener_source_open_cleanup(source, &publisher);
-      return status;
+      return listener_source_open_failed(source, &publisher, source_out, status, "socket_options");
     }
   }
   if (config->tls) {
     status = cnet_tls_server_init(&source->tls_server, config->tls);
+    source->tls_server_initialized = source->tls_server.impl != NULL;
     if (status != SALTS_OK) {
-      listener_source_open_cleanup(source, &publisher);
-      return status;
+      return listener_source_open_failed(source, &publisher, source_out, status, "tls_server_init");
     }
-    source->tls_server_initialized = true;
   }
   status = config->listener_options ? cnet_listener_init_ex(&source->listener, config->listener,
                                                             config->listener_options)
                                     : cnet_listener_init(&source->listener, config->listener);
+  source->listener_initialized = source->listener.impl != NULL;
   if (status != SALTS_OK) {
-    listener_source_open_cleanup(source, &publisher);
-    return status;
+    return listener_source_open_failed(source, &publisher, source_out, status, "listener_init");
   }
-  source->listener_initialized = true;
   status = cnet_listener_port(&source->listener, &source->bound_port);
   if (status != SALTS_OK) {
-    listener_source_open_cleanup(source, &publisher);
-    return status;
+    return listener_source_open_failed(source, &publisher, source_out, status, "listener_port");
   }
   publisher = listener_source_publisher_as_cflow_publisher(source);
   run_config.scheduler = &source->scheduler;
   status =
       turbo_flow_run_open(config->flow, config->source_name, &publisher, &run_config, &source->run);
   if (status != SALTS_OK) {
-    listener_source_open_cleanup(source, &publisher);
-    return status;
+    return listener_source_open_failed(source, &publisher, source_out, status, "graph_run_open");
   }
   source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_LISTENING;
   *source_out = source;
   return SALTS_OK;
+}
+
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+int turbo_flow_cnet_test_listener_source_open(
+    const turbo_flow_cnet_listener_source_config_t *config,
+    turbo_flow_cnet_listener_source_t **source_out, turbo_flow_cnet_test_cleanup_fault fault) {
+  listener_source_test_open_fault = fault;
+  int status = turbo_flow_cnet_listener_source_open(config, source_out);
+  listener_source_test_open_fault = (turbo_flow_cnet_test_cleanup_fault){0};
+  return status;
+}
+
+int turbo_flow_cnet_test_listener_source_fail_next_cleanup(
+    turbo_flow_cnet_listener_source_t *source, turbo_flow_cnet_test_cleanup_fault fault) {
+  if (!source || fault.status == SALTS_OK) return SALTS_EINVAL;
+  if (source->test_cleanup_fault.status != SALTS_OK) return SALTS_EBUSY;
+  source->test_cleanup_fault = fault;
+  return SALTS_OK;
+}
+#endif
+
+static int listener_source_client_stop(turbo_flow_cnet_listener_source_t *source, uint32_t timeout_ms) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  int injected = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                   TF_CNET_TEST_CLIENT_STOP);
+  if (injected != SALTS_OK) {
+    if (source->test_cleanup_fault.after_drain) {
+      int status = cnet_client_stop(&source->client, timeout_ms);
+      if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    }
+    return injected;
+  }
+#endif
+  return cnet_client_stop(&source->client, timeout_ms);
 }
 
 static listener_source_slot_t *
@@ -648,7 +686,11 @@ int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listener_source_t *sour
   if (source->state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED) return SALTS_EALREADY;
   source->state = TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING;
   if (source->listener_initialized && !source->listener_closed) {
-    stop_status = cnet_listener_close(&source->listener);
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    stop_status = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                    TF_CNET_TEST_LISTENER_CLOSE);
+#endif
+    if (stop_status == SALTS_OK) stop_status = cnet_listener_close(&source->listener);
     if (stop_status == SALTS_OK || stop_status == SALTS_EALREADY) {
       source->listener_closed = true;
       stop_status = SALTS_OK;
@@ -660,27 +702,50 @@ int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listener_source_t *sour
   }
   listener_source_close_connections(source);
   if (source->client_initialized) {
-    int client_stop_status = cnet_client_stop(&source->client, timeout_ms);
+    int client_stop_status = listener_source_client_stop(source, timeout_ms);
     if (client_stop_status == SALTS_ETIMEDOUT) return client_stop_status;
     if (client_stop_status == SALTS_EALREADY) client_stop_status = SALTS_OK;
     if (stop_status == SALTS_OK) stop_status = client_stop_status;
-    destroy_status = cnet_client_destroy(&source->client);
+    destroy_status = SALTS_OK;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    destroy_status = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                       TF_CNET_TEST_CLIENT_DESTROY);
+#endif
+    if (destroy_status == SALTS_OK) destroy_status = cnet_client_destroy(&source->client);
+    source->client_initialized = source->client.impl != NULL;
     if (destroy_status != SALTS_OK) return stop_status == SALTS_OK ? destroy_status : stop_status;
     source->client_initialized = false;
   }
   if (source->listener_initialized) {
-    destroy_status = cnet_listener_destroy(&source->listener);
+    destroy_status = SALTS_OK;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    destroy_status = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                       TF_CNET_TEST_LISTENER_DESTROY);
+#endif
+    if (destroy_status == SALTS_OK) destroy_status = cnet_listener_destroy(&source->listener);
+    source->listener_initialized = source->listener.impl != NULL;
     if (destroy_status != SALTS_OK) return stop_status == SALTS_OK ? destroy_status : stop_status;
     source->listener_initialized = false;
   }
   if (source->tls_server_initialized) {
-    destroy_status = cnet_tls_server_destroy(&source->tls_server);
+    destroy_status = SALTS_OK;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    destroy_status = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                       TF_CNET_TEST_TLS_DESTROY);
+#endif
+    if (destroy_status == SALTS_OK) destroy_status = cnet_tls_server_destroy(&source->tls_server);
+    source->tls_server_initialized = source->tls_server.impl != NULL;
     if (destroy_status != SALTS_OK) return stop_status == SALTS_OK ? destroy_status : stop_status;
     source->tls_server_initialized = false;
   }
   if (source->scheduler_initialized) {
     (void)cflow_scheduler_run_until_idle(&source->scheduler, 0u);
-    (void)cflow_scheduler_shutdown(&source->scheduler);
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    int injected = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                     TF_CNET_TEST_SCHEDULER_SHUTDOWN);
+    if (injected != SALTS_OK) return injected;
+#endif
+    if (!cflow_scheduler_shutdown(&source->scheduler)) return SALTS_EBUSY;
     cflow_scheduler_destroy(&source->scheduler);
     source->scheduler_initialized = false;
   }

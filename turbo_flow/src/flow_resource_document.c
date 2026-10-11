@@ -18,8 +18,8 @@
                      Spec)) " {\n"                                                                 \
                             "  uint32 domain;\n"                                                   \
                             "  uint32 kind;\n"                                                     \
-                            "  string capacity;\n"                                                 \
                             "  bool capacity_bounded;\n"                                           \
+                            "  string capacity;\n"                                                 \
                             "}\n"                                                                  \
                             "message " FLOW_STRINGIFY(FLOW_JOIN(                                   \
                                 type_prefix,                                                       \
@@ -36,12 +36,12 @@
                                              "message " FLOW_STRINGIFY(FLOW_JOIN(                  \
                                                  type_prefix,                                      \
                                                  Event)) " {\n"                                    \
-                                                         "  string sequence;\n"                    \
-                                                         "  string generation;\n"                  \
-                                                         "  string observed_generation;\n"         \
                                                          "  bool gap;\n"                           \
                                                          "  int32 last_status;\n"                  \
                                                          "  uint32 reason;\n"                      \
+                                                         "  string sequence;\n"                    \
+                                                         "  string generation;\n"                  \
+                                                         "  string observed_generation;\n"         \
                                                          "}\n"
 
 #define FLOW_DEFINE_GOVERNANCE_SCHEMA(symbol, domain_value, kind_value, schema_name, schema_id,    \

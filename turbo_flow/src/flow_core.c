@@ -1,4 +1,5 @@
 #include "flow_internal.h"
+#include <cmeta_error.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +23,7 @@ int flow_set_error(turbo_flow_t *flow, int code, uint32_t line, uint32_t column,
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : cmeta_strerror(code));
   flow->state = TURBO_FLOW_STATE_FAILED;
   return code;
 }
@@ -35,7 +36,7 @@ int flow_set_error_keep_state(turbo_flow_t *flow, int code, uint32_t line, uint3
   error->code = code;
   error->line = line;
   error->column = column;
-  snprintf(error->message, sizeof(error->message), "%s", message ? message : salts_strerror(code));
+  snprintf(error->message, sizeof(error->message), "%s", message ? message : cmeta_strerror(code));
   return code;
 }
 
@@ -206,15 +207,18 @@ void flow_edge_impl_destroy(flow_edge_plan_impl_t *edge) {
   edge->to_stage = UINT32_MAX;
 }
 
-void flow_clear_plan(turbo_flow_t *flow) {
+int flow_clear_plan(turbo_flow_t *flow) {
   size_t i;
 
-  if (!flow) return;
+  if (!flow) return SALTS_EINVAL;
+  /* Stop owns adapter quiescence and explicit retries. Clearing a plan must
+   * never consume metadata still borrowed by an active adapter. */
+  if (flow->adapter_stop_retryable || vec_size(&flow->active_adapters) != 0u) {
+    return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                     "adapter stop must succeed before clearing plan");
+  }
   flow_close_publish_admission(flow);
-  (void)flow_stop_non_source_adapters(flow);
   flow_wait_for_publishes(flow);
-  (void)flow_stop_source_adapters(flow);
-  turbo_flow_stl_error(vec_clear(&flow->active_adapters));
   flow_stop_data_planes(flow);
   flow_stop_reorder_states(flow);
   flow_clear_reorder_states(flow);
@@ -230,6 +234,7 @@ void flow_clear_plan(turbo_flow_t *flow) {
     flow_edge_impl_destroy(edge);
   }
   turbo_flow_stl_error(vec_clear(&flow->edges));
+  return SALTS_OK;
 }
 
 void flow_clear_registry(turbo_flow_t *flow) {
@@ -352,16 +357,16 @@ turbo_flow_t *turbo_flow_create(void) {
   turbo_flow_t *flow = (turbo_flow_t *)calloc(1, sizeof(turbo_flow_t));
   if (!flow) return NULL;
 
-  salts_mutex_init(&flow->runtime_mutex);
-  salts_cond_init(&flow->runtime_cond);
-  salts_mutex_init(&flow->broadcast_mutex);
-  salts_mutex_init(&flow->async_ingress_mutex);
+  cmeta_mutex_init(&flow->runtime_mutex);
+  cmeta_cond_init(&flow->runtime_cond);
+  cmeta_mutex_init(&flow->broadcast_mutex);
+  cmeta_mutex_init(&flow->async_ingress_mutex);
   if (!flow->runtime_mutex || !flow->runtime_cond || !flow->broadcast_mutex ||
       !flow->async_ingress_mutex) {
-    salts_cond_destroy(&flow->runtime_cond);
-    salts_mutex_destroy(&flow->async_ingress_mutex);
-    salts_mutex_destroy(&flow->broadcast_mutex);
-    salts_mutex_destroy(&flow->runtime_mutex);
+    cmeta_cond_destroy(&flow->runtime_cond);
+    cmeta_mutex_destroy(&flow->async_ingress_mutex);
+    cmeta_mutex_destroy(&flow->broadcast_mutex);
+    cmeta_mutex_destroy(&flow->runtime_mutex);
     free(flow);
     return NULL;
   }
@@ -452,10 +457,15 @@ turbo_flow_t *turbo_flow_create(void) {
 
 void turbo_flow_destroy(turbo_flow_t *flow) {
   if (!flow) return;
-  if (flow->state == TURBO_FLOW_STATE_STARTED) (void)turbo_flow_stop(flow);
+  if (flow->adapter_stop_retryable) {
+    (void)flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
+                                    "adapter stop must succeed before destroy");
+    return;
+  }
+  if (flow->state == TURBO_FLOW_STATE_STARTED && turbo_flow_stop(flow) != SALTS_OK) return;
   flow_stop_async_ingress(flow);
   flow_reactive_runtime_stop(flow);
-  flow_clear_plan(flow);
+  if (flow_clear_plan(flow) != SALTS_OK) return;
   flow_clear_registry(flow);
   flow_observer_clear(flow);
   vec_destroy(&flow->stages);
@@ -487,10 +497,10 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
     flow->observer_ops.flow_destroyed(flow->observer_ctx);
   }
   if (flow->runtime_sync_initialized) {
-    salts_cond_destroy(&flow->runtime_cond);
-    salts_mutex_destroy(&flow->async_ingress_mutex);
-    salts_mutex_destroy(&flow->broadcast_mutex);
-    salts_mutex_destroy(&flow->runtime_mutex);
+    cmeta_cond_destroy(&flow->runtime_cond);
+    cmeta_mutex_destroy(&flow->async_ingress_mutex);
+    cmeta_mutex_destroy(&flow->broadcast_mutex);
+    cmeta_mutex_destroy(&flow->runtime_mutex);
   }
   if (flow_active_error_owner == flow) flow_active_error_owner = NULL;
   if (flow_last_publish_error_owner == flow) flow_last_publish_error_owner = NULL;
@@ -498,6 +508,7 @@ void turbo_flow_destroy(turbo_flow_t *flow) {
 }
 
 int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
+  int rc;
   if (!flow) return SALTS_EINVAL;
   if (flow->adapter_stop_retryable) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0,
@@ -506,7 +517,8 @@ int turbo_flow_reset(turbo_flow_t *flow, int keep_registry) {
   if (flow->state == TURBO_FLOW_STATE_STARTED) {
     return flow_set_error_keep_state(flow, SALTS_EBUSY, 0, 0, "cannot reset a started flow");
   }
-  flow_clear_plan(flow);
+  rc = flow_clear_plan(flow);
+  if (rc != SALTS_OK) return rc;
   flow->has_async_stage = 0;
   flow->required_backend = FLOW_PLAN_BACKEND_NATIVE;
   turbo_flow_stl_error(vec_clear(&flow->resource_command_history));
@@ -1605,7 +1617,7 @@ void flow_observer_emit(turbo_flow_t *flow, const turbo_flow_observe_event_t *ev
   mask = TURBO_FLOW_OBSERVE_EVENT_MASK(event->kind);
   view = *event;
   view.size = sizeof(view);
-  if (view.timestamp_ns == 0u) view.timestamp_ns = salts_hrtime();
+  if (view.timestamp_ns == 0u) view.timestamp_ns = cmeta_hrtime();
   for (size_t i = 0u; i < vec_size(&flow->event_observers); ++i) {
     const flow_event_observer_registration_t *observer =
         (const flow_event_observer_registration_t *)vec_at_const(&flow->event_observers, i);
@@ -1940,14 +1952,14 @@ int turbo_flow_adapter_command(turbo_flow_t *flow, const char *adapter_name,
       command->kind > TURBO_FLOW_ADAPTER_REPLACE_ENDPOINT) {
     return SALTS_EINVAL;
   }
-  salts_mutex_lock(&flow->runtime_mutex);
+  cmeta_mutex_lock(&flow->runtime_mutex);
   if (flow->state != TURBO_FLOW_STATE_STARTED || flow->admission_state == FLOW_ADMISSION_STOPPING ||
       flow->admission_state == FLOW_ADMISSION_RESIZING) {
     rc = flow->state == TURBO_FLOW_STATE_STARTED ? SALTS_EBUSY : SALTS_EINVAL;
-    salts_mutex_unlock(&flow->runtime_mutex);
+    cmeta_mutex_unlock(&flow->runtime_mutex);
     return rc;
   }
-  salts_mutex_unlock(&flow->runtime_mutex);
+  cmeta_mutex_unlock(&flow->runtime_mutex);
 
   index = flow_find_adapter(flow, adapter_name);
   if (index < 0) return SALTS_ENOENT;
@@ -1981,15 +1993,15 @@ const turbo_flow_adapter_schema_t *turbo_flow_find_adapter_schema(const turbo_fl
 turbo_flow_state_t turbo_flow_state(const turbo_flow_t *flow) {
   turbo_flow_state_t state;
   if (!flow || !flow->runtime_sync_initialized) return TURBO_FLOW_STATE_FAILED;
-  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&flow->runtime_mutex);
   state = flow->state;
-  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&flow->runtime_mutex);
   return state;
 }
 
 int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_snapshot_t *out) {
   if (!flow || !out || !flow->runtime_sync_initialized) return SALTS_EINVAL;
-  salts_mutex_lock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_lock((cmeta_mutex_t *)&flow->runtime_mutex);
   memset(out, 0, sizeof(*out));
   out->state = flow->state;
   out->accepting_publishes = flow->admission_state == FLOW_ADMISSION_OPEN;
@@ -1998,7 +2010,7 @@ int turbo_flow_runtime_snapshot(const turbo_flow_t *flow, turbo_flow_runtime_sna
   out->edge_count = vec_size(&flow->edges);
   out->adapter_count = vec_size(&flow->adapters);
   out->pool_count = vec_size(&flow->pool_records);
-  salts_mutex_unlock((salts_mutex_t *)&flow->runtime_mutex);
+  cmeta_mutex_unlock((cmeta_mutex_t *)&flow->runtime_mutex);
   return SALTS_OK;
 }
 

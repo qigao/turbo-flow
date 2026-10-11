@@ -4,6 +4,10 @@ set(_ocpp201_core_generated_header
     "${_ocpp201_core_generated_dir}/ocpp201_core.h")
 set(_ocpp201_core_generated_source
     "${_ocpp201_core_generated_dir}/ocpp201_core.c")
+set(_ocpp201_core_runtime_dependencies)
+if(WIN32)
+  list(APPEND _ocpp201_core_runtime_dependencies turbo_flow_external_runtime)
+endif()
 
 add_custom_command(
   OUTPUT "${_ocpp201_core_generated_header}"
@@ -11,15 +15,16 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_ocpp201_core_generated_dir}"
   COMMAND
-    "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+    "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
     "${_ocpp201_core_schema}"
     --lang c
     --output "${_ocpp201_core_generated_header}"
     --source-output "${_ocpp201_core_generated_source}"
   DEPENDS "${_ocpp201_core_schema}"
-          "${TURBO_FLOW_TBE_COMPILER_HOST_EXECUTABLE}"
+          "${TURBO_FLOW_IDLC_HOST_EXECUTABLE}"
+          ${_ocpp201_core_runtime_dependencies}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Generating DataBind 2.0 OCPP 2.0.1 Core typed bindings"
+  COMMENT "Generating DataBind 3 OCPP 2.0.1 Core typed bindings"
   VERBATIM)
 
 add_library(tf_protocol_business_ocpp201_core_schema STATIC
@@ -72,3 +77,4 @@ unset(_ocpp201_core_generated_dir)
 unset(_ocpp201_core_generated_header)
 unset(_ocpp201_core_generated_source)
 unset(_ocpp201_core_schema)
+unset(_ocpp201_core_runtime_dependencies)

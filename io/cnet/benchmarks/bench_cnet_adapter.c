@@ -336,7 +336,7 @@ static void cnet_bench_complete(void *ctx, const turbo_flow_publish_result_t *re
   size_t previous;
   if (!completion || !completion->run) return;
   run = completion->run;
-  completed_at = salts_hrtime();
+  completed_at = cmeta_hrtime();
   completion->latency_ns = completed_at - completion->started_ns;
   completion->status = result ? result->status : SALTS_EPROTO;
   atomic_store_explicit(&completion->done, true, memory_order_release);
@@ -475,13 +475,13 @@ static int cnet_bench_fixture_init(cnet_bench_fixture_t *fixture) {
   if (status != SALTS_OK) goto fail;
   fixture->flow_started = true;
 
-  deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
+  deadline = cmeta_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   do {
     status = cnet_bench_progress(fixture, NULL);
     if (status != SALTS_OK) goto fail;
     status = turbo_flow_cnet_packet_sink_snapshot(fixture->sink, &snapshot);
     if (status != SALTS_OK) goto fail;
-  } while (!snapshot.session_open && salts_monotonic_ms() < deadline);
+  } while (!snapshot.session_open && cmeta_monotonic_ms() < deadline);
   if (!snapshot.session_open) {
     status = SALTS_ETIMEDOUT;
     goto fail;
@@ -518,9 +518,9 @@ static void cnet_bench_prepare_completions(cnet_bench_fixture_t *fixture, size_t
 
 static int cnet_bench_wait_for_receives(cnet_bench_fixture_t *fixture, size_t target,
                                         size_t *peak_active_requests) {
-  const uint64_t deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
+  const uint64_t deadline = cmeta_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   int status;
-  while (fixture->peer.receives < target && salts_monotonic_ms() < deadline) {
+  while (fixture->peer.receives < target && cmeta_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, peak_active_requests);
     if (status != SALTS_OK) return status;
   }
@@ -555,16 +555,16 @@ static int cnet_bench_run_batch(cnet_bench_fixture_t *fixture, size_t count,
   if (record_metrics) {
     status = cnet_bench_process_cpu_ns(&cpu_start);
     if (status != SALTS_OK) return status;
-    wall_start = salts_hrtime();
+    wall_start = cmeta_hrtime();
   }
-  deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
+  deadline = cmeta_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     completed = atomic_load_explicit(&run->completed, memory_order_acquire);
     while (submitted < count && submitted - completed < CNET_BENCH_CAPACITY) {
       cnet_bench_completion_t *completion = &fixture->completions[submitted];
       fixture->message.id = submitted;
-      completion->started_ns = salts_hrtime();
+      completion->started_ns = cmeta_hrtime();
       status = turbo_flow_publish_async(fixture->flow, "input", &fixture->message,
                                         cnet_bench_complete, completion);
       if (status != SALTS_OK) return status;
@@ -638,20 +638,20 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
   cnet_bench_prepare_completions(fixture, SATURATION_MESSAGES, false);
   for (size_t index = 0u; index < SATURATION_MESSAGES; ++index) {
     fixture->message.id = index;
-    fixture->completions[index].started_ns = salts_hrtime();
+    fixture->completions[index].started_ns = cmeta_hrtime();
     status = turbo_flow_publish_async(fixture->flow, "input", &fixture->message,
                                       cnet_bench_complete, &fixture->completions[index]);
     if (status != SALTS_OK) return status;
   }
-  deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
+  deadline = cmeta_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   while (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u &&
-         salts_monotonic_ms() < deadline)
-    salts_thread_yield();
+         cmeta_monotonic_ms() < deadline)
+    cmeta_thread_yield();
   if (atomic_load_explicit(&run->completed, memory_order_acquire) == 0u)
     return SALTS_ETIMEDOUT;
 
   while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
@@ -675,13 +675,13 @@ static int cnet_bench_saturation_recovery(cnet_bench_fixture_t *fixture,
 
   cnet_bench_prepare_completions(fixture, 1u, false);
   fixture->message.id = UINT64_MAX;
-  fixture->completions[0].started_ns = salts_hrtime();
+  fixture->completions[0].started_ns = cmeta_hrtime();
   status = turbo_flow_publish_async(fixture->flow, "input", &fixture->message,
                                     cnet_bench_complete, &fixture->completions[0]);
   if (status != SALTS_OK) return status;
-  deadline = salts_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
+  deadline = cmeta_monotonic_ms() + CNET_BENCH_TIMEOUT_MS;
   while (!atomic_load_explicit(&run->terminal_captured, memory_order_acquire) &&
-         salts_monotonic_ms() < deadline) {
+         cmeta_monotonic_ms() < deadline) {
     status = cnet_bench_progress(fixture, &result->peak_active_requests);
     if (status != SALTS_OK) return status;
   }
@@ -709,7 +709,7 @@ static int cnet_bench_shutdown(cnet_bench_fixture_t *fixture, cnet_bench_run_res
   if (status != SALTS_OK) return status;
   result->pre_shutdown_active_requests = snapshot.active_requests;
   if (result->pre_shutdown_active_requests != 0u) return SALTS_EBUSY;
-  started = salts_hrtime();
+  started = cmeta_hrtime();
   status = turbo_flow_stop(fixture->flow);
   if (status != SALTS_OK) return status;
   fixture->flow_started = false;
@@ -723,7 +723,7 @@ static int cnet_bench_shutdown(cnet_bench_fixture_t *fixture, cnet_bench_run_res
   status = cnet_packet_endpoint_destroy(&fixture->peer.endpoint);
   if (status != SALTS_OK) return status;
   fixture->peer.initialized = false;
-  result->shutdown_us = (double)(salts_hrtime() - started) / 1000.0;
+  result->shutdown_us = (double)(cmeta_hrtime() - started) / 1000.0;
   if (result->shutdown_us <= 0.0) return SALTS_ERANGE;
   turbo_flow_msg_cleanup(&fixture->message);
   free(fixture->completions);
@@ -749,7 +749,7 @@ static int cnet_adapter_benchmark_run(void) {
   double p99[CNET_BENCH_REPLICATES];
   double cpu_ratio[CNET_BENCH_REPLICATES];
   double shutdown_us[CNET_BENCH_REPLICATES];
-  int logical_cpus = salts_cpu_count();
+  int logical_cpus = cmeta_cpu_count();
   int status = SALTS_OK;
   const bool baseline_eligible =
       strcmp(TF_CNET_BENCH_PRESET, "win-release-user") == 0 &&

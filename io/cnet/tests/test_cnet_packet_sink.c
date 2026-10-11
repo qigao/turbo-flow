@@ -179,7 +179,7 @@ static void packet_sink_complete_with_snapshot(void *ctx,
 static void packet_sink_race_publish(void *ctx) {
   packet_sink_race_t *race = (packet_sink_race_t *)ctx;
   atomic_store_explicit(&race->publisher_ready, true, memory_order_release);
-  while (!atomic_load_explicit(&race->go, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&race->go, memory_order_acquire)) cmeta_thread_yield();
   race->publish_status = turbo_flow_publish_async(race->flow, "input", &race->message,
                                                    packet_sink_complete, &race->completion);
 }
@@ -187,7 +187,7 @@ static void packet_sink_race_publish(void *ctx) {
 static void packet_sink_race_stop(void *ctx) {
   packet_sink_race_t *race = (packet_sink_race_t *)ctx;
   atomic_store_explicit(&race->stopper_ready, true, memory_order_release);
-  while (!atomic_load_explicit(&race->go, memory_order_acquire)) salts_thread_yield();
+  while (!atomic_load_explicit(&race->go, memory_order_acquire)) cmeta_thread_yield();
   race->stop_status = turbo_flow_stop(race->flow);
 }
 
@@ -277,12 +277,12 @@ static void packet_sink_round_trip(cnet_packet_protocol protocol, int secure, si
     atomic_init(&completion.calls, 0u);
     atomic_init(&completion.status, SALTS_EALREADY);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
       check_equal(cnet_packet_poll(&peer_owner.endpoint, 1u, &events), SALTS_OK);
     } while ((!snapshot.session_open || (secure && peer_owner.opens <= cycle)) &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.session_open, 1);
 
     packet_sink_message(&message, payload);
@@ -297,9 +297,9 @@ static void packet_sink_round_trip(cnet_packet_protocol protocol, int secure, si
       check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
     }
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(cnet_packet_poll(&peer_owner.endpoint, 1u, &events), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     }
@@ -320,6 +320,29 @@ static void packet_sink_round_trip(cnet_packet_protocol protocol, int secure, si
 }
 
 spec("TurboFlow CNet packet terminal sink") {
+  static turbo_flow_t *retry_flow;
+  static turbo_flow_cnet_packet_sink_t *retry_sink;
+  static packet_sink_peer_t retry_peer;
+  static bool retry_peer_initialized;
+
+  after_each() {
+    if (retry_flow) {
+      int status = turbo_flow_stop(retry_flow);
+      if (status != SALTS_OK) status = turbo_flow_stop(retry_flow);
+      check_equal(status, SALTS_OK);
+      turbo_flow_destroy(retry_flow);
+      retry_flow = NULL;
+    }
+    if (retry_sink) {
+      check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_OK);
+      retry_sink = NULL;
+    }
+    if (retry_peer_initialized) {
+      packet_sink_peer_stop(&retry_peer);
+      retry_peer_initialized = false;
+    }
+  }
+
   it("exposes a size-versioned C and C++ opaque contract") {
     turbo_flow_cnet_packet_sink_config_t config = TURBO_FLOW_CNET_PACKET_SINK_CONFIG_INIT;
     turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
@@ -401,9 +424,9 @@ spec("TurboFlow CNet packet terminal sink") {
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(cnet_packet_poll(&peer_owner.endpoint, 1u, &events), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, NULL), SALTS_OK);
     }
@@ -448,11 +471,11 @@ spec("TurboFlow CNet packet terminal sink") {
     atomic_init(&completion.calls, 0u);
     atomic_init(&completion.status, SALTS_EALREADY);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
       check_equal(cnet_packet_poll(&peer_owner.endpoint, 1u, &events), SALTS_OK);
-    } while (!snapshot.session_open && salts_monotonic_ms() < deadline);
+    } while (!snapshot.session_open && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.session_open, 1);
 
     packet_sink_message(&message, "previous-generation-terminal");
@@ -460,9 +483,9 @@ spec("TurboFlow CNet packet terminal sink") {
                                          &completion),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(cnet_packet_poll(&peer_owner.endpoint, 1u, &events), SALTS_OK);
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     }
@@ -478,12 +501,12 @@ spec("TurboFlow CNet packet terminal sink") {
                                          &completion),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
       snapshot_status = turbo_flow_cnet_packet_sink_snapshot(sink, &snapshot);
       if (snapshot_status != SALTS_OK) break;
-      salts_thread_yield();
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+      cmeta_thread_yield();
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot_status, SALTS_OK);
     check_equal(snapshot.active_requests, (size_t)1u);
 
@@ -523,9 +546,9 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(turbo_flow_publish_async(flow, "input", &message, packet_sink_complete, &completion),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, NULL), SALTS_OK);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ENOBUFS);
@@ -553,10 +576,10 @@ spec("TurboFlow CNet packet terminal sink") {
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
 
@@ -589,13 +612,13 @@ spec("TurboFlow CNet packet terminal sink") {
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot), SALTS_OK);
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
-    check_equal(turbo_flow_cnet_test_packet_sink_fail_next_stop(sink, SALTS_EIO), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_packet_sink_fail_next_stop(sink, SALTS_EIO, true), SALTS_OK);
 
     check_equal(turbo_flow_stop(flow), SALTS_EIO);
     check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
@@ -613,6 +636,116 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(snapshot.active_requests, (size_t)0u);
     turbo_flow_destroy(flow);
     check_equal(turbo_flow_cnet_packet_sink_destroy(sink), SALTS_OK);
+  }
+
+  it("returns a native stop timeout for explicit retry") {
+    cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
+    turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
+    retry_flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, 1u, &retry_sink);
+    check_not_null(retry_flow);
+    check_equal(turbo_flow_cnet_test_packet_sink_fail_next_stop(retry_sink, SALTS_ETIMEDOUT, false),
+                SALTS_OK);
+    check_equal(turbo_flow_stop(retry_flow), SALTS_ETIMEDOUT);
+    check_equal(turbo_flow_cnet_packet_sink_snapshot(retry_sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_PACKET_SINK_FAILED);
+    check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(retry_flow), SALTS_OK);
+    turbo_flow_destroy(retry_flow);
+    retry_flow = NULL;
+    check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_OK);
+    retry_sink = NULL;
+  }
+
+  it("retains the endpoint after destroy fails and retries only explicitly") {
+    cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
+    turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
+    retry_flow = packet_sink_flow(&endpoint, packet_sink_peer_address(9u), 0u, 1u, &retry_sink);
+    check_not_null(retry_flow);
+    check_equal(turbo_flow_cnet_test_packet_sink_fail_next_destroy(retry_sink, SALTS_EBUSY), SALTS_OK);
+    check_equal(turbo_flow_stop(retry_flow), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_packet_sink_snapshot(retry_sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_PACKET_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_packet_sink_fail_next_destroy(retry_sink, SALTS_EIO), SALTS_OK);
+    turbo_flow_destroy(retry_flow);
+    check_equal(turbo_flow_state(retry_flow), TURBO_FLOW_STATE_FAILED);
+    check_equal(turbo_flow_stop(retry_flow), SALTS_EIO);
+    check_equal(turbo_flow_stop(retry_flow), SALTS_OK);
+    turbo_flow_destroy(retry_flow);
+    retry_flow = NULL;
+    check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_OK);
+    retry_sink = NULL;
+  }
+
+  it("settles admitted UDP and KCP claims once while failed stop retains native tokens") {
+    const cnet_packet_protocol protocols[] = {CNET_PACKET_UDP, CNET_PACKET_KCP};
+    for (size_t protocol = 0u; protocol < sizeof(protocols) / sizeof(protocols[0]); ++protocol) {
+      cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(protocols[protocol]);
+      turbo_flow_cnet_packet_sink_snapshot_t snapshot = TURBO_FLOW_CNET_PACKET_SINK_SNAPSHOT_INIT;
+      static packet_sink_completion_t completion[2];
+      turbo_flow_msg_t message;
+      uint32_t conversation = protocols[protocol] == CNET_PACKET_KCP ? UINT32_C(0x12345678) : 0u;
+      uint16_t peer_port = 0u;
+      cnet_packet_endpoint_config peer_config = packet_sink_endpoint_config(protocols[protocol]);
+      check_equal(packet_sink_peer_init(&retry_peer, &peer_config, &peer_port), SALTS_OK);
+      retry_peer_initialized = true;
+      retry_flow = packet_sink_flow(&endpoint, packet_sink_peer_address(peer_port),
+                                            conversation, 2u, &retry_sink);
+      uint64_t deadline;
+      check_not_null(retry_flow);
+      for (size_t index = 0u; index < 2u; ++index) {
+        atomic_init(&completion[index].calls, 0u);
+        atomic_init(&completion[index].status, SALTS_EALREADY);
+        packet_sink_message(&message, "retained-packet");
+        check_equal(turbo_flow_publish_async(retry_flow, "input", &message, packet_sink_complete,
+                                             &completion[index]), SALTS_OK);
+        turbo_flow_msg_cleanup(&message);
+      }
+      deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+      do {
+        check_equal(turbo_flow_cnet_test_packet_sink_submit_ready(retry_sink), SALTS_OK);
+        check_equal(turbo_flow_cnet_packet_sink_snapshot(retry_sink, &snapshot), SALTS_OK);
+        cmeta_thread_yield();
+      } while (snapshot.active_requests < 2u && cmeta_monotonic_ms() < deadline);
+      check_equal(snapshot.active_requests, (size_t)2u);
+      /* Finish Actor admission without observing native completions. */
+      check_equal(turbo_flow_cnet_test_packet_sink_submit_ready(retry_sink), SALTS_OK);
+      for (size_t index = 0u; index < 2u; ++index)
+        check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)0u);
+
+      const int failures[] = {SALTS_ETIMEDOUT, SALTS_EBUSY, SALTS_EIO};
+      for (size_t attempt = 0u; attempt < sizeof(failures) / sizeof(failures[0]); ++attempt) {
+        check_equal(turbo_flow_cnet_test_packet_sink_fail_next_stop(retry_sink, failures[attempt], false),
+                    SALTS_OK);
+        check_equal(turbo_flow_stop(retry_flow), failures[attempt]);
+        check_equal(turbo_flow_cnet_packet_sink_snapshot(retry_sink, &snapshot), SALTS_OK);
+        check_equal(snapshot.state, TURBO_FLOW_CNET_PACKET_SINK_FAILED);
+        check_equal(snapshot.active_requests, (size_t)2u);
+        check_equal(snapshot.messages_sent, UINT64_C(0));
+        check_equal(snapshot.terminals_failed, UINT64_C(2));
+        for (size_t index = 0u; index < 2u; ++index) {
+          check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)1u);
+          check_equal(atomic_load_explicit(&completion[index].status, memory_order_acquire),
+                      SALTS_ESHUTDOWN);
+        }
+      }
+      check_equal(turbo_flow_stop(retry_flow), SALTS_OK);
+      check_equal(turbo_flow_cnet_packet_sink_snapshot(retry_sink, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CNET_PACKET_SINK_STOPPED);
+      check_equal(snapshot.active_requests, (size_t)0u);
+      check_equal(snapshot.messages_sent, UINT64_C(0));
+      check_equal(snapshot.bytes_sent, UINT64_C(0));
+      check_equal(snapshot.terminals_failed, UINT64_C(2));
+      for (size_t index = 0u; index < 2u; ++index)
+        check_equal(atomic_load_explicit(&completion[index].calls, memory_order_acquire), (size_t)1u);
+      turbo_flow_destroy(retry_flow);
+      retry_flow = NULL;
+      check_equal(turbo_flow_cnet_packet_sink_destroy(retry_sink), SALTS_OK);
+      retry_sink = NULL;
+      packet_sink_peer_stop(&retry_peer);
+      retry_peer_initialized = false;
+    }
   }
 
   it("preserves a malformed KCP protocol failure as the terminal owner status") {
@@ -644,8 +777,8 @@ spec("TurboFlow CNet packet terminal sink") {
     check_equal(cnet_datagram_init(&attacker, &attacker_config), SALTS_OK);
     target = packet_sink_peer_address(snapshot.bound_port);
     check_equal(cnet_datagram_send(&attacker, &target, malformed, sizeof(malformed), 1u), SALTS_OK);
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
-    while (poll_status == SALTS_OK && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    while (poll_status == SALTS_OK && cmeta_monotonic_ms() < deadline) {
       check_equal(cnet_datagram_poll(&attacker, 1u, &events), SALTS_OK);
       poll_status = turbo_flow_cnet_packet_sink_poll(sink, 1u, &snapshot);
     }
@@ -685,10 +818,10 @@ spec("TurboFlow CNet packet terminal sink") {
     turbo_flow_msg_cleanup(&first_message);
     turbo_flow_msg_cleanup(&second_message);
 
-    deadline = salts_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + PACKET_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
-      salts_sleep_ms(1u);
+           cmeta_monotonic_ms() < deadline)
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)0u);
     check_equal(atomic_load_explicit(&second.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&second.status, memory_order_acquire), SALTS_ENOSPC);
@@ -707,8 +840,8 @@ spec("TurboFlow CNet packet terminal sink") {
       cnet_packet_endpoint_config endpoint = packet_sink_endpoint_config(CNET_PACKET_UDP);
       turbo_flow_cnet_packet_sink_t *sink = NULL;
       packet_sink_race_t race;
-      salts_thread_t publisher = NULL;
-      salts_thread_t stopper = NULL;
+      cmeta_thread_t publisher = NULL;
+      cmeta_thread_t stopper = NULL;
 
       memset(&race, 0, sizeof(race));
       race.flow =
@@ -723,16 +856,16 @@ spec("TurboFlow CNet packet terminal sink") {
       race.publish_status = SALTS_EALREADY;
       race.stop_status = SALTS_EALREADY;
 
-      check_equal(salts_thread_create(&publisher, packet_sink_race_publish, &race), SALTS_OK);
-      check_equal(salts_thread_create(&stopper, packet_sink_race_stop, &race), SALTS_OK);
+      check_equal(cmeta_thread_create(&publisher, packet_sink_race_publish, &race), SALTS_OK);
+      check_equal(cmeta_thread_create(&stopper, packet_sink_race_stop, &race), SALTS_OK);
       while (!atomic_load_explicit(&race.publisher_ready, memory_order_acquire) ||
              !atomic_load_explicit(&race.stopper_ready, memory_order_acquire))
-        salts_thread_yield();
+        cmeta_thread_yield();
       atomic_store_explicit(&race.go, true, memory_order_release);
-      check_equal(salts_thread_join(&publisher), SALTS_OK);
-      check_equal(salts_thread_join(&stopper), SALTS_OK);
-      salts_thread_destroy(&publisher);
-      salts_thread_destroy(&stopper);
+      check_equal(cmeta_thread_join(&publisher), SALTS_OK);
+      check_equal(cmeta_thread_join(&stopper), SALTS_OK);
+      cmeta_thread_destroy(&publisher);
+      cmeta_thread_destroy(&stopper);
 
       check_equal(race.stop_status, SALTS_OK);
       capture(race.publish_status, "%d");

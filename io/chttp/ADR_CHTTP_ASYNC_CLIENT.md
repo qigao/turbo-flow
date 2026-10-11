@@ -15,6 +15,17 @@ claim，并把 CHTTP request stage 编译为 CFlow `FLAT_MAP` + async barrier。
 owner poll 退出，再由同一 owner boundary drain CHTTP，保证每个 accepted claim 恰好一次
 terminal。
 
+关闭时每次 Flow stop 只调用一次 native stop，使用 `stop_timeout_ms`，不在 adapter
+内部无限重试。stop 或 destroy 错误通过 `turbo_flow_adapter_report_stop_status()` 返回
+Flow，失败的 binding、native client 和 TLS/context 借用继续存活，等待宿主显式重试。
+报告前，未提交及仍持有的 active Flow claims 以 `SALTS_ESHUTDOWN` 完成；CHTTP 已在
+submit 时复制 body，剩余 native callback 只借用保留的 slot。slot 进入内部 DRAINING
+状态，不复用、不生成响应，也不重复完成 publication，直到 native terminal 释放该借用。
+成功关闭并解除 registry 绑定后才释放 client，并清空它借用的 Flow 指针。
+
+snapshot 的 `completed_requests` 记录 Flow claim 完成数；`active_requests` 仍计入
+DRAINING slot，明确区分逻辑完成与 native quiescence。没有增加公开结构字段或改变 ABI。
+
 ## API、状态与错误语义
 
 - adapter registration 复制 URI、authority、target、headers 和 `chttp_client_config`；TLS
@@ -51,4 +62,7 @@ TinyTest 覆盖六种 method、owned response、容量、取消、retry/deadline
 once、长 poll 的 deadline 边界、显式协议错误、H1 stale connection 重连，以及同一 H2
 connection 上失败 stream 与成功 sibling 的隔离；安装消费测试验证导出 header 和
 `TurboFlow::CHTTPAdapter` target。CHTTP 自身协议 parser、TLS/ALPN 和 RST_STREAM wire 细节
-仍由 Salts CHTTP 测试作为一手契约验证。
+仍由独立 Chttp 的测试作为一手契约验证。私有关闭 fault admission 仅用于正式测试：
+注入 stop I/O 错误、timeout 及 destroy BUSY，验证错误传播、owner 保留、显式重试；
+真实 deferred HTTP 请求与 queued 请求共同验证关闭失败后 claims 恰好完成一次，
+后续真实 native stop 的 callback 不产生第二次 publication。

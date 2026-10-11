@@ -122,7 +122,7 @@ static int websocket_adapter_gate(turbo_flow_msg_t *message, void *ctx) {
   (void)message;
   atomic_store_explicit(&gate->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&gate->release, memory_order_acquire))
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   return SALTS_OK;
 }
 
@@ -188,6 +188,42 @@ static int websocket_adapter_route_control(turbo_flow_msg_t *message, void *ctx)
 }
 
 spec("TurboFlow CHTTP WebSocket adapter") {
+  it("rolls back an initialized WebSocket server when native route admission fails") {
+    static const char dsl[] = "source ws_in adapter ws.server\n"
+                              "stage ws_out adapter ws.server\n"
+                              "stage main {\n"
+                              "  ws_in -> ws_out\n"
+                              "}\n";
+    chttp_server_config native_config = websocket_adapter_test_server_config();
+    turbo_flow_chttp_websocket_server_config_t config =
+        TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_CONFIG_INIT;
+    turbo_flow_chttp_websocket_server_snapshot_t snapshot =
+        TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_SNAPSHOT_INIT;
+    turbo_flow_chttp_websocket_server_t *server = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+    config.flow = flow;
+    config.adapter_name = "ws.server";
+    config.source_name = "ws_in";
+    config.server = &native_config;
+    config.path = "/invalid?query";
+    config.session_capacity = 4u;
+    config.frame_capacity = 8u;
+    config.max_frame_bytes = 4096u;
+    config.max_message_bytes = 4096u;
+    config.max_buffered_input_bytes = 8192u;
+    check_not_null(flow);
+    check_equal(turbo_flow_chttp_websocket_server_register(&config, &server), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, dsl, sizeof(dsl) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_EINVAL);
+    check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED);
+    check_equal(snapshot.bound_port, (uint16_t)0u);
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_websocket_server_destroy(server), SALTS_OK);
+  }
+
   it("rejects impossible byte and session bounds before adapter registration") {
     chttp_server_config native_config = websocket_adapter_test_server_config();
     turbo_flow_chttp_websocket_server_config_t config =
@@ -298,7 +334,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.active_sessions == 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.active_sessions, (size_t)0u);
     check_equal(atomic_load_explicit(&stale.saved_ready, memory_order_acquire), 1);
@@ -307,7 +343,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                 SALTS_OK);
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       if (atomic_load_explicit(&stale.completion_done, memory_order_acquire)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&stale.completion_done, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&stale.completion_status, memory_order_relaxed), SALTS_ENOENT);
@@ -378,7 +414,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.active_sessions == 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.active_sessions, (size_t)0u);
     check_equal(snapshot.sessions_closed, (uint64_t)1u);
@@ -487,7 +523,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.active_sessions == 0u && snapshot.in_flight_frames == 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.active_sessions, (size_t)0u);
     check_equal(snapshot.in_flight_frames, (size_t)0u);
@@ -522,7 +558,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     turbo_flow_chttp_websocket_server_t *server = NULL;
     chttp_websocket_connect_options options = {.size = sizeof(options)};
     chttp_websocket_client client = {0};
-    salts_thread_t stop_thread = NULL;
+    cmeta_thread_t stop_thread = NULL;
     unsigned int http_status = 0u;
     turbo_flow_t *flow = turbo_flow_create();
     char uri[128];
@@ -559,14 +595,14 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                 SALTS_OK);
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       if (atomic_load_explicit(&gate.entered, memory_order_acquire)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
-    check_equal(salts_thread_create(&stop_thread, websocket_adapter_stop_thread, &stop), SALTS_OK);
-    salts_sleep_ms(20u);
+    check_equal(cmeta_thread_create(&stop_thread, websocket_adapter_stop_thread, &stop), SALTS_OK);
+    cmeta_sleep_ms(20u);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_EBUSY);
     atomic_store_explicit(&gate.release, 1, memory_order_release);
-    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_OK);
     check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
     check_equal(snapshot.state, TURBO_FLOW_CHTTP_WEBSOCKET_SERVER_STOPPED);
@@ -736,7 +772,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                 SALTS_OK);
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       if (atomic_load_explicit(&gate.entered, memory_order_acquire)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
     check_equal(chttp_websocket_client_send_text(&client, "second", sizeof("second") - 1u,
@@ -745,7 +781,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.frames_rejected != 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.frames_rejected, (uint64_t)1u);
     atomic_store_explicit(&gate.release, 1, memory_order_release);
@@ -827,7 +863,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                 SALTS_OK);
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       if (atomic_load_explicit(&gate.entered, memory_order_acquire)) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(atomic_load_explicit(&gate.entered, memory_order_acquire), 1);
     check_equal(chttp_websocket_client_send_text(&client, "two", sizeof("two") - 1u,
@@ -836,7 +872,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.frames_admitted >= 2u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.frames_admitted, (uint64_t)2u);
     check_equal(chttp_websocket_client_send_text(&client, "three", sizeof("three") - 1u,
@@ -845,7 +881,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
     for (size_t wait = 0u; wait < WEBSOCKET_ADAPTER_TEST_TIMEOUT_MS; ++wait) {
       check_equal(turbo_flow_chttp_websocket_server_snapshot(server, &snapshot), SALTS_OK);
       if (snapshot.frames_rejected != 0u) break;
-      salts_sleep_ms(1u);
+      cmeta_sleep_ms(1u);
     }
     check_equal(snapshot.frames_rejected, (uint64_t)1u);
     atomic_store_explicit(&gate.release, 1, memory_order_release);
@@ -905,7 +941,7 @@ spec("TurboFlow CHTTP WebSocket adapter") {
                                           .alpn_protocols = h1_alpn,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = fixture.cert_path,
+                                          .ca_file = fixture.ca_path,
                                           .server_name = "localhost",
                                           .alpn_protocols = h1_alpn,
                                           .alpn_protocol_count = 1u};

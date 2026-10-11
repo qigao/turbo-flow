@@ -1,6 +1,6 @@
 #include "flow_protocol_plugin_support.h"
 
-#include "salts_error.h"
+#include "salts/error_codes.h"
 
 #include <stddef.h>
 #include <stdint.h>

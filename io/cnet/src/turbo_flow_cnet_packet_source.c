@@ -1,8 +1,9 @@
 #include "turbo_flow_cnet.h"
 
 #include <cflow/scheduler.h>
+#include <cmeta_error.h>
 #include <cstl/queue.h>
-#include <salts_error.h>
+#include <salts/error_codes.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -45,6 +46,10 @@ struct turbo_flow_cnet_packet_source_s {
   bool publisher_cancelled;
   bool has_content;
   bool message_id_exhausted;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  int test_stop_status;
+  int test_destroy_status;
+#endif
 };
 
 static int packet_source_stl_status(stl_status status) {
@@ -80,7 +85,7 @@ static void packet_source_fail(turbo_flow_cnet_packet_source_t *source, int stat
   packet_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
   (void)snprintf(source->publisher_error, sizeof(source->publisher_error),
                  "CNet packet source failed at %s: %s (%d)", source->error_stage,
-                 salts_strerror(source->status), source->status);
+                 cmeta_strerror(source->status), source->status);
   packet_source_wake(&source->value_waker);
   packet_source_wake(&source->terminal_waker);
 }
@@ -366,24 +371,28 @@ static void packet_source_clear_queue(turbo_flow_cnet_packet_source_t *source) {
   }
 }
 
-static void packet_source_open_cleanup(turbo_flow_cnet_packet_source_t *source,
-                                       cflow_publisher *publisher) {
-  if (!source) return;
-  if (source->run) {
-    turbo_flow_run_close(source->run);
-    source->run = NULL;
-  } else if (publisher && cflow_publisher_valid(publisher)) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+/* Only the private open wrapper sets these; each allocated owner copies its
+ * fault admission and retains it independently through explicit stop retries. */
+static _Thread_local int packet_source_test_open_stop_status;
+static _Thread_local int packet_source_test_open_destroy_status;
+#endif
+
+static int packet_source_open_failed(turbo_flow_cnet_packet_source_t *source,
+                                     cflow_publisher *publisher,
+                                     turbo_flow_cnet_packet_source_t **source_out,
+                                     int open_status, const char *stage) {
+  int cleanup_status;
+  packet_source_fail(source, open_status, (cnet_packet_session){0}, stage);
+  if (!source->run && publisher && cflow_publisher_valid(publisher))
     cflow_publisher_destroy(publisher);
-  }
-  if (source->endpoint_initialized) {
-    (void)cnet_packet_endpoint_stop(&source->endpoint, PACKET_SOURCE_OPEN_CLEANUP_TIMEOUT_MS);
-    (void)cnet_packet_endpoint_destroy(&source->endpoint);
-  }
-  if (source->scheduler_initialized) cflow_scheduler_destroy(&source->scheduler);
-  packet_source_clear_queue(source);
-  if (source->queue_initialized) queue_destroy(&source->messages);
-  tstr_free(source->source_name);
-  free(source);
+  cleanup_status = turbo_flow_cnet_packet_source_stop(source, PACKET_SOURCE_OPEN_CLEANUP_TIMEOUT_MS);
+  if (cleanup_status == SALTS_OK)
+    cleanup_status = turbo_flow_cnet_packet_source_destroy(source);
+  if (cleanup_status == SALTS_OK) return open_status;
+  source->state = TURBO_FLOW_CNET_PACKET_SOURCE_FAILED;
+  *source_out = source;
+  return cleanup_status;
 }
 
 int turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_config_t *config,
@@ -399,6 +408,10 @@ int turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_confi
   if (status != SALTS_OK) return status;
   source = (turbo_flow_cnet_packet_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  source->test_stop_status = packet_source_test_open_stop_status;
+  source->test_destroy_status = packet_source_test_open_destroy_status;
+#endif
   source->state = TURBO_FLOW_CNET_PACKET_SOURCE_NEW;
   source->status = SALTS_OK;
   source->source_name = tstr_dup(config->source_name);
@@ -408,8 +421,7 @@ int turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_confi
   source->scheduler_max_steps_per_poll = config->scheduler_max_steps_per_poll;
   source->next_message_id = config->first_message_id;
   if (!source->source_name) {
-    packet_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return packet_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "open_storage");
   }
   if (config->content) {
     source->content = *config->content;
@@ -419,18 +431,15 @@ int turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_confi
                                                      _Alignof(turbo_flow_msg_t),
                                                      config->queue_capacity));
   if (status != SALTS_OK) {
-    packet_source_open_cleanup(source, &publisher);
-    return status;
+    return packet_source_open_failed(source, &publisher, source_out, status, "open");
   }
   source->queue_initialized = true;
   status = packet_source_stl_status(queue_reserve(&source->messages, config->queue_capacity));
   if (status != SALTS_OK) {
-    packet_source_open_cleanup(source, &publisher);
-    return status;
+    return packet_source_open_failed(source, &publisher, source_out, status, "open");
   }
   if (!cflow_scheduler_manual_init_with_capacity(&source->scheduler, config->scheduler_capacity)) {
-    packet_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return packet_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "open_storage");
   }
   source->scheduler_initialized = true;
   endpoint_config = *config->endpoint;
@@ -440,28 +449,47 @@ int turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_confi
                                                     .on_error = packet_source_on_error,
                                                     .user = source};
   status = cnet_packet_endpoint_init(&source->endpoint, &endpoint_config);
+  source->endpoint_initialized = source->endpoint.impl != NULL;
   if (status != SALTS_OK) {
-    packet_source_open_cleanup(source, &publisher);
-    return status;
+    return packet_source_open_failed(source, &publisher, source_out, status, "open");
   }
-  source->endpoint_initialized = true;
   status = cnet_packet_endpoint_port(&source->endpoint, &source->bound_port);
   if (status != SALTS_OK) {
-    packet_source_open_cleanup(source, &publisher);
-    return status;
+    return packet_source_open_failed(source, &publisher, source_out, status, "open");
   }
   publisher = packet_source_publisher_as_cflow_publisher(source);
   run_config.scheduler = &source->scheduler;
   status =
       turbo_flow_run_open(config->flow, config->source_name, &publisher, &run_config, &source->run);
   if (status != SALTS_OK) {
-    packet_source_open_cleanup(source, &publisher);
-    return status;
+    return packet_source_open_failed(source, &publisher, source_out, status, "graph_run_open");
   }
   source->state = TURBO_FLOW_CNET_PACKET_SOURCE_RUNNING;
   *source_out = source;
   return SALTS_OK;
 }
+
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+int turbo_flow_cnet_test_packet_source_open(
+    const turbo_flow_cnet_packet_source_config_t *config,
+    turbo_flow_cnet_packet_source_t **source_out, int stop_status, int destroy_status) {
+  int status;
+  packet_source_test_open_stop_status = stop_status;
+  packet_source_test_open_destroy_status = destroy_status;
+  status = turbo_flow_cnet_packet_source_open(config, source_out);
+  packet_source_test_open_stop_status = SALTS_OK;
+  packet_source_test_open_destroy_status = SALTS_OK;
+  return status;
+}
+
+int turbo_flow_cnet_test_packet_source_fail_next_stop(
+    turbo_flow_cnet_packet_source_t *source, int status) {
+  if (!source || status == SALTS_OK) return SALTS_EINVAL;
+  if (!source->endpoint_initialized || source->test_stop_status != SALTS_OK) return SALTS_EBUSY;
+  source->test_stop_status = status;
+  return SALTS_OK;
+}
+#endif
 
 static void packet_source_refresh_run(turbo_flow_cnet_packet_source_t *source) {
   turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
@@ -614,15 +642,27 @@ int turbo_flow_cnet_packet_source_stop(turbo_flow_cnet_packet_source_t *source,
   }
   packet_source_clear_queue(source);
   if (source->endpoint_initialized) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    if (source->test_stop_status != SALTS_OK) {
+      status = source->test_stop_status;
+      source->test_stop_status = SALTS_OK;
+    } else
+#endif
     status = cnet_packet_endpoint_stop(&source->endpoint, timeout_ms);
     if (status != SALTS_OK) return status;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    if (source->test_destroy_status != SALTS_OK) {
+      status = source->test_destroy_status;
+      source->test_destroy_status = SALTS_OK;
+    } else
+#endif
     status = cnet_packet_endpoint_destroy(&source->endpoint);
     if (status != SALTS_OK) return status;
     source->endpoint_initialized = false;
   }
   if (source->scheduler_initialized) {
     (void)cflow_scheduler_run_until_idle(&source->scheduler, 0u);
-    (void)cflow_scheduler_shutdown(&source->scheduler);
+    if (!cflow_scheduler_shutdown(&source->scheduler)) return SALTS_EBUSY;
     cflow_scheduler_destroy(&source->scheduler);
     source->scheduler_initialized = false;
   }

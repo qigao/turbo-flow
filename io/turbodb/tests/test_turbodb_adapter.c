@@ -4,7 +4,8 @@
 #include <cflow/publishers.h>
 #include <cmeta/data.h>
 #include <cmeta/struct.h>
-#include <salts_error.h>
+#include <salts/error_codes.h>
+#include <orm_runtime.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -299,6 +300,8 @@ static void wait_source_signal(wait_source_t *source) {
   waker.wake(waker.user);
 }
 
+static orm_runtime_t *test_database_runtime;
+
 static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint64_t max_rows,
                                                         uint64_t max_bytes) {
   orm_config_t config;
@@ -313,7 +316,7 @@ static orm_connection_t *open_test_database_with_limits(orm_error_t *error, uint
   config.option_count = 1u;
   if (max_rows != 0u) config.max_result_rows = max_rows;
   if (max_bytes != 0u) config.max_result_bytes = max_bytes;
-  check_equal(orm_connect(&config, &connection, error), ORM_STATUS_OK);
+  check_equal(orm_runtime_connect(test_database_runtime, &config, &connection, error), ORM_STATUS_OK);
   return connection;
 }
 
@@ -390,8 +393,7 @@ static turbo_flow_t *open_graph(turbo_flow_stage_fn stage, void *stage_context) 
   return flow;
 }
 
-typedef struct tidesdb_busy_fixture_s {
-  char *path;
+typedef struct sqlite_busy_fixture_s {
   orm_connection_t *connection;
   orm_transaction_t *transaction;
   orm_query_t *query;
@@ -402,11 +404,11 @@ typedef struct tidesdb_busy_fixture_s {
   count_graph_probe_t probe;
   bool transaction_active;
   bool scheduler_initialized;
-} tidesdb_busy_fixture_t;
+} sqlite_busy_fixture_t;
 
-static bool tidesdb_busy_fixture_open(tidesdb_busy_fixture_t *fixture, bool fail_binding,
+static bool sqlite_busy_fixture_open(sqlite_busy_fixture_t *fixture, bool fail_binding,
                                       orm_error_t *error) {
-  orm_option_t options[2];
+  orm_option_t filename;
   orm_config_t database_config;
   orm_flow_config_t flow_config;
   turbo_flow_turbodb_source_config_t source_config = turbo_flow_turbodb_source_config_default();
@@ -417,16 +419,24 @@ static bool tidesdb_busy_fixture_open(tidesdb_busy_fixture_t *fixture, bool fail
 
   if (!fixture || !error) return false;
   memset(fixture, 0, sizeof(*fixture));
-  fixture->path = tt_make_temp_dir("turbo-flow-tidesdb-busy");
-  if (!fixture->path) return false;
 
   orm_config(&database_config);
-  options[0] = (orm_option_t){orm_view("path"), orm_view(fixture->path)};
-  options[1] = (orm_option_t){orm_view("column_family"), orm_view("turbo_flow_busy")};
-  database_config.driver = orm_view("tidesdb");
-  database_config.options = options;
-  database_config.option_count = 2u;
-  if (orm_connect(&database_config, &fixture->connection, error) != ORM_STATUS_OK) return false;
+  filename = (orm_option_t){orm_view("filename"), orm_view(":memory:")};
+  database_config.driver = orm_view("sqlite");
+  database_config.options = &filename;
+  database_config.option_count = 1u;
+  if (orm_runtime_connect(test_database_runtime, &database_config, &fixture->connection, error) !=
+      ORM_STATUS_OK) return false;
+  if (orm_raw(fixture->connection,
+              orm_view("CREATE TABLE people (id BIGINT PRIMARY KEY, score BIGINT)"),
+              &fixture->query, error) != ORM_STATUS_OK ||
+      orm_query_open_command_flow(fixture->query, &command_source, error) != ORM_STATUS_OK)
+    return false;
+  step = cflow_publisher_resume(&command_source, NULL, &command);
+  cflow_publisher_destroy(&command_source);
+  if (step.kind != CFLOW_STEP_VALUE_AND_DONE) return false;
+  orm_query_destroy(fixture->query);
+  fixture->query = NULL;
   if (orm_transaction_begin(fixture->connection, ORM_ISOLATION_SERIALIZABLE, &fixture->transaction,
                             error) != ORM_STATUS_OK)
     return false;
@@ -435,7 +445,9 @@ static bool tidesdb_busy_fixture_open(tidesdb_busy_fixture_t *fixture, bool fail
   if (orm_insert(fixture->connection, orm_view("people"), &fixture->query, error) !=
           ORM_STATUS_OK ||
       orm_query_set(fixture->query, orm_view("id"), orm_i64(7), error) != ORM_STATUS_OK ||
-      orm_query_set(fixture->query, orm_view("score"), orm_i64(19), error) != ORM_STATUS_OK ||
+      /* NULL is valid SQL data but cannot bind to the non-nullable C long. */
+      orm_query_set(fixture->query, orm_view("score"), fail_binding ? orm_null() : orm_i64(19),
+                    error) != ORM_STATUS_OK ||
       orm_query_open_command_flow_in_transaction(fixture->query, fixture->transaction,
                                                  &command_source, error) != ORM_STATUS_OK)
     return false;
@@ -454,7 +466,6 @@ static bool tidesdb_busy_fixture_open(tidesdb_busy_fixture_t *fixture, bool fail
     return false;
 
   orm_flow_config(&flow_config, &TEST_DB_ROW_DATA);
-  if (fail_binding) flow_config.scratch_bytes = 0u;
   source_config.projection_schema = &TEST_DB_ROW_SCHEMA;
   if (turbo_flow_turbodb_query_open_in_transaction(fixture->query, fixture->transaction,
                                                    &flow_config, &source_config, &fixture->messages,
@@ -471,23 +482,23 @@ static bool tidesdb_busy_fixture_open(tidesdb_busy_fixture_t *fixture, bool fail
   return true;
 }
 
-static orm_status_t tidesdb_busy_fixture_commit(tidesdb_busy_fixture_t *fixture,
+static orm_status_t sqlite_busy_fixture_commit(sqlite_busy_fixture_t *fixture,
                                                 orm_error_t *error) {
   const orm_status_t status = orm_transaction_commit(fixture->transaction, error);
   if (status == ORM_STATUS_OK) fixture->transaction_active = false;
   return status;
 }
 
-static void tidesdb_busy_fixture_close_run(tidesdb_busy_fixture_t *fixture) {
+static void sqlite_busy_fixture_close_run(sqlite_busy_fixture_t *fixture) {
   if (!fixture || !fixture->run) return;
   turbo_flow_run_close(fixture->run);
   fixture->run = NULL;
 }
 
-static bool tidesdb_busy_fixture_destroy(tidesdb_busy_fixture_t *fixture) {
+static bool sqlite_busy_fixture_destroy(sqlite_busy_fixture_t *fixture) {
   bool clean = true;
   if (!fixture) return false;
-  tidesdb_busy_fixture_close_run(fixture);
+  sqlite_busy_fixture_close_run(fixture);
   if (cflow_publisher_valid(&fixture->messages)) cflow_publisher_destroy(&fixture->messages);
   if (fixture->scheduler_initialized) cflow_scheduler_destroy(&fixture->scheduler);
   if (fixture->query) orm_query_destroy(fixture->query);
@@ -502,15 +513,39 @@ static bool tidesdb_busy_fixture_destroy(tidesdb_busy_fixture_t *fixture) {
     orm_transaction_destroy(fixture->transaction);
   }
   if (fixture->connection) orm_disconnect(fixture->connection);
-  if (fixture->path) {
-    if (tt_remove_tree(fixture->path) != 0) clean = false;
-    free(fixture->path);
-  }
   memset(fixture, 0, sizeof(*fixture));
   return clean;
 }
 
 spec("TurboDb ORM Publisher adapter") {
+  static sqlite_busy_fixture_t busy_fixture;
+
+  after_each() {
+    if (busy_fixture.connection || busy_fixture.flow || busy_fixture.scheduler_initialized)
+      check_true(sqlite_busy_fixture_destroy(&busy_fixture));
+  }
+
+  before_all() {
+    orm_runtime_config_t config;
+    orm_driver_load_config_t load = {0};
+    orm_error_t error;
+    orm_error_init(&error);
+    orm_runtime_config_init(&config);
+    config.max_drivers = 1u;
+    check_equal(orm_runtime_create(&config, &test_database_runtime, &error), ORM_STATUS_OK);
+    load.struct_size = sizeof(load);
+    load.abi_version = ORM_RUNTIME_ABI_VERSION;
+    load.module_path = orm_view(TURBO_FLOW_TEST_SQLITE_DRIVER);
+    load.expected_driver_id = orm_view("sqlite");
+    check_equal(orm_runtime_load_driver(test_database_runtime, &load, &error), ORM_STATUS_OK);
+  }
+
+  after_all() {
+    check_equal(orm_runtime_close(test_database_runtime, NULL), ORM_STATUS_OK);
+    orm_runtime_release(test_database_runtime);
+    test_database_runtime = NULL;
+  }
+
   it("provides versioned source defaults") {
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
 
@@ -1038,19 +1073,13 @@ spec("TurboDb ORM Publisher adapter") {
     orm_disconnect(connection);
   }
 
-  it("fails a Graph run before projection when CBind scratch capacity is insufficient") {
+  it("rejects insufficient native row scratch before Publisher admission") {
     orm_error_t error;
     orm_connection_t *connection;
     orm_query_t *query = NULL;
     orm_flow_config_t flow_config;
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
     cflow_publisher messages = {0};
-    count_graph_probe_t graph_probe = {0};
-    turbo_flow_t *flow;
-    turbo_flow_run_t *run = NULL;
-    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
-    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
-    cflow_scheduler scheduler = {0};
 
     orm_error_init(&error);
     connection = open_test_database(&error);
@@ -1061,42 +1090,21 @@ spec("TurboDb ORM Publisher adapter") {
     flow_config.scratch_bytes = 0u;
     config.projection_schema = &TEST_DB_ROW_SCHEMA;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
-                SALTS_OK);
-    flow = open_graph(count_graph_probe_stage, &graph_probe);
-    check_not_null(flow);
-    check_true(cflow_scheduler_inline_init(&scheduler));
-    run_config.scheduler = &scheduler;
-    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+                SALTS_ENOSPC);
+    check_equal(error.status, ORM_STATUS_LIMIT_EXCEEDED);
+    check_false(cflow_publisher_valid(&messages));
 
-    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
-    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
-    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
-    check_equal(result.status, SALTS_EIO);
-    check_contains(result.error.message, "row binding failed");
-    check_equal(result.values, 0u);
-    check_equal(graph_probe.count, 0u);
-
-    turbo_flow_run_close(run);
-    cflow_scheduler_destroy(&scheduler);
     orm_query_destroy(query);
-    check_equal(turbo_flow_stop(flow), SALTS_OK);
-    turbo_flow_destroy(flow);
     orm_disconnect(connection);
   }
 
-  it("fails a Graph run before projection when CBind depth capacity is insufficient") {
+  it("rejects an over-depth native row before Publisher admission") {
     orm_error_t error;
     orm_connection_t *connection;
     orm_query_t *query = NULL;
     orm_flow_config_t flow_config;
     turbo_flow_turbodb_source_config_t config = turbo_flow_turbodb_source_config_default();
     cflow_publisher messages = {0};
-    count_graph_probe_t graph_probe = {0};
-    turbo_flow_t *flow;
-    turbo_flow_run_t *run = NULL;
-    turbo_flow_run_config_t run_config = TURBO_FLOW_RUN_CONFIG_INIT;
-    turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
-    cflow_scheduler scheduler = {0};
 
     orm_error_init(&error);
     connection = open_test_database(&error);
@@ -1106,93 +1114,75 @@ spec("TurboDb ORM Publisher adapter") {
     flow_config.max_depth = 1u;
     config.projection_schema = &TEST_DB_NESTED_ROW_SCHEMA;
     check_equal(turbo_flow_turbodb_query_open(query, &flow_config, &config, &messages, &error),
-                SALTS_OK);
-    flow = open_graph(count_graph_probe_stage, &graph_probe);
-    check_not_null(flow);
-    check_true(cflow_scheduler_inline_init(&scheduler));
-    run_config.scheduler = &scheduler;
-    check_equal(turbo_flow_run_open(flow, "input", &messages, &run_config, &run), SALTS_OK);
+                SALTS_ENOTSUP);
+    check_equal(error.status, ORM_STATUS_UNSUPPORTED);
+    check_false(cflow_publisher_valid(&messages));
 
-    check_equal(turbo_flow_run_request(run, 1u), SALTS_EIO);
-    check_equal(turbo_flow_run_wait(run, UINT64_MAX, &result), SALTS_EIO);
-    check_equal(result.state, TURBO_FLOW_RUN_FAILED);
-    check_equal(result.status, SALTS_EIO);
-    check_contains(result.error.message, "row binding failed");
-    check_equal(result.values, 0u);
-    check_equal(graph_probe.count, 0u);
-
-    turbo_flow_run_close(run);
-    cflow_scheduler_destroy(&scheduler);
     orm_query_destroy(query);
-    check_equal(turbo_flow_stop(flow), SALTS_OK);
-    turbo_flow_destroy(flow);
     orm_disconnect(connection);
   }
 
-  it("keeps a TidesDB transaction busy until the adapted run closes") {
-    tidesdb_busy_fixture_t fixture;
+  it("keeps a SQLite transaction busy until the adapted run closes") {
     orm_error_t error;
     bool opened;
 
     orm_error_init(&error);
-    opened = tidesdb_busy_fixture_open(&fixture, false, &error);
-    check_true(opened);
+    opened = sqlite_busy_fixture_open(&busy_fixture, false, &error);
     if (!opened) {
-      check_true(tidesdb_busy_fixture_destroy(&fixture));
+      check_true(sqlite_busy_fixture_destroy(&busy_fixture));
+      check(opened, "SQLite fixture admission failed: %d %s", error.status, error.message);
       return;
     }
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_BUSY);
-    check_contains(error.message, "close TidesDB row Publishers");
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_BUSY);
+    check_contains(error.message, "transaction control operation is not admitted");
 
-    tidesdb_busy_fixture_close_run(&fixture);
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_OK);
-    check_equal(fixture.probe.count, 0u);
-    check_true(tidesdb_busy_fixture_destroy(&fixture));
+    sqlite_busy_fixture_close_run(&busy_fixture);
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_OK);
+    check_equal(busy_fixture.probe.count, 0u);
+    check_true(sqlite_busy_fixture_destroy(&busy_fixture));
   }
 
-  it("releases a TidesDB transaction Publisher when its run is canceled") {
-    tidesdb_busy_fixture_t fixture;
+  it("releases a SQLite transaction Publisher when its run is canceled") {
     turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
     orm_error_t error;
     bool opened;
 
     orm_error_init(&error);
-    opened = tidesdb_busy_fixture_open(&fixture, false, &error);
-    check_true(opened);
+    opened = sqlite_busy_fixture_open(&busy_fixture, false, &error);
     if (!opened) {
-      check_true(tidesdb_busy_fixture_destroy(&fixture));
+      check_true(sqlite_busy_fixture_destroy(&busy_fixture));
+      check(opened, "SQLite fixture admission failed: %d %s", error.status, error.message);
       return;
     }
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_BUSY);
-    check_equal(turbo_flow_run_cancel(fixture.run), SALTS_OK);
-    check_equal(turbo_flow_run_wait(fixture.run, UINT64_MAX, &result), SALTS_ECANCELED);
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_BUSY);
+    check_equal(turbo_flow_run_cancel(busy_fixture.run), SALTS_OK);
+    check_equal(turbo_flow_run_wait(busy_fixture.run, UINT64_MAX, &result), SALTS_ECANCELED);
     check_equal(result.state, TURBO_FLOW_RUN_CANCELED);
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_OK);
-    check_equal(fixture.probe.count, 0u);
-    check_true(tidesdb_busy_fixture_destroy(&fixture));
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_OK);
+    check_equal(busy_fixture.probe.count, 0u);
+    check_true(sqlite_busy_fixture_destroy(&busy_fixture));
   }
 
-  it("releases a TidesDB transaction Publisher when its run fails") {
-    tidesdb_busy_fixture_t fixture;
+  it("releases a SQLite transaction Publisher when its run fails") {
     turbo_flow_run_result_t result = TURBO_FLOW_RUN_RESULT_INIT;
     orm_error_t error;
     bool opened;
 
     orm_error_init(&error);
-    opened = tidesdb_busy_fixture_open(&fixture, true, &error);
-    check_true(opened);
+    opened = sqlite_busy_fixture_open(&busy_fixture, true, &error);
     if (!opened) {
-      check_true(tidesdb_busy_fixture_destroy(&fixture));
+      check_true(sqlite_busy_fixture_destroy(&busy_fixture));
+      check(opened, "SQLite fixture admission failed: %d %s", error.status, error.message);
       return;
     }
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_BUSY);
-    check_equal(turbo_flow_run_request(fixture.run, 1u), SALTS_EIO);
-    check_equal(turbo_flow_run_wait(fixture.run, UINT64_MAX, &result), SALTS_EIO);
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_BUSY);
+    check_equal(turbo_flow_run_request(busy_fixture.run, 1u), SALTS_EIO);
+    check_equal(turbo_flow_run_wait(busy_fixture.run, UINT64_MAX, &result), SALTS_EIO);
     check_equal(result.state, TURBO_FLOW_RUN_FAILED);
     check_contains(result.error.message, "row binding failed");
-    check_equal(tidesdb_busy_fixture_commit(&fixture, &error), ORM_STATUS_OK);
-    check_equal(fixture.probe.count, 0u);
-    check_true(tidesdb_busy_fixture_destroy(&fixture));
+    check_equal(sqlite_busy_fixture_commit(&busy_fixture, &error), ORM_STATUS_OK);
+    check_equal(busy_fixture.probe.count, 0u);
+    check_true(sqlite_busy_fixture_destroy(&busy_fixture));
   }
 
   it("preserves transaction ownership for row and command Publishers") {

@@ -63,7 +63,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(notification.evseId, 3);
     check_equal(notification.connectorId, 2);
 
-    check_equal(StatusNotificationRequest_to_bin(&notification, &binary, &binary_size, &error),
+    check_equal(StatusNotificationRequest_to_bin(codec, &notification, &binary, &binary_size, &error),
                 DATA_BIND_OK);
     check_equal(StatusNotificationRequest_from_bin(codec, &decoded, binary, binary_size, &error),
                 DATA_BIND_OK);
@@ -107,7 +107,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(tstr_len(event.timestamp), sizeof("2026-07-27T10:16:00Z") - 1u);
     check_equal(tstr_len(transaction.transactionId), sizeof("transaction-42") - 1u);
 
-    check_equal(TransactionEventRequired_to_bin(&event, &binary, &binary_size, &error),
+    check_equal(TransactionEventRequired_to_bin(codec, &event, &binary, &binary_size, &error),
                 DATA_BIND_OK);
     check_equal(TransactionEventRequired_from_bin(codec, &decoded, binary, binary_size, &error),
                 DATA_BIND_OK);
@@ -179,7 +179,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(tstr_len(id_token.idToken), sizeof("04AABBCCDD") - 1u);
     check_equal(id_token.type, IdTokenType_ISO14443);
 
-    check_equal(TransactionIdToken_to_bin(&id_token, &binary, &binary_size, &error),
+    check_equal(TransactionIdToken_to_bin(codec, &id_token, &binary, &binary_size, &error),
                 DATA_BIND_OK);
     check_equal(TransactionIdToken_from_bin(codec, &decoded_token, binary, binary_size, &error),
                 DATA_BIND_OK);
@@ -215,7 +215,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(encoded_json) - 1u);
     check_equal(encoded, encoded_json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     ResetRequest_clear(&request);
     data_bind_free(codec);
   }
@@ -239,7 +239,7 @@ spec("OCPP 2.0.1 Core generated DataBind ABI") {
     check_equal(encoded_size, sizeof(json) - 1u);
     check_equal(encoded, json, encoded_size);
 
-    tbe_typed_serialized_free(encoded);
+    data_bind_serialized_free(encoded);
     UnlockConnectorRequest_clear(&request);
     data_bind_free(codec);
   }

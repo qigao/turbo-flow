@@ -46,6 +46,8 @@ typedef enum turbo_flow_cnet_stream_source_state_e {
  *   config.uri = uri;
  *   config.client = client;
  *   config.max_message_bytes = client->receive_buffer_bytes;
+ *   // Forward both status and owner; the caller must clean up a non-NULL *out
+ *   // even when open reports an error. See the open cleanup example below.
  *   return turbo_flow_cnet_stream_source_open(&config, out);
  * }
  * @endcode
@@ -115,10 +117,29 @@ typedef struct turbo_flow_cnet_stream_source_snapshot_s {
 /**
  * Open one CNet TCP, TLS, or Pipe source without polling the network.
  *
- * @param config Valid size/version configuration; borrowed only until return.
- * @param source_out Receives the owning opaque handle on success and NULL on failure.
- * @return SALTS_OK, a validation/configuration error, a bounded-resource error,
- * or the synchronous CNet connection-admission error.
+ * @param config Valid size/version configuration, consumed synchronously;
+ * its Flow must remain alive until the returned owner's cleanup completes.
+ * @param source_out Receives the owning handle on success. On failure it is
+ * NULL if rollback completes, or a retryable owner if cleanup remains pending.
+ * @return SALTS_OK on success; the validation/allocation/CNet/Scheduler/Graph
+ * admission error after complete rollback; otherwise the cleanup error.
+ *
+ * A non-NULL owner returned on error is FAILED. Its snapshot status/error_stage
+ * preserves the original open failure. Only snapshot, stop and destroy are
+ * permitted: keep the owner and its Flow, explicitly retry stop, then destroy.
+ * Do not discard or overwrite the output merely because open returned an error.
+ *
+ * Cleanup example for any non-NULL source, including one returned on failure:
+ * @code{.c}
+ * int cleanup_status = turbo_flow_cnet_stream_source_stop(source, timeout_ms);
+ * turbo_flow_cnet_stream_source_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SOURCE_SNAPSHOT_INIT;
+ * if (turbo_flow_cnet_stream_source_snapshot(source, &snapshot) == SALTS_OK &&
+ *     snapshot.state == TURBO_FLOW_CNET_STREAM_SOURCE_STOPPED) {
+ *   // Report cleanup_status separately: a progress error can follow full drain.
+ *   if (turbo_flow_cnet_stream_source_destroy(source) == SALTS_OK) source = NULL;
+ * }
+ * // If source remains non-NULL, retain it and its Flow for a later stop retry.
+ * @endcode
  */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_config_t *config,
@@ -163,17 +184,21 @@ turbo_flow_cnet_stream_source_snapshot(const turbo_flow_cnet_stream_source_t *so
  * Close admission and drive CNet to quiescence within `timeout_ms`.
  *
  * @param source Live source owned by the calling thread.
- * @param timeout_ms Maximum CNet drain duration; retry after SALTS_ETIMEDOUT.
- * @return SALTS_OK, SALTS_EALREADY, SALTS_ETIMEDOUT, or a terminal drain error.
+ * @param timeout_ms Maximum CNet drain duration.
+ * @return SALTS_OK, SALTS_EALREADY, SALTS_ETIMEDOUT, SALTS_EBUSY, or a drain/
+ * destroy error. Pending cleanup retains the owner in STOPPING for explicit
+ * stop retry. A non-timeout progress error can accompany completed cleanup:
+ * snapshot state STOPPED authorizes destroy even if stop returned an error.
+ * Scheduler shutdown must complete before publishing STOPPED.
  */
 TURBO_FLOW_C_API int turbo_flow_cnet_stream_source_stop(turbo_flow_cnet_stream_source_t *source,
                                                         uint32_t timeout_ms);
 
 /**
- * Release a successfully stopped source.
+ * Release a source whose snapshot state is STOPPED.
  *
  * @param source Stopped source owned by the calling thread.
- * @return SALTS_OK, SALTS_EINVAL, or SALTS_EBUSY before successful stop.
+ * @return SALTS_OK, SALTS_EINVAL, or SALTS_EBUSY before STOPPED.
  */
 TURBO_FLOW_C_API int turbo_flow_cnet_stream_source_destroy(turbo_flow_cnet_stream_source_t *source);
 
@@ -213,6 +238,8 @@ typedef enum turbo_flow_cnet_listener_source_state_e {
  *   config.client = client;
  *   config.max_connections = client->connection_capacity;
  *   config.max_message_bytes = client->receive_buffer_bytes;
+ *   // Forward both status and owner; the caller must clean up a non-NULL *out
+ *   // even when open reports an error. See the open cleanup example below.
  *   return turbo_flow_cnet_listener_source_open(&config, out);
  * }
  * @endcode
@@ -307,10 +334,29 @@ typedef struct turbo_flow_cnet_listener_source_snapshot_s {
 /**
  * Open a bounded TCP or TLS listener owner without waiting for a peer.
  *
- * @param config Valid size/version configuration, borrowed only until return.
- * @param source_out Receives the opaque owner on success and NULL on failure.
- * @return SALTS_OK or the exact validation, allocation, CNet listener/client,
- * TLS-context, Scheduler, or Graph-run admission error.
+ * @param config Valid size/version configuration, consumed synchronously;
+ * its Flow must remain alive until the returned owner's cleanup completes.
+ * @param source_out Receives the owning handle on success. On failure it is
+ * NULL if rollback completes, or a retryable owner if cleanup remains pending.
+ * @return SALTS_OK on success; the validation/allocation/CNet/Scheduler/Graph
+ * admission error after complete rollback; otherwise the cleanup error.
+ *
+ * A non-NULL owner returned on error is FAILED. Its snapshot status/error_stage
+ * preserves the original open failure. Only snapshot, stop and destroy are
+ * permitted: keep the owner and its Flow, explicitly retry stop, then destroy.
+ * Do not discard or overwrite the output merely because open returned an error.
+ *
+ * Cleanup example for any non-NULL source, including one returned on failure:
+ * @code{.c}
+ * int cleanup_status = turbo_flow_cnet_listener_source_stop(source, timeout_ms);
+ * turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+ * if (turbo_flow_cnet_listener_source_snapshot(source, &snapshot) == SALTS_OK &&
+ *     snapshot.state == TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED) {
+ *   // Report cleanup_status separately: a progress error can follow full drain.
+ *   if (turbo_flow_cnet_listener_source_destroy(source) == SALTS_OK) source = NULL;
+ * }
+ * // If source remains non-NULL, retain it and its Flow for a later stop retry.
+ * @endcode
  */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_open(const turbo_flow_cnet_listener_source_config_t *config,
@@ -337,11 +383,21 @@ TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_snapshot(const turbo_flow_cnet_listener_source_t *source,
                                          turbo_flow_cnet_listener_source_snapshot_t *snapshot);
 
-/** Close listener admission and drain accepted connections within `timeout_ms`. */
+/**
+ * Close listener admission and drain accepted connections within `timeout_ms`.
+ *
+ * @param source Live source on its serialized owner thread, including failed open.
+ * @param timeout_ms Maximum CNet client drain duration.
+ * @return SALTS_OK, SALTS_EALREADY, or a close/drain/destroy error. Pending
+ * cleanup retains the owner in STOPPING for explicit stop retry. A progress
+ * error can accompany completed cleanup: snapshot state STOPPED authorizes
+ * destroy even if stop returned an error. Scheduler shutdown must complete
+ * before publishing STOPPED.
+ */
 TURBO_FLOW_C_API int turbo_flow_cnet_listener_source_stop(turbo_flow_cnet_listener_source_t *source,
                                                           uint32_t timeout_ms);
 
-/** Release a successfully stopped source; a live owner returns SALTS_EBUSY. */
+/** Release a STOPPED source; pending cleanup returns SALTS_EBUSY. */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_listener_source_destroy(turbo_flow_cnet_listener_source_t *source);
 
@@ -449,7 +505,34 @@ typedef struct turbo_flow_cnet_packet_source_snapshot_s {
    {0u, 0u},                                                                                       \
    {0}}
 
-/** Open a bounded UDP/KCP endpoint and Graph source without polling either runtime. */
+/**
+ * Open a bounded UDP/KCP endpoint and Graph source without polling either runtime.
+ *
+ * @param config Borrowed configuration consumed synchronously; its Flow must
+ *               remain alive until any returned source has been stopped.
+ * @param source_out Receives the owning handle on success. On failure, NULL
+ *                   means rollback completed; a non-NULL handle owns resources
+ *                   whose cleanup failed and must be retained for explicit retry.
+ * @return SALTS_OK on success, the admission error after successful rollback,
+ *         or the cleanup error when rollback cannot finish. For a returned
+ *         failed owner, snapshot.status/error_stage preserve the original open
+ *         error. Only snapshot, stop and destroy are permitted on that owner.
+ *
+ * Callers must inspect *source_out even when open returns an error. Retry stop
+ * with the returned handle; release it with destroy only after stop succeeds.
+ * Do not discard the handle, reuse it for another open, or release its Flow
+ * while cleanup is pending. Ordinary validation failures still return NULL.
+ *
+ * Cleanup example for any non-NULL source, including one returned on failure:
+ * @code
+ * int cleanup_status = turbo_flow_cnet_packet_source_stop(source, timeout_ms);
+ * if (cleanup_status == SALTS_OK || cleanup_status == SALTS_EALREADY) {
+ *   cleanup_status = turbo_flow_cnet_packet_source_destroy(source);
+ *   if (cleanup_status == SALTS_OK) source = NULL;
+ * }
+ * // If source remains non-NULL, retain it and its Flow for a later stop retry.
+ * @endcode
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_packet_source_open(const turbo_flow_cnet_packet_source_config_t *config,
                                    turbo_flow_cnet_packet_source_t **source_out);
@@ -534,6 +617,7 @@ typedef struct turbo_flow_cnet_stream_sink_config_s {
   size_t max_message_bytes;
   size_t actor_command_capacity;
   size_t actor_max_steps_per_poll;
+  /** Native stop wait per Flow stop attempt; a timeout requires explicit retry. */
   uint32_t stop_timeout_ms;
 } turbo_flow_cnet_stream_sink_config_t;
 
@@ -574,7 +658,14 @@ typedef struct turbo_flow_cnet_stream_sink_snapshot_s {
    0u,                                                                                             \
    0u}
 
-/** Register one Flow-owned adapter binding; the returned progress handle is caller-driven. */
+/**
+ * Register one Flow-owned adapter binding; the returned progress handle is caller-driven.
+ * Native stop/destroy errors propagate through turbo_flow_stop(). A failed stop
+ * retains the binding and remaining native/Actor owners for explicit retry.
+ * Pending Flow claims settle with SALTS_ESHUTDOWN when native drain fails;
+ * active_requests still counts retained Actor tokens until real native terminal
+ * delivery. Keep both Flow and this handle alive until stop succeeds.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_stream_sink_register(const turbo_flow_cnet_stream_sink_config_t *config,
                                      turbo_flow_cnet_stream_sink_t **sink_out);
@@ -618,6 +709,7 @@ typedef struct turbo_flow_cnet_datagram_sink_config_s {
   size_t max_message_bytes;
   size_t actor_command_capacity;
   size_t actor_max_steps_per_poll;
+  /** Native stop wait per Flow stop attempt; a timeout requires explicit retry. */
   uint32_t stop_timeout_ms;
 } turbo_flow_cnet_datagram_sink_config_t;
 
@@ -654,7 +746,14 @@ typedef struct turbo_flow_cnet_datagram_sink_snapshot_s {
    0u,                                                                                             \
    0u}
 
-/** Register one fixed-peer raw UDP terminal sink before graph compilation. */
+/**
+ * Register one fixed-peer raw UDP terminal sink before graph compilation.
+ * Each Flow stop attempts native drain once. Stop/destroy failure retains the
+ * binding and remaining owners for explicit retry. Pending Flow claims settle
+ * with SALTS_ESHUTDOWN on failed drain; active_requests includes retained Actor
+ * tokens until real native terminals arrive. Keep Flow and this handle alive
+ * until stop succeeds. Native progress remains on one non-overlapping owner.
+ */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_register(const turbo_flow_cnet_datagram_sink_config_t *config,
                                        turbo_flow_cnet_datagram_sink_t **sink_out);
@@ -664,6 +763,7 @@ TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_poll(turbo_flow_cnet_datagram_sink_t *sink, uint32_t timeout_ms,
                                    turbo_flow_cnet_datagram_sink_snapshot_t *snapshot);
 
+/** Copy a synchronized snapshot without advancing the native progress owner. */
 TURBO_FLOW_C_API int
 turbo_flow_cnet_datagram_sink_snapshot(const turbo_flow_cnet_datagram_sink_t *sink,
                                        turbo_flow_cnet_datagram_sink_snapshot_t *snapshot);
@@ -695,10 +795,12 @@ typedef enum turbo_flow_cnet_packet_sink_state_e {
  * The sink copies `endpoint`, including its embedded security material, and
  * copies `endpoint->datagram.host`. The endpoint and observer callbacks in the
  * supplied configuration must be unowned and empty. Each accepted graph claim
- * is retained until the matching CNet tagged logical-send terminal arrives.
- * `stop_timeout_ms` is one native stop-wait slice; shutdown repeats timed-out
- * slices because returning before authoritative packet terminals would abandon
- * accepted claims.
+ * is retained until the matching CNet tagged logical-send terminal arrives or
+ * failed shutdown settles it with SALTS_ESHUTDOWN. `stop_timeout_ms` bounds one
+ * native stop attempt per Flow stop. On failure the host retains the Flow and
+ * sink and explicitly retries stop before reset/destroy. Native copied payloads,
+ * operation slots and Actor tokens remain alive until their true terminal;
+ * late terminals only retire already-settled claims, without counting success.
  */
 typedef struct turbo_flow_cnet_packet_sink_config_s {
   size_t size;
@@ -739,6 +841,7 @@ typedef struct turbo_flow_cnet_packet_sink_snapshot_s {
   uint16_t bound_port;
   cnet_packet_session session;
   int session_open;
+  /** Retained Actor tokens; may remain nonzero after shutdown settled claims. */
   size_t active_requests;
   uint64_t messages_sent;
   uint64_t bytes_sent;

@@ -1,7 +1,7 @@
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_plugin.h"
 
-#include "salts_error.h"
+#include "salts/error_codes.h"
 
 #include <stdatomic.h>
 #include <stdio.h>

@@ -89,10 +89,10 @@ set(salts_package_dir "${salts_root}/lib/cmake/Salts")
 set(salts_utils_package_dir "${salts_utils_root}/lib/cmake/SaltsUtils")
 set(rules_forge_package_dir "${rules_forge_root}/lib/cmake/RulesForge")
 if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
-  set(orm_package_dir "${turbodb_root}/lib/cmake/Orm")
+  set(turbodb_package_dir "${turbodb_root}/lib/cmake/TurboDB")
   set(turbodb_consumer_env "TURBODB_ROOT=${turbodb_root}")
   set(turbodb_consumer_cmake_args
-      "-DOrm_DIR=${orm_package_dir}"
+      "-DTurboDB_DIR=${turbodb_package_dir}"
       -DTURBO_FLOW_TEST_HAS_TURBODB_ADAPTER=TRUE)
 else()
   set(turbodb_consumer_env)
@@ -293,7 +293,7 @@ if(TURBO_FLOW_HAS_TURBODB_ADAPTER)
     "-DSalts_DIR=${salts_package_dir}"
     "-DSaltsUtils_DIR=${salts_utils_package_dir}"
     "-DRulesForge_DIR=${rules_forge_package_dir}"
-    "-DOrm_DIR=${orm_package_dir}"
+    "-DTurboDB_DIR=${turbodb_package_dir}"
     -DTURBO_FLOW_TEST_COMPONENT=TurboDbAdapter)
   run_checked(
     "TurboDb adapter consumer build"

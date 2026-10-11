@@ -1,7 +1,11 @@
 #include "turbo_flow_cnet.h"
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+#include "turbo_flow_cnet_test_internal.h"
+#endif
 
 #include <cflow/scheduler.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
+#include <salts/error_codes.h>
 #include <tstr.h>
 
 #include <stdbool.h>
@@ -37,6 +41,9 @@ struct turbo_flow_cnet_stream_source_s {
   bool publisher_cancelled;
   bool has_content;
   bool message_id_exhausted;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  turbo_flow_cnet_test_cleanup_fault test_cleanup_fault;
+#endif
 };
 
 static bool stream_source_connection_equal(cnet_connection lhs, cnet_connection rhs) {
@@ -60,6 +67,7 @@ static void stream_source_copy_stage(char *destination, size_t capacity, const c
 static void stream_source_fail(turbo_flow_cnet_stream_source_t *source, int status,
                                int native_status, const char *stage) {
   if (!source || source->state == TURBO_FLOW_CNET_STREAM_SOURCE_FAILED ||
+      source->state == TURBO_FLOW_CNET_STREAM_SOURCE_STOPPING ||
       source->state == TURBO_FLOW_CNET_STREAM_SOURCE_STOPPED) {
     return;
   }
@@ -70,7 +78,7 @@ static void stream_source_fail(turbo_flow_cnet_stream_source_t *source, int stat
   stream_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
   (void)snprintf(source->publisher_error, sizeof(source->publisher_error),
                  "CNet stream source failed at %s: %s (%d, native=%d)", source->error_stage,
-                 salts_strerror(source->status), source->status, source->native_status);
+                 cmeta_strerror(source->status), source->status, source->native_status);
   if (source->client_initialized && source->connection.generation != 0u) {
     (void)cnet_close(&source->client, source->connection);
   }
@@ -305,23 +313,29 @@ static int stream_source_config_validate(const turbo_flow_cnet_stream_source_con
   return SALTS_OK;
 }
 
-static void stream_source_open_cleanup(turbo_flow_cnet_stream_source_t *source,
-                                       cflow_publisher *publisher) {
-  if (!source) return;
-  if (source->run) {
-    turbo_flow_run_close(source->run);
-    source->run = NULL;
-  } else if (publisher && cflow_publisher_valid(publisher)) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+static _Thread_local turbo_flow_cnet_test_cleanup_fault stream_source_test_open_fault;
+#endif
+
+static int stream_source_open_failed(turbo_flow_cnet_stream_source_t *source,
+                                      cflow_publisher *publisher,
+                                      turbo_flow_cnet_stream_source_t **source_out,
+                                      int open_status, const char *stage) {
+  int cleanup_status;
+  if (!source->run && publisher && cflow_publisher_valid(publisher))
     cflow_publisher_destroy(publisher);
-  }
-  if (source->client_initialized) {
-    (void)cnet_client_stop(&source->client, 0u);
-    (void)cnet_client_destroy(&source->client);
-  }
-  if (source->scheduler_initialized) cflow_scheduler_destroy(&source->scheduler);
-  turbo_flow_msg_cleanup(&source->ready_message);
-  tstr_free(source->source_name);
-  free(source);
+  cleanup_status = turbo_flow_cnet_stream_source_stop(source, 0u);
+  /* A progress error can accompany complete native teardown. Resource state,
+   * not the stop error alone, determines whether a retry owner is necessary. */
+  if (source->state == TURBO_FLOW_CNET_STREAM_SOURCE_STOPPED)
+    cleanup_status = turbo_flow_cnet_stream_source_destroy(source);
+  if (cleanup_status == SALTS_OK) return open_status;
+  source->state = TURBO_FLOW_CNET_STREAM_SOURCE_FAILED;
+  source->status = open_status;
+  source->native_status = 0;
+  stream_source_copy_stage(source->error_stage, sizeof(source->error_stage), stage);
+  *source_out = source;
+  return cleanup_status;
 }
 
 int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_config_t *config,
@@ -337,6 +351,9 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   if (rc != SALTS_OK) return rc;
   source = (turbo_flow_cnet_stream_source_t *)calloc(1u, sizeof(*source));
   if (!source) return SALTS_ENOMEM;
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  source->test_cleanup_fault = stream_source_test_open_fault;
+#endif
   source->state = TURBO_FLOW_CNET_STREAM_SOURCE_NEW;
   source->status = SALTS_OK;
   source->source_name = tstr_dup(config->source_name);
@@ -345,29 +362,25 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   source->next_message_id = config->first_message_id;
   turbo_flow_msg_init(&source->ready_message);
   if (!source->source_name) {
-    stream_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return stream_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "open_storage");
   }
   if (config->content) {
     source->content = *config->content;
     source->has_content = true;
   }
   if (!cflow_scheduler_manual_init_with_capacity(&source->scheduler, config->scheduler_capacity)) {
-    stream_source_open_cleanup(source, &publisher);
-    return SALTS_ENOMEM;
+    return stream_source_open_failed(source, &publisher, source_out, SALTS_ENOMEM, "scheduler_init");
   }
   source->scheduler_initialized = true;
   rc = cnet_client_init(&source->client, config->client);
+  source->client_initialized = source->client.impl != NULL;
   if (rc != SALTS_OK) {
-    stream_source_open_cleanup(source, &publisher);
-    return rc;
+    return stream_source_open_failed(source, &publisher, source_out, rc, "client_init");
   }
-  source->client_initialized = true;
   if (config->socket_options) {
     rc = cnet_client_set_stream_socket_options(&source->client, config->socket_options);
     if (rc != SALTS_OK) {
-      stream_source_open_cleanup(source, &publisher);
-      return rc;
+      return stream_source_open_failed(source, &publisher, source_out, rc, "socket_options");
     }
   }
   publisher = stream_source_publisher_as_cflow_publisher(source);
@@ -375,8 +388,7 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   rc =
       turbo_flow_run_open(config->flow, config->source_name, &publisher, &run_config, &source->run);
   if (rc != SALTS_OK) {
-    stream_source_open_cleanup(source, &publisher);
-    return rc;
+    return stream_source_open_failed(source, &publisher, source_out, rc, "graph_run_open");
   }
   connect_options.uri = config->uri;
   connect_options.tls = config->tls;
@@ -386,11 +398,44 @@ int turbo_flow_cnet_stream_source_open(const turbo_flow_cnet_stream_source_confi
   source->state = TURBO_FLOW_CNET_STREAM_SOURCE_CONNECTING;
   rc = cnet_connect(&source->client, &connect_options, &source->connection);
   if (rc != SALTS_OK) {
-    stream_source_open_cleanup(source, &publisher);
-    return rc;
+    return stream_source_open_failed(source, &publisher, source_out, rc, "connect");
   }
   *source_out = source;
   return SALTS_OK;
+}
+
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+int turbo_flow_cnet_test_stream_source_open(
+    const turbo_flow_cnet_stream_source_config_t *config,
+    turbo_flow_cnet_stream_source_t **source_out, turbo_flow_cnet_test_cleanup_fault fault) {
+  stream_source_test_open_fault = fault;
+  int status = turbo_flow_cnet_stream_source_open(config, source_out);
+  stream_source_test_open_fault = (turbo_flow_cnet_test_cleanup_fault){0};
+  return status;
+}
+
+int turbo_flow_cnet_test_stream_source_fail_next_cleanup(
+    turbo_flow_cnet_stream_source_t *source, turbo_flow_cnet_test_cleanup_fault fault) {
+  if (!source || fault.status == SALTS_OK) return SALTS_EINVAL;
+  if (source->test_cleanup_fault.status != SALTS_OK) return SALTS_EBUSY;
+  source->test_cleanup_fault = fault;
+  return SALTS_OK;
+}
+#endif
+
+static int stream_source_client_stop(turbo_flow_cnet_stream_source_t *source, uint32_t timeout_ms) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+  int injected = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                   TF_CNET_TEST_CLIENT_STOP);
+  if (injected != SALTS_OK) {
+    if (source->test_cleanup_fault.after_drain) {
+      int status = cnet_client_stop(&source->client, timeout_ms);
+      if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    }
+    return injected;
+  }
+#endif
+  return cnet_client_stop(&source->client, timeout_ms);
 }
 
 static void stream_source_refresh_run(turbo_flow_cnet_stream_source_t *source) {
@@ -480,14 +525,28 @@ int turbo_flow_cnet_stream_source_stop(turbo_flow_cnet_stream_source_t *source,
     turbo_flow_run_close(source->run);
     source->run = NULL;
   }
-  stop_rc = source->client_initialized ? cnet_client_stop(&source->client, timeout_ms) : SALTS_OK;
+  stop_rc = source->client_initialized ? stream_source_client_stop(source, timeout_ms) : SALTS_OK;
   if (stop_rc == SALTS_ETIMEDOUT) return stop_rc;
-  destroy_rc = source->client_initialized ? cnet_client_destroy(&source->client) : SALTS_OK;
+  if (stop_rc == SALTS_EALREADY) stop_rc = SALTS_OK;
+  destroy_rc = SALTS_OK;
+  if (source->client_initialized) {
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    destroy_rc = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                   TF_CNET_TEST_CLIENT_DESTROY);
+#endif
+    if (destroy_rc == SALTS_OK) destroy_rc = cnet_client_destroy(&source->client);
+    source->client_initialized = source->client.impl != NULL;
+  }
   if (destroy_rc != SALTS_OK) return stop_rc == SALTS_OK ? destroy_rc : stop_rc;
   source->client_initialized = false;
   if (source->scheduler_initialized) {
     (void)cflow_scheduler_run_until_idle(&source->scheduler, 0u);
-    (void)cflow_scheduler_shutdown(&source->scheduler);
+#if defined(TURBO_FLOW_CNET_INTERNAL_TESTING)
+    int injected = turbo_flow_cnet_test_cleanup_take(&source->test_cleanup_fault,
+                                                     TF_CNET_TEST_SCHEDULER_SHUTDOWN);
+    if (injected != SALTS_OK) return injected;
+#endif
+    if (!cflow_scheduler_shutdown(&source->scheduler)) return SALTS_EBUSY;
     cflow_scheduler_destroy(&source->scheduler);
     source->scheduler_initialized = false;
   }

@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "salts_error.h"
+#include "salts/error_codes.h"
 #include "turbo_flow_protocol.h"
 #include "turbo_flow_protocol_plugin.h"
 

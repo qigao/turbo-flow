@@ -1,4 +1,4 @@
-#include "turbo_flow_chttp.h"
+#include "turbo_flow_chttp_client_internal.h"
 
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -7,14 +7,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-typedef enum turbo_flow_chttp_slot_state_e {
-  TURBO_FLOW_CHTTP_SLOT_FREE = 0,
-  TURBO_FLOW_CHTTP_SLOT_QUEUED,
-  TURBO_FLOW_CHTTP_SLOT_ACTIVE,
-  TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT,
-  TURBO_FLOW_CHTTP_SLOT_COMPLETING
-} turbo_flow_chttp_slot_state_t;
 
 typedef struct turbo_flow_chttp_response_storage_s {
   turbo_flow_chttp_response_context_t public_context;
@@ -29,51 +21,6 @@ typedef struct turbo_flow_chttp_header_storage_s {
   size_t value_offset;
   size_t value_size;
 } turbo_flow_chttp_header_storage_t;
-
-typedef struct turbo_flow_chttp_slot_s {
-  struct turbo_flow_chttp_client_s *owner;
-  turbo_flow_chttp_slot_state_t state;
-  turbo_flow_async_emit_claim_t claim;
-  chttp_request request;
-  uint32_t attempts;
-  uint64_t deadline_ms;
-  uint64_t retry_at_ms;
-  int cancel_requested;
-  int cancel_status;
-} turbo_flow_chttp_slot_t;
-
-struct turbo_flow_chttp_client_s {
-  turbo_flow_t *flow;
-  tstr adapter_name;
-  chttp_client_config config;
-  tstr connection_uri;
-  tstr authority;
-  tstr target;
-  chttp_method method;
-  chttp_header *headers;
-  size_t header_count;
-  const chttp_tls_profile *tls;
-  chttp_protocol protocol;
-  uint32_t overall_timeout_ms;
-  uint32_t max_attempts;
-  uint32_t retry_delay_ms;
-  uint32_t stop_timeout_ms;
-  int idempotent;
-  chttp_async_client http;
-  turbo_flow_chttp_slot_t *slots;
-  size_t slot_count;
-  salts_mutex_t mutex;
-  salts_cond_t owner_cond;
-  int owner_active;
-  turbo_flow_chttp_client_state_t state;
-  uint64_t submitted_requests;
-  uint64_t completed_requests;
-  uint64_t retried_requests;
-  uint64_t canceled_requests;
-  uint64_t response_bytes;
-  int last_status;
-  int last_native_status;
-};
 
 static int chttp_adapter_add_size(size_t *total, size_t value) {
   if (!total || value > SIZE_MAX - *total) return SALTS_ERANGE;
@@ -271,7 +218,7 @@ static void chttp_adapter_finish(turbo_flow_chttp_slot_t *slot, int status,
     completion_status = chttp_adapter_make_output(slot, response, &output);
     has_output = completion_status == SALTS_OK;
   }
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   chttp_adapter_take_claim(slot, &claim);
   chttp_adapter_counter_increment(&client->completed_requests);
   if (has_output) {
@@ -281,7 +228,7 @@ static void chttp_adapter_finish(turbo_flow_chttp_slot_t *slot, int status,
   }
   client->last_status = completion_status;
   client->last_native_status = native_status;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   (void)turbo_flow_async_emit_complete(&claim, completion_status, has_output ? &output : NULL);
   turbo_flow_msg_cleanup(&output);
 }
@@ -297,9 +244,15 @@ static void chttp_adapter_complete(void *user, chttp_request request,
   if (!slot || !(client = slot->owner)) return;
   status = error ? error->status : SALTS_OK;
   native_status = error ? error->native_status : 0;
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
 
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
+  if (slot->state == TURBO_FLOW_CHTTP_SLOT_DRAINING) {
+    /* Shutdown settled the Flow claim. Only end the native slot borrow. */
+    chttp_adapter_slot_reset(slot);
+    cmeta_mutex_unlock(&client->mutex);
+    return;
+  }
   if (slot->cancel_requested) {
     status = slot->cancel_status;
   } else if (slot->deadline_ms != 0u && now >= slot->deadline_ms) {
@@ -312,11 +265,11 @@ static void chttp_adapter_complete(void *user, chttp_request request,
     chttp_adapter_counter_increment(&client->retried_requests);
     client->last_status = status;
     client->last_native_status = native_status;
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return;
   }
   slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   chttp_adapter_finish(slot, status, response, native_status);
 }
 
@@ -326,18 +279,18 @@ static int chttp_adapter_start(void *ctx, turbo_flow_t *flow,
   int status;
   (void)stage;
   if (!client || flow != client->flow) return SALTS_EINVAL;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_REGISTERED) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_EALREADY;
   }
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   status = chttp_async_client_init(&client->http, &client->config);
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   client->state =
       status == SALTS_OK ? TURBO_FLOW_CHTTP_CLIENT_RUNNING : TURBO_FLOW_CHTTP_CLIENT_FAILED;
   client->last_status = status;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   return status;
 }
 
@@ -353,9 +306,9 @@ static int chttp_adapter_submit_claim(void *ctx, turbo_flow_t *flow,
   if (!client || flow != client->flow || !message || !claim) return SALTS_EINVAL;
   if (message->payload.len != 0u && !message->payload.data) return SALTS_EINVAL;
   if (message->payload.len > client->config.max_request_body_bytes) return SALTS_EMSGSIZE;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
   for (index = 0u; index < client->slot_count; ++index) {
@@ -366,12 +319,12 @@ static int chttp_adapter_submit_claim(void *ctx, turbo_flow_t *flow,
     }
     retained = turbo_flow_async_emit_claim_message(&client->slots[index].claim);
     if (retained && retained->id == message->id) {
-      salts_mutex_unlock(&client->mutex);
+      cmeta_mutex_unlock(&client->mutex);
       return SALTS_EALREADY;
     }
   }
   if (!free_slot) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_ENOBUFS;
   }
   status = turbo_flow_async_emit_claim_move(&free_slot->claim, claim);
@@ -381,9 +334,9 @@ static int chttp_adapter_submit_claim(void *ctx, turbo_flow_t *flow,
     free_slot->deadline_ms =
         client->overall_timeout_ms == 0u
             ? 0u
-            : chttp_adapter_deadline_after(salts_monotonic_ms(), client->overall_timeout_ms);
+            : chttp_adapter_deadline_after(cmeta_monotonic_ms(), client->overall_timeout_ms);
   }
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   return status;
 }
 
@@ -392,61 +345,89 @@ static void chttp_adapter_stop(void *ctx, turbo_flow_t *flow,
   turbo_flow_chttp_client_t *client = (turbo_flow_chttp_client_t *)ctx;
   size_t index;
   int status;
-  (void)flow;
   (void)stage;
   if (!client) return;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING &&
       client->state != TURBO_FLOW_CHTTP_CLIENT_FAILED) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return;
   }
   client->state = TURBO_FLOW_CHTTP_CLIENT_STOPPING;
   while (client->owner_active)
-    salts_cond_wait(&client->owner_cond, &client->mutex);
+    cmeta_cond_wait(&client->owner_cond, &client->mutex);
   client->owner_active = 1;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
 
   for (index = 0u; index < client->slot_count; ++index) {
     turbo_flow_async_emit_claim_t claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
-    salts_mutex_lock(&client->mutex);
+    cmeta_mutex_lock(&client->mutex);
     if (client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_QUEUED ||
         client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT) {
       chttp_adapter_take_claim(&client->slots[index], &claim);
       chttp_adapter_counter_increment(&client->completed_requests);
       client->last_status = SALTS_ESHUTDOWN;
     }
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     if (turbo_flow_async_emit_claim_message(&claim))
       (void)turbo_flow_async_emit_complete(&claim, SALTS_ESHUTDOWN, NULL);
   }
 
   if (client->http.impl) {
-    do {
+    status = client->shutdown_fault.before_stop
+                 ? client->shutdown_fault.before_stop(client->shutdown_fault.ctx) : SALTS_OK;
+    if (status == SALTS_OK)
       status = chttp_async_client_stop(&client->http, client->stop_timeout_ms);
-    } while (status == SALTS_ETIMEDOUT);
-    if (status == SALTS_OK) status = chttp_async_client_destroy(&client->http);
+    if (status == SALTS_OK) {
+      status = client->shutdown_fault.before_destroy
+                   ? client->shutdown_fault.before_destroy(client->shutdown_fault.ctx) : SALTS_OK;
+      if (status == SALTS_OK) status = chttp_async_client_destroy(&client->http);
+    }
   } else {
-    status = client->last_status;
+    /* Failed initialization with no native owner has nothing left to stop. */
+    status = SALTS_OK;
   }
-  salts_mutex_lock(&client->mutex);
+  if (status != SALTS_OK) {
+    for (index = 0u; index < client->slot_count; ++index) {
+      turbo_flow_async_emit_claim_t claim = TURBO_FLOW_ASYNC_EMIT_CLAIM_INIT;
+      turbo_flow_chttp_slot_t *slot = &client->slots[index];
+      cmeta_mutex_lock(&client->mutex);
+      if (slot->state == TURBO_FLOW_CHTTP_SLOT_ACTIVE ||
+          slot->state == TURBO_FLOW_CHTTP_SLOT_COMPLETING) {
+        /* CHTTP copied the body at admission. Its callback still borrows the
+         * slot, so retain it until an explicit native stop retry drains it. */
+        (void)turbo_flow_async_emit_claim_move(&claim, &slot->claim);
+        slot->state = TURBO_FLOW_CHTTP_SLOT_DRAINING;
+        chttp_adapter_counter_increment(&client->completed_requests);
+      }
+      cmeta_mutex_unlock(&client->mutex);
+      if (turbo_flow_async_emit_claim_message(&claim))
+        (void)turbo_flow_async_emit_complete(&claim, SALTS_ESHUTDOWN, NULL);
+    }
+    /* The core waits for every Flow claim before retaining failed bindings. */
+    const int report_status = turbo_flow_adapter_report_stop_status(flow, status);
+    if (report_status != SALTS_OK) status = report_status;
+  }
+  cmeta_mutex_lock(&client->mutex);
   client->state =
       status == SALTS_OK ? TURBO_FLOW_CHTTP_CLIENT_STOPPED : TURBO_FLOW_CHTTP_CLIENT_FAILED;
   client->last_status = status;
   client->owner_active = 0;
-  salts_cond_broadcast(&client->owner_cond);
-  salts_mutex_unlock(&client->mutex);
+  cmeta_cond_broadcast(&client->owner_cond);
+  cmeta_mutex_unlock(&client->mutex);
 }
 
 static void chttp_adapter_shutdown(void *ctx) {
   turbo_flow_chttp_client_t *client = (turbo_flow_chttp_client_t *)ctx;
   if (!client) return;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state == TURBO_FLOW_CHTTP_CLIENT_REGISTERED ||
       client->state == TURBO_FLOW_CHTTP_CLIENT_STOPPED ||
-      (client->state == TURBO_FLOW_CHTTP_CLIENT_FAILED && !client->http.impl))
+      (client->state == TURBO_FLOW_CHTTP_CLIENT_FAILED && !client->http.impl)) {
     client->state = TURBO_FLOW_CHTTP_CLIENT_DETACHED;
-  salts_mutex_unlock(&client->mutex);
+    client->flow = NULL;
+  }
+  cmeta_mutex_unlock(&client->mutex);
 }
 
 static int chttp_adapter_config_valid(const turbo_flow_chttp_client_config_t *config) {
@@ -476,8 +457,8 @@ int turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *con
   if (!out_client || !chttp_adapter_config_valid(config)) return SALTS_EINVAL;
   client = (turbo_flow_chttp_client_t *)calloc(1u, sizeof(*client));
   if (!client) return SALTS_ENOMEM;
-  salts_mutex_init(&client->mutex);
-  salts_cond_init(&client->owner_cond);
+  cmeta_mutex_init(&client->mutex);
+  cmeta_cond_init(&client->owner_cond);
   client->flow = config->flow;
   client->config = *config->client;
   client->method = config->method;
@@ -523,8 +504,8 @@ int turbo_flow_chttp_client_register(const turbo_flow_chttp_client_config_t *con
 
 fail:
   chttp_adapter_client_cleanup(client);
-  salts_cond_destroy(&client->owner_cond);
-  salts_mutex_destroy(&client->mutex);
+  cmeta_cond_destroy(&client->owner_cond);
+  cmeta_mutex_destroy(&client->mutex);
   free(client);
   return status;
 }
@@ -535,31 +516,31 @@ static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) 
   chttp_request_options options = {0};
   int status;
 
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (slot->state == TURBO_FLOW_CHTTP_SLOT_FREE || slot->state == TURBO_FLOW_CHTTP_SLOT_ACTIVE) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     chttp_adapter_finish(slot, SALTS_ESHUTDOWN, NULL, 0);
     return SALTS_OK;
   }
   if (slot->cancel_requested || (slot->deadline_ms != 0u && now >= slot->deadline_ms)) {
     const int terminal_status = slot->cancel_requested ? slot->cancel_status : SALTS_ETIMEDOUT;
     slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     chttp_adapter_finish(slot, terminal_status, NULL, 0);
     return SALTS_OK;
   }
   if (slot->state == TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT && now < slot->retry_at_ms) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
   message = turbo_flow_async_emit_claim_message(&slot->claim);
   if (!message) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_EPROTO;
   }
   options.connection_uri = client->connection_uri;
@@ -575,20 +556,20 @@ static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) 
   options.tls = client->tls;
   options.protocol = client->protocol;
   ++slot->attempts;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
 
   status = chttp_async_client_submit(&client->http, &options, &slot->request);
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (status == SALTS_OK) {
     slot->state = TURBO_FLOW_CHTTP_SLOT_ACTIVE;
     chttp_adapter_counter_increment(&client->submitted_requests);
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
   if (status == SALTS_ENOBUFS) {
     --slot->attempts;
     slot->state = TURBO_FLOW_CHTTP_SLOT_QUEUED;
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
   if (chttp_adapter_method_idempotent(client) && chttp_adapter_retryable(status) &&
@@ -597,11 +578,11 @@ static int chttp_adapter_poll_slot(turbo_flow_chttp_slot_t *slot, uint64_t now) 
     slot->retry_at_ms = chttp_adapter_deadline_after(now, client->retry_delay_ms);
     chttp_adapter_counter_increment(&client->retried_requests);
     client->last_status = status;
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_OK;
   }
   slot->state = TURBO_FLOW_CHTTP_SLOT_COMPLETING;
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   chttp_adapter_finish(slot, status, NULL, 0);
   return SALTS_OK;
 }
@@ -612,7 +593,7 @@ static int chttp_adapter_poll_cancellations(turbo_flow_chttp_client_t *client, u
   for (index = 0u; index < client->slot_count; ++index) {
     turbo_flow_chttp_slot_t *slot = &client->slots[index];
     int should_cancel = 0;
-    salts_mutex_lock(&client->mutex);
+    cmeta_mutex_lock(&client->mutex);
     if (slot->state == TURBO_FLOW_CHTTP_SLOT_ACTIVE) {
       if (slot->cancel_requested) {
         should_cancel = 1;
@@ -622,7 +603,7 @@ static int chttp_adapter_poll_cancellations(turbo_flow_chttp_client_t *client, u
         should_cancel = 1;
       }
     }
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     if (should_cancel) {
       const int status = chttp_async_request_cancel(&client->http, slot->request);
       if (status != SALTS_OK && status != SALTS_EALREADY && status != SALTS_ENOENT &&
@@ -637,7 +618,7 @@ static uint32_t chttp_adapter_poll_timeout(turbo_flow_chttp_client_t *client, ui
                                            uint32_t requested_timeout_ms) {
   uint32_t bounded_timeout_ms = requested_timeout_ms;
   size_t index;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   for (index = 0u; index < client->slot_count; ++index) {
     const turbo_flow_chttp_slot_t *slot = &client->slots[index];
     uint64_t remaining_ms;
@@ -647,7 +628,7 @@ static uint32_t chttp_adapter_poll_timeout(turbo_flow_chttp_client_t *client, ui
     remaining_ms = slot->deadline_ms > now ? slot->deadline_ms - now : 0u;
     if (remaining_ms < bounded_timeout_ms) bounded_timeout_ms = (uint32_t)remaining_ms;
   }
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   return bounded_timeout_ms;
 }
 
@@ -658,18 +639,18 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   uint64_t now;
   int status;
   if (!client) return SALTS_EINVAL;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
   if (client->owner_active) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_EBUSY;
   }
   client->owner_active = 1;
-  salts_mutex_unlock(&client->mutex);
-  now = salts_monotonic_ms();
+  cmeta_mutex_unlock(&client->mutex);
+  now = cmeta_monotonic_ms();
   status = chttp_adapter_poll_cancellations(client, now);
   if (status != SALTS_OK) goto done;
   for (index = 0u; index < client->slot_count; ++index) {
@@ -679,7 +660,7 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
   timeout_ms = chttp_adapter_poll_timeout(client, now, timeout_ms);
   status = chttp_async_client_poll(&client->http, timeout_ms, &completions);
   if (status != SALTS_OK) goto done;
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
   status = chttp_adapter_poll_cancellations(client, now);
   if (status != SALTS_OK) goto done;
   for (index = 0u; index < client->slot_count; ++index) {
@@ -687,10 +668,10 @@ int turbo_flow_chttp_client_poll(turbo_flow_chttp_client_t *client, uint32_t tim
     if (status != SALTS_OK) goto done;
   }
 done:
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   client->owner_active = 0;
-  salts_cond_broadcast(&client->owner_cond);
-  salts_mutex_unlock(&client->mutex);
+  cmeta_cond_broadcast(&client->owner_cond);
+  cmeta_mutex_unlock(&client->mutex);
   if (status == SALTS_OK && out_snapshot)
     status = turbo_flow_chttp_client_snapshot(client, out_snapshot);
   return status;
@@ -700,9 +681,9 @@ int turbo_flow_chttp_client_cancel(turbo_flow_chttp_client_t *client, uint64_t m
   size_t index;
   int status = SALTS_ENOENT;
   if (!client) return SALTS_EINVAL;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_RUNNING) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_ESHUTDOWN;
   }
   for (index = 0u; index < client->slot_count; ++index) {
@@ -721,7 +702,7 @@ int turbo_flow_chttp_client_cancel(turbo_flow_chttp_client_t *client, uint64_t m
     }
     break;
   }
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   return status;
 }
 
@@ -732,12 +713,14 @@ int turbo_flow_chttp_client_snapshot(const turbo_flow_chttp_client_t *client,
   if (!client || !out_snapshot || out_snapshot->size < sizeof(*out_snapshot) ||
       out_snapshot->version != TURBO_FLOW_CHTTP_CLIENT_API_VERSION)
     return SALTS_EINVAL;
-  salts_mutex_lock(&mutable_client->mutex);
+  cmeta_mutex_lock(&mutable_client->mutex);
   out_snapshot->state = client->state;
   out_snapshot->active_requests = 0u;
   out_snapshot->queued_requests = 0u;
   for (index = 0u; index < client->slot_count; ++index) {
-    if (client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_ACTIVE) ++out_snapshot->active_requests;
+    if (client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_ACTIVE ||
+        client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_DRAINING)
+      ++out_snapshot->active_requests;
     else if (client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_QUEUED ||
              client->slots[index].state == TURBO_FLOW_CHTTP_SLOT_RETRY_WAIT)
       ++out_snapshot->queued_requests;
@@ -749,21 +732,21 @@ int turbo_flow_chttp_client_snapshot(const turbo_flow_chttp_client_t *client,
   out_snapshot->response_bytes = client->response_bytes;
   out_snapshot->last_status = client->last_status;
   out_snapshot->last_native_status = client->last_native_status;
-  salts_mutex_unlock(&mutable_client->mutex);
+  cmeta_mutex_unlock(&mutable_client->mutex);
   return SALTS_OK;
 }
 
 int turbo_flow_chttp_client_destroy(turbo_flow_chttp_client_t *client) {
   if (!client) return SALTS_EINVAL;
-  salts_mutex_lock(&client->mutex);
+  cmeta_mutex_lock(&client->mutex);
   if (client->state != TURBO_FLOW_CHTTP_CLIENT_DETACHED) {
-    salts_mutex_unlock(&client->mutex);
+    cmeta_mutex_unlock(&client->mutex);
     return SALTS_EBUSY;
   }
-  salts_mutex_unlock(&client->mutex);
+  cmeta_mutex_unlock(&client->mutex);
   chttp_adapter_client_cleanup(client);
-  salts_cond_destroy(&client->owner_cond);
-  salts_mutex_destroy(&client->mutex);
+  cmeta_cond_destroy(&client->owner_cond);
+  cmeta_mutex_destroy(&client->mutex);
   free(client);
   return SALTS_OK;
 }

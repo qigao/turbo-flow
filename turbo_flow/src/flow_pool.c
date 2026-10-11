@@ -13,6 +13,9 @@ static const char FLOW_POOL_STATUS_SCHEMA_TEXT[] =
     "  uint32 state;\n"
     "  uint32 stage_index;\n"
     "  uint32 parallelism;\n"
+    "  bool accepting;\n"
+    "  bool drained;\n"
+    "  bool saturated;\n"
     "  string queue_capacity;\n"
     "  string resource_capacity;\n"
     "  string submitted;\n"
@@ -23,9 +26,6 @@ static const char FLOW_POOL_STATUS_SCHEMA_TEXT[] =
     "  string rejected;\n"
     "  string queued;\n"
     "  string active;\n"
-    "  bool accepting;\n"
-    "  bool drained;\n"
-    "  bool saturated;\n"
     "}\n";
 
 static const turbo_flow_resource_schema_t FLOW_POOL_STATUS_SCHEMA = {
@@ -183,9 +183,9 @@ int turbo_flow_pool_snapshot_at(const turbo_flow_t *flow, size_t index,
     const flow_threadpool_adapter_t *adapter =
         flow_threadpool_adapter_for_stage(flow, record->stage_index);
     if (adapter && adapter->pool) {
-      salts_threadpool_stats_t stats;
+      cmeta_threadpool_stats_t stats;
       memset(&stats, 0, sizeof(stats));
-      salts_threadpool_get_stats(adapter->pool, &stats);
+      cmeta_threadpool_get_stats(adapter->pool, &stats);
       out->queue_capacity = stats.queue_capacity;
       out->queued = stats.queued_tasks > 0 ? (uint64_t)stats.queued_tasks : 0u;
       out->active = stats.active_tasks > 0 ? (uint64_t)stats.active_tasks : 0u;

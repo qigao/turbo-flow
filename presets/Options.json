@@ -20,7 +20,6 @@
         {
             "name": "pkg-vcpkg",
             "hidden": true,
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_MANIFEST_MODE": true
             }

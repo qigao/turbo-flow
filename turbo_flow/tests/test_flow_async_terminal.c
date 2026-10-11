@@ -126,7 +126,7 @@ static void async_terminal_wait_for(atomic_size_t *value, size_t expected) {
   size_t attempt;
   for (attempt = 0u;
        attempt < 5000u && atomic_load_explicit(value, memory_order_acquire) < expected; ++attempt) {
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
 }
 

@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_chttp.h"
+#include "../src/turbo_flow_chttp_client_internal.h"
 
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -25,6 +26,30 @@ typedef struct chttp_adapter_deferred_probe_s {
   chttp_server_deferred handle;
   atomic_int acquired;
 } chttp_adapter_deferred_probe_t;
+
+typedef struct chttp_shutdown_fault_script_s {
+  int status;
+  int stop_failures;
+  int destroy_failures;
+  size_t stop_calls;
+  size_t destroy_calls;
+} chttp_shutdown_fault_script_t;
+
+static int chttp_shutdown_fail_stop(void *ctx) {
+  chttp_shutdown_fault_script_t *script = (chttp_shutdown_fault_script_t *)ctx;
+  ++script->stop_calls;
+  if (script->stop_failures == 0) return SALTS_OK;
+  --script->stop_failures;
+  return script->status;
+}
+
+static int chttp_shutdown_fail_destroy(void *ctx) {
+  chttp_shutdown_fault_script_t *script = (chttp_shutdown_fault_script_t *)ctx;
+  ++script->destroy_calls;
+  if (script->destroy_failures == 0) return SALTS_OK;
+  --script->destroy_failures;
+  return script->status;
+}
 
 static native_io_backend_kind chttp_adapter_backend(void) {
 #if defined(_WIN32)
@@ -193,6 +218,37 @@ static void chttp_adapter_publication_complete(void *ctx,
 }
 
 spec("TurboFlow CHTTP async client adapter") {
+  it("finishes failed-start rollback when native initialization retained no owner") {
+    static const char graph[] = "source input\n"
+                                "stage request adapter http.init.failure\n"
+                                "stage main {\n"
+                                "  input -> request\n"
+                                "}\n";
+    chttp_client_config native = chttp_adapter_client_config();
+    turbo_flow_chttp_client_config_t config = TURBO_FLOW_CHTTP_CLIENT_CONFIG_INIT;
+    turbo_flow_chttp_client_snapshot_t snapshot = TURBO_FLOW_CHTTP_CLIENT_SNAPSHOT_INIT;
+    turbo_flow_chttp_client_t *client = NULL;
+    turbo_flow_t *flow = turbo_flow_create();
+    native.network.connection_capacity = 0u;
+    config.flow = flow;
+    config.adapter_name = "http.init.failure";
+    config.client = &native;
+    config.connection_uri = "tcp://127.0.0.1:1";
+    config.authority = "localhost";
+    config.target = "/";
+    check_not_null(flow);
+    check_equal(turbo_flow_chttp_client_register(&config, &client), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_EINVAL);
+    check_null(client->http.impl);
+    check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CHTTP_CLIENT_STOPPED);
+    check_equal(turbo_flow_reset(flow, 1), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_client_destroy(client), SALTS_OK);
+  }
+
   it("supports six request methods and resumes with an owned response") {
     static const char graph[] = "source input\n"
                                 "stage request adapter http.request\n"
@@ -251,11 +307,11 @@ spec("TurboFlow CHTTP async client adapter") {
                   SALTS_OK);
       turbo_flow_msg_cleanup(&message);
 
-      deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+      deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
       do {
         check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
       } while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) == 0u &&
-               salts_monotonic_ms() < deadline);
+               cmeta_monotonic_ms() < deadline);
 
       check_equal(atomic_load_explicit(&probe.publication_calls, memory_order_acquire), (size_t)1u);
       check_equal(atomic_load_explicit(&probe.publication_status, memory_order_acquire), SALTS_OK);
@@ -335,9 +391,9 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(turbo_flow_publish_async(flow, "input", &message,
                                          chttp_adapter_publication_complete, &first),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&deferred.acquired, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&deferred.acquired, memory_order_acquire), 1);
     check_equal(snapshot.active_requests, (size_t)1u);
@@ -346,10 +402,10 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(turbo_flow_publish_async(flow, "input", &message,
                                          chttp_adapter_publication_complete, &second),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&second.publication_calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
-      salts_sleep_ms(1u);
+           cmeta_monotonic_ms() < deadline)
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&second.publication_calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&second.publication_status, memory_order_acquire),
                 SALTS_ENOBUFS);
@@ -357,9 +413,9 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(turbo_flow_chttp_client_cancel(client, 101u), SALTS_OK);
     check_equal(turbo_flow_chttp_client_cancel(client, 101u), SALTS_EALREADY);
     check_equal(chttp_server_deferred_reply(&deferred.handle, &deferred_response), SALTS_OK);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&first.publication_calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&first.publication_calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&first.publication_status, memory_order_acquire),
@@ -434,14 +490,14 @@ spec("TurboFlow CHTTP async client adapter") {
       message.id = 201u + index;
       message.owned_payload = tstr_dup("replayable");
       message.payload = tstr_to_v(message.owned_payload);
-      started_at = salts_monotonic_ms();
+      started_at = cmeta_monotonic_ms();
       check_equal(turbo_flow_publish_async(flow, "input", &message,
                                            chttp_adapter_publication_complete, &probe),
                   SALTS_OK);
       turbo_flow_msg_cleanup(&message);
       deadline = started_at + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
       while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline)
+             cmeta_monotonic_ms() < deadline)
         check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
 
       check_equal(atomic_load_explicit(&probe.publication_calls, memory_order_acquire), (size_t)1u);
@@ -455,7 +511,7 @@ spec("TurboFlow CHTTP async client adapter") {
         check_greater(snapshot.retried_requests, (uint64_t)0u);
         check_equal(atomic_load_explicit(&probe.publication_status, memory_order_acquire),
                     SALTS_ETIMEDOUT);
-        check_less(salts_monotonic_ms() - started_at, (uint64_t)500u);
+        check_less(cmeta_monotonic_ms() - started_at, (uint64_t)500u);
       }
 
       check_equal(turbo_flow_stop(flow), SALTS_OK);
@@ -520,20 +576,20 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(turbo_flow_publish_async(flow, "input", &message,
                                          chttp_adapter_publication_complete, &probe),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&deferred.acquired, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&deferred.acquired, memory_order_acquire), 1);
 
-    started_at = salts_monotonic_ms();
+    started_at = cmeta_monotonic_ms();
     while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() - started_at < 2000u)
+           cmeta_monotonic_ms() - started_at < 2000u)
       check_equal(turbo_flow_chttp_client_poll(client, 1000u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&probe.publication_calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&probe.publication_status, memory_order_acquire),
                 SALTS_ETIMEDOUT);
-    check_less(salts_monotonic_ms() - started_at, (uint64_t)500u);
+    check_less(cmeta_monotonic_ms() - started_at, (uint64_t)500u);
 
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     check_equal(chttp_server_deferred_reply(&deferred.handle, &deferred_response), SALTS_OK);
@@ -636,11 +692,11 @@ spec("TurboFlow CHTTP async client adapter") {
                                          chttp_adapter_publication_complete, &probe),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     } while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(atomic_load_explicit(&probe.publication_calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&probe.publication_status, memory_order_acquire),
                 SALTS_EPROTO);
@@ -710,10 +766,10 @@ spec("TurboFlow CHTTP async client adapter") {
                                          chttp_adapter_publication_complete, &request_limit),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&request_limit.publication_calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
-      salts_sleep_ms(1u);
+           cmeta_monotonic_ms() < deadline)
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&request_limit.publication_status, memory_order_acquire),
                 SALTS_EMSGSIZE);
 
@@ -725,9 +781,9 @@ spec("TurboFlow CHTTP async client adapter") {
                                          chttp_adapter_publication_complete, &response_limit),
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&response_limit.publication_calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&response_limit.publication_status, memory_order_acquire),
                 SALTS_EMSGSIZE);
@@ -803,9 +859,9 @@ spec("TurboFlow CHTTP async client adapter") {
       check_equal(turbo_flow_publish_async(flow, "input", &message,
                                            chttp_adapter_publication_complete, &probe),
                   SALTS_OK);
-      deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+      deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
       while (atomic_load_explicit(&probe.publication_calls, memory_order_acquire) < index + 1u &&
-             salts_monotonic_ms() < deadline)
+             cmeta_monotonic_ms() < deadline)
         check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
       check_equal(atomic_load_explicit(&probe.publication_status, memory_order_acquire), SALTS_OK);
     }
@@ -887,12 +943,12 @@ spec("TurboFlow CHTTP async client adapter") {
                 SALTS_OK);
     turbo_flow_msg_cleanup(&message);
 
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     } while ((atomic_load_explicit(&failed.publication_calls, memory_order_acquire) < 1u ||
               atomic_load_explicit(&succeeded.publication_calls, memory_order_acquire) < 1u) &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(atomic_load_explicit(&failed.publication_calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&failed.publication_status, memory_order_acquire),
                 SALTS_EMSGSIZE);
@@ -909,6 +965,178 @@ spec("TurboFlow CHTTP async client adapter") {
 
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
+    check_equal(turbo_flow_chttp_client_destroy(client), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_ADAPTER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("propagates native stop and destroy failures and retains their owners") {
+    static const char graph[] = "source input\n"
+                                "stage request adapter http.shutdown.fault\n"
+                                "stage output\n"
+                                "stage main {\n"
+                                "  input -> request -> output\n"
+                                "}\n";
+    const int statuses[] = {SALTS_EIO, SALTS_ETIMEDOUT, SALTS_EBUSY};
+    size_t index;
+    for (index = 0u; index < sizeof(statuses) / sizeof(statuses[0]); ++index) {
+      chttp_client_config client_config = chttp_adapter_client_config();
+      turbo_flow_chttp_client_config_t config = TURBO_FLOW_CHTTP_CLIENT_CONFIG_INIT;
+      turbo_flow_chttp_client_snapshot_t snapshot = TURBO_FLOW_CHTTP_CLIENT_SNAPSHOT_INIT;
+      chttp_shutdown_fault_script_t script = {.status = statuses[index],
+                                             .stop_failures = index < 2u ? 1 : 0,
+                                             .destroy_failures = index == 2u ? 1 : 0};
+      chttp_adapter_probe_t probe = {0};
+      turbo_flow_chttp_client_t *client = NULL;
+      turbo_flow_t *flow = turbo_flow_create();
+
+      check_not_null(flow);
+      config.flow = flow;
+      config.adapter_name = "http.shutdown.fault";
+      config.client = &client_config;
+      config.connection_uri = "tcp://127.0.0.1:1";
+      config.authority = "127.0.0.1";
+      config.target = "/";
+      check_equal(turbo_flow_chttp_client_register(&config, &client), SALTS_OK);
+      client->shutdown_fault = (turbo_flow_chttp_shutdown_fault_t){
+          chttp_shutdown_fail_stop, chttp_shutdown_fail_destroy, &script};
+      check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+      check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &probe, NULL),
+                  SALTS_OK);
+      check_equal(turbo_flow_compile(flow), SALTS_OK);
+      check_equal(turbo_flow_start(flow), SALTS_OK);
+
+      check_equal(turbo_flow_stop(flow), statuses[index]);
+      check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+      check_equal(turbo_flow_last_error(flow)->code, statuses[index]);
+      check_not_null(client->http.impl);
+      check_equal(script.stop_calls, (size_t)1u);
+      check_equal(script.destroy_calls, index == 2u ? (size_t)1u : (size_t)0u);
+      check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_CLIENT_FAILED);
+      check_equal(snapshot.last_status, statuses[index]);
+      check_equal(turbo_flow_chttp_client_destroy(client), SALTS_EBUSY);
+
+      turbo_flow_destroy(flow);
+      check_equal(client->state, TURBO_FLOW_CHTTP_CLIENT_FAILED);
+      check_equal(script.stop_calls, (size_t)1u);
+      check_true(client->flow == flow);
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      check_equal(script.stop_calls, (size_t)2u);
+      check_null(client->http.impl);
+      turbo_flow_destroy(flow);
+      check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+      check_equal(snapshot.state, TURBO_FLOW_CHTTP_CLIENT_DETACHED);
+      check_equal(turbo_flow_chttp_client_destroy(client), SALTS_OK);
+    }
+  }
+
+  it("settles active and queued claims once while failed native stop awaits retry") {
+    static const char graph[] = "source input\n"
+                                "stage request adapter http.shutdown.pending\n"
+                                "stage output\n"
+                                "stage main {\n"
+                                "  input -> request -> output\n"
+                                "}\n";
+    const chttp_server_deferred_response deferred_response = {
+        .size = sizeof(chttp_server_deferred_response), .status_code = 200u,
+        .content_type = "text/plain", .body = "unused", .body_size = 6u};
+    chttp_server server = {0};
+    chttp_server_config server_config = chttp_adapter_server_config();
+    chttp_client_config client_config = chttp_adapter_client_config();
+    turbo_flow_chttp_client_config_t config = TURBO_FLOW_CHTTP_CLIENT_CONFIG_INIT;
+    turbo_flow_chttp_client_snapshot_t snapshot = TURBO_FLOW_CHTTP_CLIENT_SNAPSHOT_INIT;
+    turbo_flow_chttp_client_t *client = NULL;
+    chttp_adapter_deferred_probe_t deferred = {.handle = CHTTP_SERVER_DEFERRED_INIT};
+    chttp_adapter_probe_t active = {0};
+    chttp_adapter_probe_t queued = {0};
+    chttp_shutdown_fault_script_t script = {.status = SALTS_ETIMEDOUT, .stop_failures = 2};
+    turbo_flow_msg_t message;
+    turbo_flow_t *flow = turbo_flow_create();
+    uint64_t deadline;
+    uint64_t started_at;
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_not_null(flow);
+    atomic_init(&deferred.acquired, 0);
+    atomic_init(&active.publication_status, SALTS_OK);
+    atomic_init(&queued.publication_status, SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/pending", chttp_adapter_defer, &deferred), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+    config.flow = flow;
+    config.adapter_name = "http.shutdown.pending";
+    config.client = &client_config;
+    config.connection_uri = uri;
+    config.authority = "127.0.0.1";
+    config.target = "/pending";
+    check_equal(turbo_flow_chttp_client_register(&config, &client), SALTS_OK);
+    client->shutdown_fault = (turbo_flow_chttp_shutdown_fault_t){
+        chttp_shutdown_fail_stop, chttp_shutdown_fail_destroy, &script};
+    check_equal(turbo_flow_parse_string(flow, graph, sizeof(graph) - 1u), SALTS_OK);
+    check_equal(turbo_flow_register_stage_ex(flow, "output", chttp_adapter_sink, &active, NULL),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+
+    turbo_flow_msg_init(&message);
+    message.id = 701u;
+    message.owned_payload = tstr_dup("copied body");
+    check_not_null(message.owned_payload);
+    message.payload = tstr_to_v(message.owned_payload);
+    check_equal(turbo_flow_publish_async(flow, "input", &message,
+                                         chttp_adapter_publication_complete, &active), SALTS_OK);
+    turbo_flow_msg_cleanup(&message);
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    while (!atomic_load_explicit(&deferred.acquired, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline)
+      check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
+    check_equal(atomic_load_explicit(&deferred.acquired, memory_order_acquire), 1);
+    check_equal(snapshot.active_requests, (size_t)1u);
+
+    turbo_flow_msg_init(&message);
+    message.id = 702u;
+    check_equal(turbo_flow_publish_async(flow, "input", &message,
+                                         chttp_adapter_publication_complete, &queued), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    do {
+      check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+      if (snapshot.queued_requests == 1u) break;
+      cmeta_sleep_ms(1u);
+    } while (cmeta_monotonic_ms() < deadline);
+    check_equal(snapshot.queued_requests, (size_t)1u);
+
+    started_at = cmeta_monotonic_ms();
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    check_less(cmeta_monotonic_ms() - started_at, (uint64_t)CHTTP_ADAPTER_TEST_TIMEOUT_MS);
+    check_equal(script.stop_calls, (size_t)1u);
+    check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+    check_equal(atomic_load_explicit(&active.publication_calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&queued.publication_calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&active.publication_status, memory_order_acquire), SALTS_ESHUTDOWN);
+    check_equal(atomic_load_explicit(&queued.publication_status, memory_order_acquire), SALTS_ESHUTDOWN);
+    check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+    check_equal(snapshot.completed_requests, (uint64_t)2u);
+    check_equal(snapshot.active_requests, (size_t)1u);
+    check_equal(snapshot.queued_requests, (size_t)0u);
+
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    check_equal(script.stop_calls, (size_t)2u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(script.stop_calls, (size_t)3u);
+    check_null(client->http.impl);
+    check_equal(turbo_flow_chttp_client_snapshot(client, &snapshot), SALTS_OK);
+    check_equal(snapshot.active_requests, (size_t)0u);
+    check_equal(snapshot.completed_requests, (uint64_t)2u);
+    check_equal(atomic_load_explicit(&active.publication_calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&queued.publication_calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&active.sink_calls, memory_order_acquire), (size_t)0u);
+    check_equal(chttp_server_deferred_reply(&deferred.handle, &deferred_response), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_null(client->flow);
     check_equal(turbo_flow_chttp_client_destroy(client), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_ADAPTER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
@@ -969,9 +1197,9 @@ spec("TurboFlow CHTTP async client adapter") {
     check_equal(turbo_flow_publish_async(flow, "input", &message,
                                          chttp_adapter_publication_complete, &probe),
                 SALTS_OK);
-    deadline = salts_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_ADAPTER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&deferred.acquired, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_chttp_client_poll(client, 1u, &snapshot), SALTS_OK);
     check_equal(atomic_load_explicit(&deferred.acquired, memory_order_acquire), 1);
     check_equal(snapshot.active_requests, (size_t)1u);

@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_cnet.h"
+#include "turbo_flow_cnet_test_internal.h"
 
 #include "stream_source_pipe_fixture.h"
 
@@ -85,7 +86,7 @@ static void stream_sink_snapshot_race(void *ctx) {
       atomic_store_explicit(&race->status, rc, memory_order_release);
       break;
     }
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
 }
 
@@ -146,6 +147,191 @@ static void stream_sink_boundary_fixture_init(stream_sink_boundary_fixture_t *fi
 }
 
 spec("TurboFlow CNet stream sink") {
+  it("retains a partial native owner when failed-start rollback cannot destroy it") {
+    cnet_client_config client = stream_sink_client_config();
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    /* Rejected by connect parsing after client, Executor and Actor init. */
+    config.uri = "tcp://127.0.0.1:invalid";
+    config.client = &client;
+    config.max_message_bytes = client.max_send_bytes;
+    check_not_null(flow);
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_destroy(sink, SALTS_EIO), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_EIO);
+    check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_FAILED);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EIO);
+    check_equal(turbo_flow_reset(flow, 1), SALTS_EBUSY);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_STOPPED);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+  }
+
+  it("reports a native drain error and permits explicit cleanup retry") {
+    cnet_client_config client = stream_sink_client_config();
+    stream_source_pipe_fixture_t pipe;
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    char uri[640];
+
+    check_not_null(flow);
+    check_equal(stream_source_pipe_fixture_start(&pipe), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "pipe://%s", pipe.name), 0);
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    config.uri = uri;
+    config.client = &client;
+    config.max_message_bytes = client.max_send_bytes;
+    config.stop_timeout_ms = STREAM_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_stop(sink, SALTS_EIO, true), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_EIO);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EIO);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+    stream_source_pipe_fixture_close(&pipe);
+  }
+
+  it("retains the native client after a stop error and retries it") {
+    cnet_client_config client = stream_sink_client_config();
+    stream_source_pipe_fixture_t pipe;
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    char uri[640];
+
+    check_not_null(flow);
+    check_equal(stream_source_pipe_fixture_start(&pipe), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "pipe://%s", pipe.name), 0);
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    config.uri = uri;
+    config.client = &client;
+    config.max_message_bytes = client.max_send_bytes;
+    config.stop_timeout_ms = STREAM_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_stop(sink, SALTS_EIO, false), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_EIO);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EIO);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_destroy(sink, SALTS_EBUSY), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+    stream_source_pipe_fixture_close(&pipe);
+  }
+
+  it("returns a native stop timeout without an implicit retry") {
+    cnet_client_config client = stream_sink_client_config();
+    stream_source_pipe_fixture_t pipe;
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    char uri[640];
+
+    check_not_null(flow);
+    check_equal(stream_source_pipe_fixture_start(&pipe), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "pipe://%s", pipe.name), 0);
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    config.uri = uri;
+    config.client = &client;
+    config.max_message_bytes = client.max_send_bytes;
+    config.stop_timeout_ms = STREAM_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_stop(sink, SALTS_ETIMEDOUT, false), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_ETIMEDOUT);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_destroy(sink, SALTS_EBUSY), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+    stream_source_pipe_fixture_close(&pipe);
+  }
+
+  it("retains the native client after destroy is busy and retries it") {
+    cnet_client_config client = stream_sink_client_config();
+    stream_source_pipe_fixture_t pipe;
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_t *flow = turbo_flow_create();
+    char uri[640];
+
+    check_not_null(flow);
+    check_equal(stream_source_pipe_fixture_start(&pipe), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "pipe://%s", pipe.name), 0);
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    config.uri = uri;
+    config.client = &client;
+    config.max_message_bytes = client.max_send_bytes;
+    config.stop_timeout_ms = STREAM_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_destroy(sink, SALTS_EBUSY), SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_FAILED);
+    check_equal(snapshot.status, SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_destroy(sink, SALTS_EBUSY), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+    stream_source_pipe_fixture_close(&pipe);
+  }
+
   it("settles a Pipe terminal only after CNet reports the full write") {
     cnet_client_config client = stream_sink_client_config();
     stream_source_pipe_fixture_t pipe;
@@ -219,9 +405,9 @@ spec("TurboFlow CNet stream sink") {
                managed.state == TURBO_FLOW_MANAGED_BOUNDARY_RUNNING);
     check_equal(stream_source_pipe_fixture_finish(&pipe), SALTS_OK);
 
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_STREAM_SINK_CONNECTED &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     }
     check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_CONNECTED);
@@ -235,11 +421,11 @@ spec("TurboFlow CNet stream sink") {
         turbo_flow_publish_async(flow, "input", &first_message, stream_sink_complete, &first),
         SALTS_OK);
     turbo_flow_msg_cleanup(&first_message);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
-      if (snapshot.active_requests == 0u) salts_sleep_ms(1u);
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+      if (snapshot.active_requests == 0u) cmeta_sleep_ms(1u);
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)0u);
     check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
@@ -257,10 +443,10 @@ spec("TurboFlow CNet stream sink") {
         turbo_flow_publish_async(flow, "input", &second_message, stream_sink_complete, &second),
         SALTS_OK);
     turbo_flow_msg_cleanup(&second_message);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&second.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
-      salts_sleep_ms(1u);
+           cmeta_monotonic_ms() < deadline)
+      cmeta_sleep_ms(1u);
     check_equal(atomic_load_explicit(&second.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&second.status, memory_order_acquire), SALTS_ENOSPC);
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)0u);
@@ -269,20 +455,20 @@ spec("TurboFlow CNet stream sink") {
     check_equal(managed.completed, (uint64_t)0u);
     check_equal(managed.rejected, (uint64_t)1u);
 
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&first.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     }
     check_equal(atomic_load_explicit(&first.calls, memory_order_acquire), (size_t)1u);
     check_equal(atomic_load_explicit(&first.status, memory_order_acquire), SALTS_OK);
     check_equal(snapshot.messages_sent, (uint64_t)1u);
     check_equal(snapshot.bytes_sent, (uint64_t)(sizeof("pipe-terminal") - 1u));
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
-      if (managed.completed == 0u) salts_sleep_ms(1u);
-    } while (managed.completed == 0u && salts_monotonic_ms() < deadline);
+      if (managed.completed == 0u) cmeta_sleep_ms(1u);
+    } while (managed.completed == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(managed.accepted, (uint64_t)1u);
     check_equal(managed.completed, (uint64_t)1u);
     check_equal(managed.rejected, (uint64_t)1u);
@@ -326,7 +512,7 @@ spec("TurboFlow CNet stream sink") {
     check_equal(turbo_flow_compile(flow), SALTS_OK);
     check_equal(turbo_flow_start(flow), SALTS_EINVAL);
     check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
-    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_FAILED);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
     check_equal(managed.last_status, SALTS_EINVAL);
     check_equal(managed.queue_capacity, (uint64_t)1u);
     check_equal(managed.accepted, (uint64_t)0u);
@@ -348,7 +534,7 @@ spec("TurboFlow CNet stream sink") {
     stream_sink_snapshot_race_t race;
     turbo_flow_msg_t message;
     turbo_flow_t *flow = turbo_flow_create();
-    salts_thread_t observer = NULL;
+    cmeta_thread_t observer = NULL;
     char uri[640];
     uint64_t deadline;
 
@@ -377,9 +563,9 @@ spec("TurboFlow CNet stream sink") {
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
     check_equal(stream_source_pipe_fixture_finish(&pipe), SALTS_OK);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_STREAM_SINK_CONNECTED &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_CONNECTED);
 
@@ -390,20 +576,20 @@ spec("TurboFlow CNet stream sink") {
         turbo_flow_publish_async(flow, "input", &message, stream_sink_complete, &completion),
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
-      if (snapshot.active_requests == 0u) salts_thread_yield();
-    } while (snapshot.active_requests == 0u && salts_monotonic_ms() < deadline);
+      if (snapshot.active_requests == 0u) cmeta_thread_yield();
+    } while (snapshot.active_requests == 0u && cmeta_monotonic_ms() < deadline);
     check_equal(snapshot.active_requests, (size_t)1u);
 
-    check_equal(salts_thread_create(&observer, stream_sink_snapshot_race, &race), SALTS_OK);
+    check_equal(cmeta_thread_create(&observer, stream_sink_snapshot_race, &race), SALTS_OK);
     while (!atomic_load_explicit(&race.ready, memory_order_acquire))
-      salts_thread_yield();
+      cmeta_thread_yield();
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     atomic_store_explicit(&race.done, true, memory_order_release);
-    check_equal(salts_thread_join(&observer), SALTS_OK);
-    salts_thread_destroy(&observer);
+    check_equal(cmeta_thread_join(&observer), SALTS_OK);
+    cmeta_thread_destroy(&observer);
     check_equal(atomic_load_explicit(&race.status, memory_order_acquire), SALTS_OK);
     check_true(atomic_load_explicit(&race.snapshots, memory_order_relaxed) > 0u);
     check_true((atomic_load_explicit(&race.states, memory_order_relaxed) &
@@ -455,9 +641,9 @@ spec("TurboFlow CNet stream sink") {
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
     check_equal(stream_source_pipe_fixture_finish(&pipe), SALTS_OK);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_STREAM_SINK_CONNECTED &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_CONNECTED);
 
@@ -470,23 +656,23 @@ spec("TurboFlow CNet stream sink") {
         turbo_flow_publish_async(flow, "input", &message, stream_sink_complete, &completion),
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       int managed_status;
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
       managed_status = turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed);
       check_true(managed_status == SALTS_OK || managed_status == SALTS_EBUSY);
-      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) salts_thread_yield();
+      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) cmeta_thread_yield();
     } while (managed.in_flight == 0u &&
              atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(managed.in_flight, (uint64_t)1u);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
 
     stream_source_pipe_fixture_close(&pipe);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       poll_status = turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot);
     check_not_equal(poll_status, SALTS_OK);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
@@ -535,9 +721,9 @@ spec("TurboFlow CNet stream sink") {
     check_equal(turbo_flow_start(flow), SALTS_OK);
     check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
     check_equal(stream_source_pipe_fixture_finish(&pipe), SALTS_OK);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_STREAM_SINK_CONNECTED &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
     check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_CONNECTED);
 
@@ -550,16 +736,16 @@ spec("TurboFlow CNet stream sink") {
         turbo_flow_publish_async(flow, "input", &message, stream_sink_complete, &completion),
         SALTS_OK);
     turbo_flow_msg_cleanup(&message);
-    deadline = salts_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
     do {
       int managed_status;
       check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
       managed_status = turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed);
       check_true(managed_status == SALTS_OK || managed_status == SALTS_EBUSY);
-      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) salts_thread_yield();
+      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) cmeta_thread_yield();
     } while (managed.in_flight == 0u &&
              atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
-             salts_monotonic_ms() < deadline);
+             cmeta_monotonic_ms() < deadline);
     check_equal(managed.in_flight, (uint64_t)1u);
     check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
 
@@ -572,6 +758,98 @@ spec("TurboFlow CNet stream sink") {
     check_equal(managed.completed, (uint64_t)1u);
     check_equal(managed.rejected, (uint64_t)0u);
 
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
+    stream_source_pipe_fixture_close(&pipe);
+  }
+
+  it("settles a pending claim once while timed-out stops retain the native request") {
+    cnet_client_config client = stream_sink_client_config();
+    stream_source_pipe_fixture_t pipe;
+    turbo_flow_cnet_stream_sink_t *sink = NULL;
+    turbo_flow_cnet_stream_sink_snapshot_t snapshot = TURBO_FLOW_CNET_STREAM_SINK_SNAPSHOT_INIT;
+    turbo_flow_cnet_stream_sink_config_t config = TURBO_FLOW_CNET_STREAM_SINK_CONFIG_INIT;
+    turbo_flow_managed_boundary_snapshot_t managed = TURBO_FLOW_MANAGED_BOUNDARY_SNAPSHOT_INIT;
+    stream_sink_completion_t completion;
+    turbo_flow_msg_t message;
+    turbo_flow_t *flow = turbo_flow_create();
+    char uri[640];
+    uint64_t deadline;
+
+    atomic_init(&completion.calls, 0u);
+    atomic_init(&completion.status, SALTS_EALREADY);
+    check_not_null(flow);
+    check_equal(stream_source_pipe_fixture_start(&pipe), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "pipe://%s", pipe.name), 0);
+    client.max_send_bytes = STREAM_SINK_NATIVE_PENDING_BYTES;
+    config.flow = flow;
+    config.adapter_name = "cnet.pipe.out";
+    config.uri = uri;
+    config.client = &client;
+    config.max_message_bytes = STREAM_SINK_NATIVE_PENDING_BYTES;
+    config.stop_timeout_ms = STREAM_SINK_TEST_TIMEOUT_MS;
+    check_equal(turbo_flow_cnet_stream_sink_register(&config, &sink), SALTS_OK);
+    check_equal(turbo_flow_parse_string(flow, STREAM_SINK_GRAPH, sizeof(STREAM_SINK_GRAPH) - 1u),
+                SALTS_OK);
+    check_equal(turbo_flow_compile(flow), SALTS_OK);
+    check_equal(turbo_flow_start(flow), SALTS_OK);
+    check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
+    check_equal(stream_source_pipe_fixture_finish(&pipe), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    while (snapshot.state != TURBO_FLOW_CNET_STREAM_SINK_CONNECTED &&
+           cmeta_monotonic_ms() < deadline)
+      check_equal(turbo_flow_cnet_stream_sink_poll(sink, 1u, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_STREAM_SINK_CONNECTED);
+
+    turbo_flow_msg_init(&message);
+    message.owned_payload = tstr_new_len(NULL, STREAM_SINK_NATIVE_PENDING_BYTES);
+    check_not_null(message.owned_payload);
+    memset(message.owned_payload, 's', STREAM_SINK_NATIVE_PENDING_BYTES);
+    message.payload = tstr_to_v(message.owned_payload);
+    check_equal(
+        turbo_flow_publish_async(flow, "input", &message, stream_sink_complete, &completion),
+        SALTS_OK);
+    turbo_flow_msg_cleanup(&message);
+    deadline = cmeta_monotonic_ms() + STREAM_SINK_TEST_TIMEOUT_MS;
+    do {
+      int managed_status;
+      check_equal(turbo_flow_cnet_stream_sink_poll(sink, 0u, &snapshot), SALTS_OK);
+      managed_status = turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed);
+      check_true(managed_status == SALTS_OK || managed_status == SALTS_EBUSY);
+      if (managed_status == SALTS_EBUSY || managed.in_flight == 0u) cmeta_thread_yield();
+    } while (managed.in_flight == 0u &&
+             atomic_load_explicit(&completion.calls, memory_order_acquire) == 0u &&
+             cmeta_monotonic_ms() < deadline);
+    check_equal(managed.in_flight, (uint64_t)1u);
+    check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)0u);
+
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_stop(sink, SALTS_ETIMEDOUT, false),
+                SALTS_OK);
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ESHUTDOWN);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_FAILED);
+    check_equal(managed.accepted, (uint64_t)1u);
+    check_equal(managed.completed, (uint64_t)1u);
+    check_equal(managed.rejected, (uint64_t)0u);
+
+    check_equal(managed.in_flight, (uint64_t)1u);
+    check_equal(turbo_flow_cnet_stream_sink_snapshot(sink, &snapshot), SALTS_OK);
+    check_equal(snapshot.active_requests, (size_t)1u);
+    check_equal(turbo_flow_cnet_test_stream_sink_fail_next_stop(sink, SALTS_ETIMEDOUT, false),
+                SALTS_OK);
+    turbo_flow_destroy(flow);
+    check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_EBUSY);
+    check_equal(turbo_flow_stop(flow), SALTS_ETIMEDOUT);
+    check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
+    check_equal(turbo_flow_stop(flow), SALTS_OK);
+    check_equal(atomic_load_explicit(&completion.calls, memory_order_acquire), (size_t)1u);
+    check_equal(atomic_load_explicit(&completion.status, memory_order_acquire), SALTS_ESHUTDOWN);
+    check_equal(turbo_flow_managed_boundary_snapshot_at(flow, 0u, &managed), SALTS_OK);
+    check_equal(managed.state, TURBO_FLOW_MANAGED_BOUNDARY_STOPPED);
+    check_equal(managed.completed, (uint64_t)1u);
+    check_equal(managed.in_flight, (uint64_t)0u);
     turbo_flow_destroy(flow);
     check_equal(turbo_flow_cnet_stream_sink_destroy(sink), SALTS_OK);
     stream_source_pipe_fixture_close(&pipe);

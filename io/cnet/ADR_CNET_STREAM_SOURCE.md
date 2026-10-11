@@ -82,6 +82,33 @@ Stop 顺序固定为：取消并关闭 run → 停止、drain 并 destroy CNet �
 Scheduler → 标记 STOPPED。已进入 FAILED 的 owner 仍必须允许 stop 释放资源；destroy 在
 stop 前返回 `SALTS_EBUSY`，成功后释放 opaque owner。
 
+## Open 失败的清理与迁移
+
+原 open 回滚忽略 native stop/destroy 错误后释放 owner，可能使仍持有 callback context 的 CNet
+访问失效存储。现复用正常 stop/destroy 的受检查路径：每次回滚只尝试一次 native stop（零等待），
+按尚存资源依次清理；scheduler shutdown 未完成返回 `SALTS_EBUSY`，保留 scheduler 和 owner。
+
+普通 admission 失败且回滚完成时仍返回原始错误与 NULL。若清理未完成，open 返回清理错误及
+非 NULL FAILED owner；snapshot 的 `status/error_stage` 保存原始 admission 错误。调用方只允许
+snapshot、显式 stop 重试和 destroy，并让 Flow 保持存活至清理完成。不得丢弃输出或用后续 open
+覆盖它。Stop 发布 STOPPING 后，native 回调不再覆盖已保存的首个 owner 错误。
+
+CNet 允许非超时 progress 错误与已完成 drain 同时发生，因此 stop 仍尝试受检查的 native destroy。
+全部资源释放后发布 STOPPED，并保留本次 stop 错误供诊断；STOPPED 可以 destroy。Open 的回滚
+若已到 STOPPED 则释放 owner，返回最初 admission 错误与 NULL。初始化与销毁后的存活标记取自
+实际 native `impl`，避免部分销毁后重试已不存在的 client。
+
+候选方案包括无限重试（阻塞 open）、隐藏保留 owner（调用方无法完成清理）、继续无条件释放
+（生命周期不安全）；选择显式返回 owner，与 packet source 的已批准契约一致。公开签名和布局
+保持不变，但失败输出语义改变。仓库调用点是正式测试和头文件示例/安装 ABI probe：测试新增
+失败 owner 的 teardown，示例明确同时转交错误与 owner；外部调用方也必须审计错误分支。
+回滚前须先完成所有返回 owner 的 stop/destroy，保留新调用方检查兼容旧版普通失败语义。
+
+验证覆盖真实 native 初始化后 Graph source 名 admission 失败、stop timeout/EIO/EBUSY、重复
+显式失败、client destroy 拒绝、scheduler shutdown 拒绝、原始错误保留和最终释放；还覆盖 stop
+在真实 drain 后报告错误时的 NULL 输出与正常 stop 的 STOPPED 状态。故障注入仅编入私有测试
+target，生产库没有测试控制入口。Stream 补充 Graph run 成功打开后 connect admission 失败的 run 释放验证。
+
 ## 影响与权衡
 
 - 架构：将“宿主适配层必须在仓库外”收窄为“必须在 Graph target 外”；仓库可提供独立可选

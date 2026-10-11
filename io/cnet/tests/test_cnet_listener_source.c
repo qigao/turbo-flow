@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_flow_cnet.h"
+#include "turbo_flow_cnet_test_internal.h"
 
 #include "listener_source_tls_fixture.h"
 
@@ -117,6 +118,18 @@ static void listener_source_client_send(void *ctx, cnet_connection connection, s
 static int listener_source_poll_client(cnet_client *client, uint32_t timeout_ms) {
   size_t events = 0u;
   return cnet_client_poll(client, timeout_ms, &events);
+}
+
+static int listener_source_send_copy(cnet_client *client, cnet_connection connection,
+                                     const void *data, size_t size) {
+  mem_buffer_t *buffer = mem_get_buffer(mem_global(), size);
+  int rc;
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  rc = cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return rc;
 }
 
 spec("CNet listener source owner") {
@@ -276,16 +289,16 @@ spec("CNet listener source owner") {
                                        .user = &client_probe,
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &connection), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while (client_probe.connected == 0u && client_probe.terminal == 0u &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(client_probe.connected, 1u);
-    check_equal(cnet_send(&client, connection, "plain", 5u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (snapshot.connections_failed == 0u && salts_monotonic_ms() < deadline) {
+    check_equal(listener_source_send_copy(&client, connection, "plain", 5u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (snapshot.connections_failed == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -337,7 +350,7 @@ spec("CNet listener source owner") {
     client_config.tls_handshake_timeout_ms = 1000u;
     server_tls.cert_file = tls_fixture.cert_path;
     server_tls.key_file = tls_fixture.key_path;
-    client_tls.ca_file = tls_fixture.cert_path;
+    client_tls.ca_file = tls_fixture.ca_path;
     config.client = &server_client;
     config.tls = &server_tls;
     config.max_connections = 1u;
@@ -355,18 +368,18 @@ spec("CNet listener source owner") {
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &connection), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while (client_probe.connected == 0u && client_probe.terminal == 0u &&
            snapshot.state != TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(client_probe.connected, 1u);
     check_equal(client_probe.failed, 0);
-    check_equal(cnet_send(&client, connection, "tls", 3u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
+    check_equal(listener_source_send_copy(&client, connection, "tls", 3u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (graph_probe.count == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -422,9 +435,9 @@ spec("CNet listener source owner") {
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &connection), SALTS_OK);
 
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while ((client_probe.connected == 0u || snapshot.active_connections == 0u) &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -432,9 +445,9 @@ spec("CNet listener source owner") {
     check_equal(snapshot.connections_accepted, 1u);
     check_equal(snapshot.active_connections, 1u);
 
-    check_equal(cnet_send(&client, connection, "first", 5u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (client_probe.sent == 0u && salts_monotonic_ms() < deadline) {
+    check_equal(listener_source_send_copy(&client, connection, "first", 5u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (client_probe.sent == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 0u, &snapshot), SALTS_OK);
     }
@@ -445,8 +458,8 @@ spec("CNet listener source owner") {
     check_false(snapshot.receive_pending);
 
     check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (graph_probe.count == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -499,9 +512,9 @@ spec("CNet listener source owner") {
                                        .user = &client_probe,
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &first), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while ((client_probe.connected < 1u || snapshot.connections_accepted == 0u) &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -509,8 +522,8 @@ spec("CNet listener source owner") {
     check_equal(snapshot.connections_accepted, 1u);
 
     check_equal(cnet_connect(&client, &connect, &second), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (client_probe.connected < 2u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (client_probe.connected < 2u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -520,8 +533,8 @@ spec("CNet listener source owner") {
 
     check_equal(cnet_close(&client, first), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (snapshot.connections_accepted < 2u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (snapshot.connections_accepted < 2u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -529,9 +542,9 @@ spec("CNet listener source owner") {
     check_equal(snapshot.connections_closed, 1u);
     check_equal(snapshot.active_connections, 1u);
 
-    check_equal(cnet_send(&client, second, "reuse", 5u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (graph_probe.count == 0u && salts_monotonic_ms() < deadline) {
+    check_equal(listener_source_send_copy(&client, second, "reuse", 5u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (graph_probe.count == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -584,18 +597,18 @@ spec("CNet listener source owner") {
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &first), SALTS_OK);
     check_equal(cnet_connect(&client, &connect, &second), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while ((client_probe.connected < 2u || snapshot.active_connections < 2u) &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(snapshot.active_connections, 2u);
-    check_equal(cnet_send(&client, first, "left", 4u), SALTS_OK);
-    check_equal(cnet_send(&client, second, "right", 5u), SALTS_OK);
+    check_equal(listener_source_send_copy(&client, first, "left", 4u), SALTS_OK);
+    check_equal(listener_source_send_copy(&client, second, "right", 5u), SALTS_OK);
     check_equal(turbo_flow_cnet_listener_source_request(source, 2u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (graph_probe.count < 2u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (graph_probe.count < 2u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
@@ -650,16 +663,16 @@ spec("CNet listener source owner") {
                                        .user = &client_probe,
                                        .on_send = listener_source_client_send};
     check_equal(cnet_connect(&client, &connect, &connection), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
-    while (snapshot.active_connections == 0u && salts_monotonic_ms() < deadline) {
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+    while (snapshot.active_connections == 0u && cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       check_equal(turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot), SALTS_OK);
     }
     check_equal(turbo_flow_cnet_listener_source_request(source, 1u), SALTS_OK);
-    check_equal(cnet_send(&client, connection, "large", 5u), SALTS_OK);
-    deadline = salts_monotonic_ms() + TEST_TIMEOUT_MS;
+    check_equal(listener_source_send_copy(&client, connection, "large", 5u), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
     while (snapshot.state != TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED &&
-           salts_monotonic_ms() < deadline) {
+           cmeta_monotonic_ms() < deadline) {
       check_equal(listener_source_poll_client(&client, 1u), SALTS_OK);
       poll_status = turbo_flow_cnet_listener_source_poll(source, 1u, &snapshot);
       if (poll_status != SALTS_OK) break;
@@ -703,5 +716,239 @@ spec("CNet listener source owner") {
     check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
     check_equal(turbo_flow_stop(flow), SALTS_OK);
     turbo_flow_destroy(flow);
+  }
+}
+
+
+spec("CNet listener source failed-open ownership") {
+  static listener_source_graph_probe_t probe;
+  static turbo_flow_t *flow;
+  static turbo_flow_cnet_listener_source_t *source;
+  static cnet_client_config client;
+  static turbo_flow_cnet_listener_source_config_t config;
+  static cnet_listener_config listener;
+  static listener_source_tls_fixture_t tls_fixture;
+  static cnet_tls_server_config tls;
+
+  before_each() {
+    memset(&probe, 0, sizeof(probe));
+    source = NULL;
+    flow = listener_source_started_flow(&probe);
+    check_not_null(flow);
+    client = listener_source_test_client_config();
+    listener = (cnet_listener_config){
+        .backend = client.backend, .host = "127.0.0.1", .port = 0u, .backlog = 2u};
+    check_equal(listener_source_tls_fixture_init(&tls_fixture), SALTS_OK);
+    client.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+    client.tls_handshake_timeout_ms = 1000u;
+    tls = (cnet_tls_server_config){.size = sizeof(tls),
+                                   .cert_file = tls_fixture.cert_path,
+                                   .key_file = tls_fixture.key_path};
+    config = listener_source_test_config(flow, &listener, &client);
+    config.tls = &tls;
+    config.source_name = "missing-source";
+  }
+
+  after_each() {
+    if (source) {
+      int status = turbo_flow_cnet_listener_source_stop(source, 1000u);
+      if (status != SALTS_OK && status != SALTS_EALREADY)
+        status = turbo_flow_cnet_listener_source_stop(source, 1000u);
+      check_true(status == SALTS_OK || status == SALTS_EALREADY);
+      check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
+      source = NULL;
+    }
+    listener_source_tls_fixture_destroy(&tls_fixture);
+    if (flow) {
+      check_equal(turbo_flow_stop(flow), SALTS_OK);
+      turbo_flow_destroy(flow);
+      flow = NULL;
+    }
+  }
+
+  it("returns no owner after checked rollback and leaves Flow usable") {
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_EINVAL);
+    check_null(source);
+    check_equal(turbo_flow_state(flow), TURBO_FLOW_STATE_STARTED);
+    config.source_name = "input";
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_OK);
+  }
+
+  it("retains failed open through client stop ETIMEDOUT and an explicit failed retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_STOP, SALTS_ETIMEDOUT, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_ETIMEDOUT);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_listener_source_fail_next_cleanup(source, fault), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_ETIMEDOUT);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+  }
+
+  it("retains failed open through client stop EIO and an explicit failed retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_STOP, SALTS_EIO, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EIO);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_listener_source_fail_next_cleanup(source, fault), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_EIO);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+  }
+
+  it("retains failed open through client stop EBUSY and an explicit failed retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_STOP, SALTS_EBUSY, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EBUSY);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_test_listener_source_fail_next_cleanup(source, fault), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPING);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+  }
+
+  it("retains ownership on client_destroy EBUSY until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_DESTROY, SALTS_EBUSY, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EBUSY);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("retains ownership on client_destroy EIO until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_DESTROY, SALTS_EIO, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EIO);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("retains ownership on scheduler_shutdown EBUSY until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_SCHEDULER_SHUTDOWN, SALTS_EBUSY, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EBUSY);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("retains ownership on listener_close EIO until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_LISTENER_CLOSE, SALTS_EIO, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EIO);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("retains ownership on listener_destroy EBUSY until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_LISTENER_DESTROY, SALTS_EBUSY, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EBUSY);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("retains ownership on tls_destroy EIO until explicit retry") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_TLS_DESTROY, SALTS_EIO, false};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EIO);
+    check_not_null(source);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_FAILED);
+    check_equal(snapshot.status, SALTS_EINVAL);
+    check_equal(snapshot.error_stage, "graph_run_open");
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_EBUSY);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+  }
+
+  it("returns the admission error without an owner when stop reports an error after drain") {
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_STOP, SALTS_EIO, true};
+    check_equal(turbo_flow_cnet_test_listener_source_open(&config, &source, fault), SALTS_EINVAL);
+    check_null(source);
+    config.source_name = "input";
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_OK);
+  }
+
+  it("preserves normal stop progress errors while publishing fully released state") {
+    turbo_flow_cnet_listener_source_snapshot_t snapshot = TURBO_FLOW_CNET_LISTENER_SOURCE_SNAPSHOT_INIT;
+    turbo_flow_cnet_test_cleanup_fault fault = {TF_CNET_TEST_CLIENT_STOP, SALTS_EIO, true};
+    config.source_name = "input";
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_OK);
+    check_equal(turbo_flow_cnet_test_listener_source_fail_next_cleanup(source, fault), SALTS_OK);
+    check_equal(turbo_flow_cnet_listener_source_stop(source, 1000u), SALTS_EIO);
+    check_equal(turbo_flow_cnet_listener_source_snapshot(source, &snapshot), SALTS_OK);
+    check_equal(snapshot.state, TURBO_FLOW_CNET_LISTENER_SOURCE_STOPPED);
+    check_equal(turbo_flow_cnet_listener_source_destroy(source), SALTS_OK);
+    source = NULL;
+    check_equal(turbo_flow_cnet_listener_source_open(&config, &source), SALTS_OK);
   }
 }
